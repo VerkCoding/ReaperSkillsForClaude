@@ -23,7 +23,12 @@ if not errorlevel 1 set "PYOK=1"
 
 if exist "%APPDATA%\REAPER\reaper.ini" set "REAPEROK=1"
 
-tasklist /FI "IMAGENAME eq reaper.exe" /NH 2>nul | find /I "reaper.exe" >nul
+rem Full paths on purpose. Git Bash, MSYS and GnuWin32 all ship a `find` that
+rem shadows the Windows one when they are earlier on PATH, and the Unix find
+rem rejects these arguments - leaving errorlevel non-zero, which reads as
+rem "REAPER is not running". That false negative would wave the user straight
+rem into installing with REAPER open, discarding the whole configuration.
+tasklist /FI "IMAGENAME eq reaper.exe" /NH 2>nul | "%SystemRoot%\System32\find.exe" /I "reaper.exe" >nul
 if not errorlevel 1 set "REAPERRUNNING=1"
 
 :menu
@@ -63,7 +68,8 @@ echo   [7] Developer link
 echo       Load this folder in place so your edits are live,
 echo       instead of the marketplace copy. Use one or the other.
 echo.
-echo   [8] How to install Python
+echo   [8] Install Python
+echo       Uses winget. Only needed if the check above says MISSING.
 echo.
 echo   [0] Exit
 echo.
@@ -77,7 +83,7 @@ if "%CHOICE%"=="4" goto reaper
 if "%CHOICE%"=="5" goto claude
 if "%CHOICE%"=="6" goto repair
 if "%CHOICE%"=="7" goto devlink
-if "%CHOICE%"=="8" goto pyhelp
+if "%CHOICE%"=="8" goto pyinstall
 if "%CHOICE%"=="0" goto :eof
 goto menu
 
@@ -136,31 +142,89 @@ goto done
 %PS% "%PLUGIN%install\install.ps1" -Only claude -Link
 goto done
 
-:pyhelp
+:pyinstall
 cls
 echo ===============================================
-echo   Installing Python
+echo   Install Python
 echo ===============================================
 echo.
-echo   Option A - winget (fastest, already on Windows 11):
+if "%PYOK%"=="1" (
+    echo   Python is already installed and visible on PATH. Nothing to do.
+    goto done
+)
+
+rem Full path for the same reason as find.exe above.
+"%SystemRoot%\System32\where.exe" winget >nul 2>&1
+if errorlevel 1 (
+    echo   winget is not available on this machine.
+    echo.
+    echo   Install Python by hand instead:
+    echo       https://www.python.org/downloads/
+    echo.
+    echo   On the FIRST screen, tick "Add python.exe to PATH". Without it,
+    echo   Claude cannot launch the REAPER server.
+    echo.
+    goto done
+)
+
+echo   This runs:
 echo.
-echo       winget install Python.Python.3.12
+echo       winget install -e --id Python.Python.3.12 --custom "PrependPath=1"
 echo.
-echo   Option B - installer:
+echo   -e forces an exact ID match. Without it "Python.Python.3" is
+echo   ambiguous and can resolve to Python 3.0, which is real and useless.
 echo.
-echo       https://www.python.org/downloads/
+echo   --custom appends to winget's own silent switches rather than
+echo   replacing them, which is what --override would do.
 echo.
-echo       On the FIRST screen, tick "Add python.exe to PATH".
-echo       Without it, Claude cannot launch the REAPER server.
+echo   3.12 rather than the newest release: numba and llvmlite, which
+echo   librosa depends on, often take months to publish wheels for a
+echo   brand-new Python. 3.12 has wheels for everything today.
 echo.
-echo   Any Python 3.10 or newer is fine. The installer tests whether
-echo   the dependencies actually build rather than checking a version,
-echo   and tells you if yours cannot.
+set "GO="
+set /p GO="Install it now? [y/N]: "
+if /I not "%GO%"=="y" goto menu
+
 echo.
-echo   Close and reopen this window afterwards so it sees the new PATH.
+rem InstallAllUsers=0 rather than --scope user: winget matches --scope against
+rem the manifest, and this one is a burn bundle that does not declare a user
+rem installer, so --scope user fails with "no applicable installer found".
+rem Passing the bundle's own switch reaches the same result and never needs
+rem elevation.
+winget install -e --id Python.Python.3.12 --source winget --accept-package-agreements --accept-source-agreements --custom "PrependPath=1 InstallAllUsers=0 Include_test=0"
+
 echo.
-pause
-goto checks
+echo   Making this window see the new install...
+call :refreshpython
+
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo   Python was installed, but this window still cannot see it.
+    echo   PATH is read once when a program starts, so close this window
+    echo   and run RunThisToStart.bat again.
+) else (
+    for /f "delims=" %%V in ('python --version 2^>^&1') do echo   Ready: %%V
+)
+goto done
+
+rem ---------------------------------------------------------------------------
+rem A process reads PATH once, at startup, so a Python installed thirty seconds
+rem ago is invisible to this window. Rather than making the user close and
+rem reopen, prepend the directory winget just created.
+rem
+rem Only prepending, never rebuilding PATH from the registry: those values are
+rem REG_EXPAND_SZ and contain literal %SystemRoot% that batch will not re-expand,
+rem so reconstructing PATH tends to break every other command in the session.
+rem ---------------------------------------------------------------------------
+:refreshpython
+for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python312*") do (
+    if exist "%%D\python.exe" set "PATH=%%D;%%D\Scripts;%PATH%"
+)
+for /d %%D in ("%ProgramFiles%\Python312*") do (
+    if exist "%%D\python.exe" set "PATH=%%D;%%D\Scripts;%PATH%"
+)
+goto :eof
 
 rem ---------------------------------------------------------------------------
 rem The only steps that cannot be automated. REAPER holds reaper.ini in memory

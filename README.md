@@ -17,10 +17,37 @@ them is cross-platform. See [Porting](#porting).
 | | |
 | --- | --- |
 | **REAPER** | v6 or v7+. **Launch it once and close it** before installing — the first launch creates its config folder, and REAPER rewrites `reaper.ini` on exit, discarding anything written while it is open. |
-| **Python** | 3.10 or newer, on PATH. `winget install Python.Python.3.12`, or [python.org](https://www.python.org/downloads/) with **"Add python.exe to PATH"** ticked on the first screen. Reopen your terminal afterwards. |
+| **Python** | 3.10 or newer, on PATH. If you don't have it, `RunThisToStart.bat` option **`[8]`** installs it for you. |
 
-Any Python 3.10+ is fine. The installer tests whether the dependencies actually
+Option `[8]` runs:
+
+```powershell
+winget install -e --id Python.Python.3.12 --custom "PrependPath=1 InstallAllUsers=0 Include_test=0"
+```
+
+Three details in there matter:
+
+- **`-e`** forces an exact ID match. Without it, `Python.Python.3` is ambiguous
+  and can resolve to **Python 3.0**, which really is in the winget catalogue.
+  Only versioned IDs exist — there is no `Python.Python.3`.
+- **`--custom`**, not `--override`. `--custom` appends to winget's own silent
+  switches; `--override` *replaces* them, so you inherit responsibility for
+  every default you just discarded.
+- **`InstallAllUsers=0`** rather than `--scope user`. winget matches `--scope`
+  against the manifest, and this one is a `burn` bundle with no user-scope
+  installer declared, so `--scope user` fails with *"no applicable installer
+  found"*. The bundle's own switch reaches the same result and never needs
+  elevation.
+
+**3.12 rather than the newest release** because `numba` and `llvmlite` — which
+`librosa` depends on — routinely take months to publish wheels for a brand-new
+Python. Any 3.10+ works; the installer tests whether the dependencies actually
 build rather than checking a version number, and tells you if yours cannot.
+
+PATH is read once when a program starts, so a Python installed thirty seconds
+ago is invisible to the window that installed it. Option `[8]` prepends the new
+directory to its own session and re-checks, so you don't have to reopen
+anything — and says so plainly if that fails.
 
 ## Install
 
@@ -63,7 +90,7 @@ every failure it reports carries the command that fixes it.
 | `[5]` | Claude side only — Code and Desktop |
 | `[6]` | Repair the connection — removes the stray port 2306 interface |
 | `[7]` | [Developer link](#editing-the-plugin) — load this folder in place so edits are live |
-| `[8]` | How to install Python |
+| `[8]` | Install Python via winget — see [Requirements](#requirements) |
 
 `install.ps1` takes the same jobs as flags: `-Only python|reaper|claude`,
 `-Link`, `-Force`, `-SkipBootstrap`, `-SkipDesktop`, `-SkipCode`,
