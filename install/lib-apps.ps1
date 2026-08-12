@@ -214,17 +214,34 @@ function Request-AppClosed {
             # script's own ancestry and the Claude Code CLI filtered out of them.
             # `taskkill /IM claude.exe` would have hit both, and one of those is
             # frequently the terminal running this.
-            $doomed = @(Get-TargetProcesses $Kind)
-            Write-Warn2 "$Label did not close on request; ending it ($($doomed.Count) process(es))."
-            foreach ($p in $doomed) {
-                try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
+            #
+            # Swept repeatedly rather than once. Claude is Electron: one window
+            # plus a dozen helpers plus a tray icon, and killing the main process
+            # can leave helpers behind or let a supervisor restart one. A single
+            # pass regularly leaves something running in the notification area,
+            # still holding the config file this setup is about to write.
+            for ($sweep = 1; $sweep -le 4; $sweep++) {
+                $doomed = @(Get-TargetProcesses $Kind)
+                if ($doomed.Count -eq 0) { break }
+
+                if ($sweep -eq 1) {
+                    Write-Warn2 "$Label did not close on request; ending it ($($doomed.Count) process(es))."
+                } else {
+                    Write-Info "sweep $sweep - $($doomed.Count) still running (helpers or tray)"
+                }
+
+                foreach ($p in $doomed) {
+                    try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
+                }
+                Start-Sleep -Milliseconds 1200
             }
-            Start-Sleep -Seconds 2
-            if (@(Get-TargetProcesses $Kind).Count -eq 0) {
-                Write-Ok "$Label closed."
+
+            $left = @(Get-TargetProcesses $Kind).Count
+            if ($left -eq 0) {
+                Write-Ok "$Label fully closed, including background processes."
                 return $true
             }
-            Write-Warn2 "$Label survived that; continuing anyway."
+            Write-Warn2 "$Label still has $left process(es) running; continuing anyway."
             return $false
         }
 
@@ -392,14 +409,33 @@ function Invoke-ReaperFirstRun {
     }
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $sawWindow = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 1
-        if (Test-Path $ini) {
-            # Written progressively; let it settle before anything reads it.
-            # This wait matters more now that the close can be forced: REAPER
-            # must have finished writing the file we came here for before it is
-            # allowed to die without a clean exit.
-            Start-Sleep -Seconds 3
+
+        # "Fully open" means a main window exists, not merely that the file
+        # appeared. REAPER creates reaper.ini early in startup and keeps writing
+        # to it, so acting on the file alone can catch it mid-launch - and the
+        # close below is forced, which would end it partway through.
+        if (-not $sawWindow) {
+            $sawWindow = @(Get-TargetProcesses reaper |
+                           Where-Object { $_.MainWindowHandle -ne 0 }).Count -gt 0
+            if ($sawWindow) { Write-Info "REAPER's window is up." }
+        }
+
+        # A window is the better signal, but not a requirement. REAPER can sit
+        # behind a modal first-run dialog that reports no main window handle, and
+        # waiting the full timeout for a handle that is never coming would be a
+        # worse outcome than proceeding on the file alone.
+        $iniIsOld = (Test-Path $ini) -and
+                    (((Get-Date) - (Get-Item $ini).LastWriteTime).TotalSeconds -gt 30)
+
+        if ((Test-Path $ini) -and ($sawWindow -or $iniIsOld)) {
+            if (-not $sawWindow) {
+                Write-Info "No main window reported, but the configuration has settled."
+            }
+            # Let the startup writes settle before ending the process.
+            Start-Sleep -Seconds 4
             Write-Ok "REAPER created its configuration."
             [void](Request-AppClosed -Kind reaper -Label 'REAPER' -GraceSeconds 10 -AllowForce)
             # REAPER writes reaper.ini again on exit, so give that write time to

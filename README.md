@@ -49,9 +49,16 @@ There is one exception, and it is the opposite case: during [first
 run](#first-run-when-1-installed-something), `[1]` opened the application itself
 seconds earlier. There is no project and no unsaved edit — only a splash screen
 or licence dialog in the way — so after ten seconds of asking politely it ends
-the process rather than making you click through. Even then it targets exact
-process IDs with this script's own ancestry and the Claude Code CLI already
-filtered out, so it can never kill the terminal running it.
+the process rather than making you click through.
+
+For Claude that means **everything, not just the window**. It is an Electron app:
+one window, a dozen helper processes and a tray icon, and closing the window
+leaves the rest running — still holding the config file the setup is about to
+write. So the kill is swept repeatedly until nothing is left.
+
+Even then it targets exact process IDs, with this script's own ancestry and the
+Claude Code CLI already filtered out. `taskkill /IM claude.exe` would have hit
+both — and one of those is routinely the terminal running the installer.
 
 It also **re-checks after every point where it waited on you** — after the save
 prompt, after REAPER's first run, after the Claude sign-in, and once more
@@ -71,8 +78,10 @@ A freshly installed REAPER has **no `reaper.ini`** — the resource folder only
 appears after it has run once — and a fresh Claude has no session. Rather than
 finishing with "now go launch REAPER yourself", `[1]` handles both:
 
-- **REAPER** — opens it, waits for the configuration to appear (click through
-  any first-run dialog), then closes it and verifies the file exists.
+- **REAPER** — opens it, waits until it is *fully* up (a main window, not just
+  the config file appearing — REAPER writes that early in startup and keeps
+  writing), lets the writes settle, then closes it and verifies the file
+  exists. Click through any first-run dialog it shows.
 - **Claude** — opens it and waits while you sign in, continuing on its own once
   a session exists. It confirms this from Claude's config, not from a window
   being open, because a window can be open with nobody signed in. Only the
