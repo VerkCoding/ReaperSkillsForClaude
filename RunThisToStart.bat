@@ -69,7 +69,8 @@ echo       Load this folder in place so your edits are live,
 echo       instead of the marketplace copy. Use one or the other.
 echo.
 echo   [8] Install Python
-echo       Uses winget. Only needed if the check above says MISSING.
+echo       Only needed if the check above says MISSING. Uses winget if
+echo       you have it, downloads from python.org if you do not.
 echo.
 echo   [9] Install or repair winget
 echo       Optional. [8] does not need winget, so only bother if you
