@@ -8,14 +8,26 @@
   built without the Store, and not always after an in-place upgrade. When it is
   missing, the Python install step has nothing to run.
 
-  This is Microsoft's documented bootstrap: pull the WinGet PowerShell module
-  from PSGallery and let it repair the client.
+  Three routes, cheapest first, each falling through to the next:
 
-      Install-PackageProvider -Name NuGet -Force
-      Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
-      Repair-WinGetPackageManager
+    1. Register the App Installer package already on the machine. Instant, needs
+       no network, and fixes the common case where the package is provisioned
+       but not registered for this user.
 
-  Two adjustments to that sequence, both about privilege:
+    2. Microsoft's documented PSGallery bootstrap:
+
+           Install-PackageProvider -Name NuGet -Force
+           Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
+           Repair-WinGetPackageManager
+
+       A few MB, and the route that succeeds most often in practice.
+
+    3. Download the release from Microsoft directly. This works with nothing but
+       HTTPS - no Gallery, no NuGet provider, no Store - which is why it is kept,
+       but it costs over 300 MB once the Windows App Runtime the bundle depends
+       on is counted. Hence last.
+
+  Two adjustments to route 2, both about privilege:
 
     * -AllUsers requires an elevated session and fails without one. It is passed
       only when this is actually running as administrator, so a normal user gets
@@ -23,8 +35,8 @@
     * Install-Module defaults to an AllUsers scope, which also needs elevation.
       The scope is chosen to match.
 
-  Downloads from PSGallery, so it needs a working internet connection, and takes
-  a minute or two.
+  Everything past route 1 needs a working internet connection, and the whole
+  thing takes a minute or two.
 
 .PARAMETER Force
   Run even when winget already works.
@@ -119,9 +131,12 @@ function Install-WingetDirect {
       Windows Sandbox, Windows Server, a stripped image. It needs nothing but
       HTTPS: no PowerShell Gallery, no NuGet provider, no Store.
 
-      Order matters. The bundle declares VCLibs and UI.Xaml as dependencies, so
-      installing it first fails with a dependency error that reads like a
-      corrupt download.
+      Three dependencies, not two. winget 1.29 also declares
+      Microsoft.WindowsAppRuntime.1.8, which is not an appx but a 102 MB
+      installer - and without it the bundle fails with 0x80073CF3 naming a
+      "framework that could not be found", which reads like a corrupt download.
+      That is why this route is the last one tried: over 300 MB to achieve what
+      the Gallery route does with a few.
     #>
     $tmp = Join-Path $env:TEMP ("winget-setup-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -136,6 +151,19 @@ function Install-WingetDirect {
     )
 
     try {
+        # The Windows App Runtime first: it is a normal installer, not a package,
+        # so it cannot be passed to Add-AppxPackage with the others.
+        $runtime = Join-Path $tmp 'windowsappruntime.exe'
+        Write-Info "Downloading Windows App Runtime..."
+        $mb = Get-File -Url 'https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe' `
+                       -Path $runtime -MinMB 40
+        Write-Info ("  {0:N1} MB" -f $mb)
+        Write-Info "Installing Windows App Runtime..."
+        $proc = Start-Process -FilePath $runtime -ArgumentList '--quiet' -Wait -PassThru
+        if ($proc.ExitCode -ne 0) {
+            Write-Warn2 ("  runtime installer exited {0}; continuing anyway" -f $proc.ExitCode)
+        }
+
         foreach ($p in $parts) {
             $dest = Join-Path $tmp $p.File
             Write-Info ("Downloading {0}..." -f $p.Name)
@@ -214,20 +242,85 @@ try {
     Write-Warn2 "Could not force TLS 1.2; continuing."
 }
 
+$isAdmin = ([Security.Principal.WindowsPrincipal] `
+            [Security.Principal.WindowsIdentity]::GetCurrent()
+           ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+Write-Info ("Running " + $(if ($isAdmin) { "elevated" } else { "as a normal user" }))
+if (-not $isAdmin) {
+    Write-Info "A per-user repair will be attempted. If it fails, re-run this"
+    Write-Info "as administrator for a machine-wide one."
+}
+
 # ---------------------------------------------------------------------------
-# Install it straight from Microsoft's release.
+# Then PowerShell Gallery - Microsoft's own documented bootstrap.
 #
-# This is deliberately ahead of the PowerShell Gallery route. The Gallery route
-# is the one people quote, and it fails on exactly the machines that need it:
-# the inbox PackageManagement module cannot fetch its provider list from
-# go.microsoft.com on a Sandbox, a Server, or anything proxied, and reports
-#
-#   Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'
-#
-# before it has done anything. Downloading three files over HTTPS has no such
-# dependency, which is why it goes first now rather than last.
+# Small, quick, and the route that actually worked where the direct download did
+# not. Everything here is best-effort: each failure falls through to the direct
+# download below rather than ending the script, because "PSGallery is
+# unreachable" is precisely the situation the direct route exists for.
 # ---------------------------------------------------------------------------
-Write-Info "Installing winget from Microsoft's release (about 220 MB)..."
+$galleryOk = $true
+
+try {
+    Write-Info "Installing the NuGet package provider..."
+    Install-PackageProvider -Name NuGet -Force -Scope $(if ($isAdmin) { 'AllUsers' } else { 'CurrentUser' }) | Out-Null
+    Write-Ok "NuGet provider ready."
+} catch {
+    # The inbox PackageManagement module failing to fetch its provider list from
+    # go.microsoft.com. Common on Windows Sandbox, Windows Server, and behind a
+    # proxy - and the reason the direct download below exists.
+    Write-Warn2 "Could not install the NuGet provider: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+    $galleryOk = $false
+}
+
+if ($galleryOk) {
+    try {
+        Write-Info "Installing the Microsoft.WinGet.Client module from PSGallery..."
+        Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery `
+                       -Scope $(if ($isAdmin) { 'AllUsers' } else { 'CurrentUser' }) | Out-Null
+        Write-Ok "Module installed."
+    } catch {
+        Write-Warn2 "Could not install Microsoft.WinGet.Client: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+        $galleryOk = $false
+    }
+}
+
+if ($galleryOk) {
+    try {
+        Write-Info "Repairing the winget client. This can take a couple of minutes..."
+        if ($isAdmin) { Repair-WinGetPackageManager -AllUsers }
+        else          { Repair-WinGetPackageManager }
+    } catch {
+        Write-Warn2 "Repair-WinGetPackageManager failed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+        if (-not $isAdmin) {
+            Write-Info "  Some repairs need administrator rights."
+        }
+        $galleryOk = $false
+    }
+}
+
+if (Test-Winget) {
+    Write-Ok "winget is working: $(& winget --version)"
+    if (-not $Embedded) {
+        Write-Host ""
+        Write-Host "  Close this window and run RunThisToStart.bat again so it picks" -ForegroundColor Gray
+        Write-Host "  up the new command." -ForegroundColor Gray
+    }
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
+# Last resort: install it straight from Microsoft's release.
+#
+# This is last because it is by far the most expensive. winget 1.29 declares
+# Microsoft.WindowsAppRuntime.1.8 as well as VCLibs and UI.Xaml, and that runtime
+# is a 102 MB installer on top of the 207 MB bundle - well over 300 MB to do what
+# the Gallery route does with a few. It only earns its place when the Gallery
+# route cannot reach PowerShell Gallery at all, which is exactly the case it was
+# added for.
+# ---------------------------------------------------------------------------
+Write-Info "Trying a direct download from Microsoft (over 300 MB)..."
 try {
     if (Install-WingetDirect) {
         if (Test-Winget) {
@@ -243,89 +336,13 @@ try {
 } catch {
     $msg = $_.Exception.Message.Split([Environment]::NewLine)[0]
     Write-Warn2 "Direct install did not succeed: $msg"
-
-    # Name the common ones. An HRESULT on its own sends people to a search
-    # engine; the meaning is usually enough to know whether to retry.
     switch -Regex ($msg) {
-        '0x80073CF3' { Write-Info "  That is a dependency or conflict problem, not a bad download." }
-        '0x80073CF9' { Write-Info "  That is 'install failed' - often a machine with app deployment restricted." }
-        '0x80073D02' { Write-Info "  Another install is in progress. Wait for it to finish and re-run." }
+        '0x80073CF3' { Write-Info "  A dependency is missing or conflicts - not a bad download." }
+        '0x80073CF9' { Write-Info "  'Install failed' - often a machine with app deployment restricted." }
+        '0x80073D02' { Write-Info "  Another install is in progress. Wait for it, then re-run." }
         '0x80070005' { Write-Info "  Access denied - try running this as administrator." }
-        'connection'  { Write-Info "  That was the network, not the package. Re-running often just works." }
+        'connection' { Write-Info "  That was the network, not the package. Re-running often just works." }
     }
-    Write-Info "Falling back to the PowerShell Gallery route."
-}
-
-$isAdmin = ([Security.Principal.WindowsPrincipal] `
-            [Security.Principal.WindowsIdentity]::GetCurrent()
-           ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
-Write-Info ("Running " + $(if ($isAdmin) { "elevated" } else { "as a normal user" }))
-if (-not $isAdmin) {
-    Write-Info "A per-user repair will be attempted. If it fails, re-run this"
-    Write-Info "as administrator for a machine-wide one."
-}
-
-# Windows PowerShell 5.1 still negotiates TLS 1.0 by default on older builds,
-# and PSGallery refuses anything below 1.2 - which surfaces as an unhelpful
-# "unable to download from URI" rather than a handshake error.
-try {
-    [Net.ServicePointManager]::SecurityProtocol =
-        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-} catch {
-    Write-Warn2 "Could not force TLS 1.2; continuing."
-}
-
-try {
-    Write-Info "Installing the NuGet package provider..."
-    Install-PackageProvider -Name NuGet -Force -Scope $(if ($isAdmin) { 'AllUsers' } else { 'CurrentUser' }) | Out-Null
-    Write-Ok "NuGet provider ready."
-} catch {
-    Write-Err "Could not install the NuGet provider: $_"
-    Write-Host ""
-    Write-Info "This is the inbox PackageManagement module failing to fetch its"
-    Write-Info "provider list from go.microsoft.com. It is common on Windows"
-    Write-Info "Sandbox, Windows Server, and behind a proxy, and there is no"
-    Write-Info "reliable way around it from here."
-    Write-Host ""
-    Write-Info "You do not need winget. Run option [8] instead - it downloads"
-    Write-Info "Python straight from python.org when winget is unavailable."
-    exit 1
-}
-
-try {
-    Write-Info "Installing the Microsoft.WinGet.Client module from PSGallery..."
-    Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery `
-                   -Scope $(if ($isAdmin) { 'AllUsers' } else { 'CurrentUser' }) | Out-Null
-    Write-Ok "Module installed."
-} catch {
-    Write-Err "Could not install Microsoft.WinGet.Client: $_"
-    exit 1
-}
-
-try {
-    Write-Info "Repairing the winget client. This can take a couple of minutes..."
-    if ($isAdmin) {
-        Repair-WinGetPackageManager -AllUsers
-    } else {
-        Repair-WinGetPackageManager
-    }
-} catch {
-    Write-Err "Repair-WinGetPackageManager failed: $_"
-    if (-not $isAdmin) {
-        Write-Info "Try again from an administrator prompt - some repairs need it."
-    }
-    exit 1
-}
-
-if (Test-Winget) {
-    Write-Ok "winget is working: $(& winget --version)"
-    if (-not $Embedded) {
-        Write-Host ""
-        Write-Host "  Close this window and run RunThisToStart.bat again so it picks" -ForegroundColor Gray
-        Write-Host "  up the new command." -ForegroundColor Gray
-    }
-    exit 0
 }
 
 Write-Host ""
@@ -339,7 +356,7 @@ Write-Info "    Claude  https://claude.ai/download"
 Write-Info "then run [1] again; it fills in only what is missing."
 Write-Host ""
 Write-Info "If the failures above mention the connection, this is worth simply"
-Write-Info "retrying - a 207 MB download over a flaky link fails often enough."
+Write-Info "retrying - a 300 MB download over a flaky link fails often enough."
 Write-Host ""
 Write-Info "Install 'App Installer' from the Microsoft Store, or install Python"
 Write-Info "by hand from https://www.python.org/downloads/ with 'Add python.exe"

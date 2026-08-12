@@ -323,11 +323,23 @@ if ($SkipApps) {
                 )
                 if ($app.Custom) { $wargs += @('--custom', $app.Custom) }
 
+                # Retried, because winget's download step fails on a flaky
+                # connection with things like "InternetOpenUrl() failed,
+                # 0x80072f78" - a transient network error, not a package that
+                # cannot be installed. One retry turns most of those into a
+                # success rather than a line in the summary.
                 $prevEAP = $ErrorActionPreference
                 $ErrorActionPreference = 'Continue'
                 try {
-                    & winget @wargs
-                    $code = $LASTEXITCODE
+                    for ($attempt = 1; $attempt -le 2; $attempt++) {
+                        & winget @wargs
+                        $code = $LASTEXITCODE
+                        if ($code -eq 0 -or $code -eq -1978335189) { break }
+                        if ($attempt -eq 1) {
+                            Write-Warn2 ("  {0} failed (exit {1}); retrying once..." -f $app.Name, $code)
+                            Start-Sleep -Seconds 5
+                        }
+                    }
                 } finally {
                     $ErrorActionPreference = $prevEAP
                 }
@@ -350,12 +362,35 @@ if ($SkipApps) {
     # A process reads PATH once at startup, so anything installed above is
     # invisible to this one. Prepend the known locations so the steps below can
     # actually call python.
-    foreach ($p in @(
+    $newPaths = @(
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\Scripts'),
         (Join-Path $env:ProgramFiles 'Python312'),
-        (Join-Path $env:ProgramFiles 'Git\cmd')
-    )) {
+        (Join-Path $env:ProgramFiles 'Git\cmd'),
+        # Where winget puts command-line aliases for most packages.
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links')
+    )
+
+    # Claude Code specifically.
+    #
+    # It is a portable package, so winget does not alias it into Links - it
+    # extracts it under WinGet\Packages\<Id>_<source>\ and puts THAT on PATH.
+    # This matters more than it looks: without it the plugin is never registered
+    # with Claude Code at all. The installer says "Path environment variable
+    # modified; restart your shell", this process cannot, so `claude` is not
+    # found and the step quietly downgrades to printing instructions - which is
+    # exactly what happened on the last clean run.
+    #
+    # Matched by wildcard because the folder carries a source hash
+    # (Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe) that is not
+    # ours to predict.
+    $pkgRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if (Test-Path $pkgRoot) {
+        Get-ChildItem $pkgRoot -Directory -Filter 'Anthropic.ClaudeCode*' -ErrorAction SilentlyContinue |
+            ForEach-Object { $newPaths += $_.FullName }
+    }
+
+    foreach ($p in $newPaths) {
         if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$p;$env:PATH" }
     }
 }
@@ -412,6 +447,11 @@ $installArgs = @{}
 if ($ReaperResourcePath) { $installArgs['ReaperResourcePath'] = $ReaperResourcePath }
 if ($Force)              { $installArgs['Force'] = $true }
 
+# Collect its problems into this run's summary instead of letting it print a
+# second, possibly contradictory, banner of its own.
+$problemsFile = Join-Path $env:TEMP ("rfc-problems-" + [Guid]::NewGuid().ToString("N").Substring(0, 8) + ".txt")
+$installArgs['ProblemsOut'] = $problemsFile
+
 try {
     # Same NativeCommandError hazard as inside install.ps1: pip and the claude
     # CLI both write to stderr in normal operation, and under EAP 'Stop' that
@@ -426,6 +466,12 @@ try {
 } catch {
     Write-Err "Plugin configuration failed: $_"
     Add-Problem "Re-run this option once the error above is resolved."
+}
+
+if (Test-Path $problemsFile) {
+    Get-Content $problemsFile -ErrorAction SilentlyContinue |
+        Where-Object { $_.Trim() } | ForEach-Object { Add-Problem $_ }
+    Remove-Item $problemsFile -Force -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------

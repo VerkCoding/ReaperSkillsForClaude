@@ -41,7 +41,16 @@ param(
     [switch]$SkipCode,
     [switch]$SkipReaperConfig,
     [switch]$Link,
-    [switch]$Force
+    [switch]$Force,
+    # Set by setup-all.ps1, which prints the combined summary itself.
+    #
+    # Without this there are two "DONE" banners, and they can disagree: each
+    # script keeps its own $script:Problems, and `&` runs this one in a child
+    # scope, so anything found here never reaches the wrapper's list. The user
+    # then sees "DONE - with 1 thing to fix" under "DONE - nothing left to do by
+    # hand" and has no way to tell which one is true. Writing the problems to
+    # this path hands them over instead, and the banner below is skipped.
+    [string]$ProblemsOut
 )
 
 $ErrorActionPreference = 'Stop'
@@ -572,6 +581,17 @@ $doctor = Join-Path $PSScriptRoot 'doctor.ps1'
 if (Test-Path $doctor) {
     if ($ReaperResourcePath) { & $doctor -ReaperResourcePath $ReaperResourcePath }
     else { & $doctor }
+}
+
+# Hand the problems to the caller rather than reporting them separately.
+if ($ProblemsOut) {
+    try {
+        Set-Content -Path $ProblemsOut -Value @($script:Problems) -Encoding UTF8
+    } catch {
+        # If this cannot be written the wrapper simply reports fewer problems;
+        # they were all printed as they happened, so nothing is actually lost.
+    }
+    return
 }
 
 Write-Host ""
