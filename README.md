@@ -197,9 +197,17 @@ immediately re-execs into the virtualenv. That needs Python 3.6+ merely to
 parse, so an existing 3.x is fine and is left alone. Claude Desktop does not
 even use `PATH` — the installer writes an absolute interpreter into its config.
 
-**Python 2 is the exception.** If `python` is 2.x, the launcher will not parse at
-all, so `[1]` does add 3.12 to `PATH` in that case. Your Python 2 stays
-installed; it simply stops being what `python` means.
+**Python 2 is handled too, and still without touching `PATH`.**
+`scripts/launch_server.py` is deliberately written in the intersection of Python
+2 and 3 — no f-strings, no `pathlib`, no annotations — so a 2.7 interpreter can
+parse and run it. All it does is work out which interpreter should really run the
+server and hand over to `scripts/_launcher.py`, which is free to be modern. Under
+a Python 3.8+ there is no re-exec at all: it just imports it.
+
+That split exists because Python parses a whole file before running any of it, so
+one f-string in the entry point would make a 2.7 interpreter fail with a
+SyntaxError before reaching any check that could explain why. Your Python 2 stays
+exactly as it is, and stays what `python` means.
 
 ### Running the steps individually
 

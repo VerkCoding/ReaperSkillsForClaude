@@ -1,281 +1,152 @@
-#!/usr/bin/env python3
-"""Entry point for the `reaper` MCP server, bundled with the plugin.
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Entry point for the `reaper` MCP server. Deliberately Python 2 compatible.
 
-The plugin manifest runs this with whatever `python` happens to be on PATH. That
-interpreter is frequently the wrong one: `python-reapy` ships C-level and
-stdlib-sensitive code that has broken on several Python releases, and a user's
-default Python is whatever they installed last. Pointing the MCP config
-directly at `python -m reaper_mcp` therefore fails on a large fraction of
-machines with an ImportError the user never sees, because a stdio MCP server
-that dies during startup surfaces only as "server failed to connect".
+The manifest launches this with the command `python`, and on some machines
+`python` is Python 2 - people who have kept a 2.7 as their default for years
+have a good reason to, and taking it over to install an audio plugin is not our
+call. But `_launcher.py` is modern Python, and Python parses a whole file before
+running any of it, so a single f-string in there would make a 2.7 interpreter
+fail with a SyntaxError before reaching any check that could explain why.
 
-So this script does three things before the server ever starts:
+Hence the split. This file is the only thing `python` has to be able to parse,
+so it is written in the intersection of 2 and 3:
 
-  1. Picks an interpreter that can actually import the dependencies. It probes
-     candidates rather than comparing version numbers - reapy's compatibility
-     has moved with its releases, and a version gate hard-codes a claim that
-     goes stale. What matters is whether `import reapy` works, so that is what
-     gets tested.
-  2. Re-launches itself under that interpreter if it is not the current one.
-  3. Falls back to a diagnostic server when nothing suitable exists, so Claude
-     gets a tool that explains the problem instead of a dead connection.
+    no f-strings, no pathlib, no subprocess.run, no annotations, no `X | None`
 
-Everything diagnostic goes to stderr. stdout belongs to the MCP stdio
-transport, and a single stray print corrupts the protocol stream.
+It works out which interpreter should really run the server and hands over to
+`_launcher.py`, which is free to be written normally. Under a Python 3 that is
+new enough, there is no re-exec at all - it just imports it.
+
+Nothing is printed to stdout: that belongs to the MCP stdio transport, and one
+stray line corrupts the protocol stream.
 """
-
-# Annotations stay lazy so this file still parses under an old interpreter.
-# The whole point of the script is to run before we know which Python we got,
-# and `Path | None` is a TypeError below 3.10.
-from __future__ import annotations
 
 import os
 import subprocess
 import sys
-from pathlib import Path
 
-# Imports the server needs at module-import time. soundfile, librosa and
-# pyloudnorm are deliberately absent: the tool modules import them lazily inside
-# the functions that use them, so a missing analysis library costs you three
-# tools rather than the whole server.
-#
-# `mcp.server.fastmcp` rather than `mcp`, because the distinction is load
-# bearing: mcp 2.0 dropped that submodule, so a bare `import mcp` succeeds on a
-# version the server cannot actually run on - and this probe would hand back an
-# interpreter that fails a moment later, past the point where anything can
-# report why.
-REQUIRED = ("mcp.server.fastmcp", "reapy", "numpy")
+# The floor for _launcher.py itself, not for the server. The server runs from
+# the virtualenv and the launcher re-execs into it; this is only "new enough to
+# read the next file".
+MIN_VERSION = (3, 8)
 
-RELAUNCH_FLAG = "REAPER_MCP_RELAUNCHED"
-PROBE_TIMEOUT = 30
+HERE = os.path.dirname(os.path.abspath(__file__))
+REAL_LAUNCHER = os.path.join(HERE, "_launcher.py")
+
+VERSION_TEST = (
+    "import sys; sys.exit(0 if sys.version_info[:2] >= (%d, %d) else 1)"
+    % (MIN_VERSION[0], MIN_VERSION[1])
+)
 
 
-def log(msg: str) -> None:
-    print(f"[reaper-mcp] {msg}", file=sys.stderr, flush=True)
+def log(message):
+    sys.stderr.write("[reaper-mcp] " + message + "\n")
+    sys.stderr.flush()
 
 
-def plugin_root() -> Path:
-    """Locate the plugin directory.
+def is_usable(argv):
+    """Can this command run a Python new enough to read _launcher.py?"""
+    try:
+        devnull = open(os.devnull, "wb")
+    except IOError:
+        devnull = None
+    try:
+        code = subprocess.call(
+            argv + ["-c", VERSION_TEST], stdout=devnull, stderr=devnull
+        )
+    except (OSError, ValueError):
+        return False
+    finally:
+        if devnull is not None:
+            devnull.close()
+    return code == 0
 
-    Claude Code and Claude Desktop both export CLAUDE_PLUGIN_ROOT into the MCP
-    subprocess, and the manifest forwards it. Falling back to this file's
-    grandparent keeps the script runnable by hand for debugging.
+
+def candidates():
+    """Where to look for a modern Python, without consulting PATH order.
+
+    The `py` launcher matters most here: it reaches a side-by-side install that
+    PATH deliberately does not mention, which is the whole arrangement this
+    setup is built on.
     """
-    env = os.environ.get("REAPER_MCP_PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
-    if env and Path(env).is_dir():
-        return Path(env).resolve()
-    return Path(__file__).resolve().parent.parent
-
-
-def data_dir() -> Path:
-    """Where the managed virtualenv lives.
-
-    This module is the single definition; bootstrap.py and doctor.py import it.
-    They previously each carried a copy with a comment saying the three had to
-    agree, which is the kind of arrangement that holds right up until it does
-    not - and a disagreement here is silent, because the installer would build
-    an environment in one place while the launcher looked in another.
-
-    Deliberately a fixed path rather than CLAUDE_PLUGIN_DATA. The host only sets
-    that when it launches the server, so a venv built by the installer - run
-    from a terminal, with no such variable - would land elsewhere and never be
-    found. Its value also encodes the install route, so a marketplace copy and a
-    developer link would each need their own multi-minute dependency install.
-
-    Being outside the plugin directory is what matters for surviving updates,
-    and this is.
-    """
-    env = os.environ.get("REAPER_MCP_DATA_DIR")
-    if env and not env.startswith("${"):
-        return Path(env)
-    return Path.home() / ".reaper-for-claude"
-
-
-def venv_python() -> Path | None:
-    exe = data_dir() / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    return exe if exe.is_file() else None
-
-
-def child_env(root: Path, *, relaunched: bool = False) -> dict:
-    """Environment for the server process.
-
-    PYTHONPATH points at the bundled source. Nothing is installed from PyPI, so
-    this is the only way the `reaper_mcp` package becomes importable, and it
-    also means the bundled copy wins over any stale `reaper_mcp` that a previous
-    install left in site-packages.
-    """
-    env = dict(os.environ)
-    src = str(root / "src")
-    existing = env.get("PYTHONPATH", "")
-    if src not in existing.split(os.pathsep):
-        env["PYTHONPATH"] = src + (os.pathsep + existing if existing else "")
-    env["REAPER_MCP_PLUGIN_ROOT"] = str(root)
-    if relaunched:
-        env[RELAUNCH_FLAG] = "1"
-    return env
-
-
-def candidates(root: Path) -> list:
-    """Interpreters to try, best first.
-
-    An explicit override wins, then the managed venv, then the interpreter we
-    are already running under, then whatever the system offers. The trailing
-    entries are ordered newest-known-good first; they are probed, not trusted.
-    """
-    out = []
+    found = []
 
     override = os.environ.get("REAPER_MCP_PYTHON")
     if override:
-        out.append(override)
+        found.append([override])
 
-    venv = venv_python()
-    if venv:
-        out.append(venv)
-
-    out.append(sys.executable)
+    # The plugin's own virtualenv, which already has everything.
+    home = os.path.expanduser("~")
+    if os.name == "nt":
+        found.append([os.path.join(home, ".reaper-for-claude", "venv", "Scripts", "python.exe")])
+    else:
+        found.append([os.path.join(home, ".reaper-for-claude", "venv", "bin", "python")])
 
     if os.name == "nt":
-        # The `py` launcher is the only reliable way to reach a non-default
-        # interpreter on Windows; bare `python3.12` is rarely on PATH there.
-        for v in ("3.12", "3.11", "3.13", "3.10"):
-            out.append(f"py -{v}")
-        out.append("python")
+        for version in ("-3.12", "-3.11", "-3.13", "-3.10", "-3"):
+            found.append(["py", version])
+        local = os.environ.get("LOCALAPPDATA", "")
+        if local:
+            for name in ("Python312", "Python311", "Python313", "Python310"):
+                found.append([os.path.join(local, "Programs", "Python", name, "python.exe")])
+        for name in ("Python312", "Python311", "Python313", "Python310"):
+            found.append([os.path.join("C:\\", name, "python.exe")])
     else:
-        for v in ("3.12", "3.11", "3.13", "3.10"):
-            out.append(f"python{v}")
-        out.append("python3")
+        for name in ("python3.12", "python3.11", "python3", "python3.13", "python3.10"):
+            found.append([name])
 
-    seen, unique = set(), []
-    for c in out:
-        key = str(c)
-        if key not in seen:
-            seen.add(key)
-            unique.append(c)
-    return unique
+    return found
 
 
-def as_argv(candidate) -> list:
-    """`py -3.12` is a command plus an argument; a path is just a path."""
-    text = str(candidate)
-    return text.split(" ") if text.startswith("py -") else [text]
+def main():
+    args = sys.argv[1:]
 
-
-def probe(candidate, root: Path) -> list | None:
-    argv = as_argv(candidate)
-    code = "import " + ", ".join(REQUIRED)
-    try:
-        proc = subprocess.run(
-            argv + ["-c", code],
-            env=child_env(root),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            timeout=PROBE_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return argv if proc.returncode == 0 else None
-
-
-def run_server_here(root: Path) -> int:
-    """Serve from this process, once the dependencies are known to be present."""
-    sys.path.insert(0, str(root / "src"))
-    os.environ.setdefault("REAPER_MCP_PLUGIN_ROOT", str(root))
-    from reaper_mcp.__main__ import main  # noqa: PLC0415
-
-    main()
-    return 0
-
-
-def run_fallback(root: Path, detail: str) -> int:
-    """Serve a single tool that explains why the real server could not start.
-
-    Exiting instead would show the user "reaper: failed" with no cause. A
-    connected server carrying one honest diagnostic tool is far more useful:
-    Claude can call it, read the fix, and tell the user what to do.
-    """
-    # serve() must be inside the try, not after it. fallback.py imports mcp
-    # lazily, inside serve(), so with mcp genuinely absent the ModuleNotFoundError
-    # was raised past this guard and the process died on an unhandled traceback -
-    # burying the explanation this function exists to print under a stack dump.
-    try:
-        sys.path.insert(0, str(root / "src"))
-        from reaper_mcp.fallback import serve  # noqa: PLC0415
-
-        serve(root, detail)
-        return 0
-    except Exception as e:  # mcp itself is missing - nothing can be served
-        log(f"Cannot start even the diagnostic server: {e}")
-        log("")
-        for line in detail.splitlines():
-            log(line)
+    if not os.path.isfile(REAL_LAUNCHER):
+        log("Missing " + REAL_LAUNCHER + " - this install is incomplete.")
         return 1
 
+    # Already modern enough: import rather than spawn, so the common case costs
+    # nothing and the server keeps this process's stdin and stdout.
+    if sys.version_info[:2] >= MIN_VERSION:
+        sys.path.insert(0, HERE)
+        import _launcher
+        return _launcher.main()
 
-def self_test(root: Path) -> int:
-    """Report whether the server could start, without starting it.
-
-    The health check needs to answer "will this work?" and every cheaper proxy
-    for that - is python on PATH, is the version recent enough, does the venv
-    exist - has been wrong at some point. Running the same search the launcher
-    runs is the only check that cannot disagree with reality.
-
-    Prints to stdout, unlike the rest of this file: nothing is speaking the MCP
-    protocol here, and the caller wants the answer.
-    """
-    for candidate in candidates(root):
-        argv = probe(candidate, root)
-        if argv:
-            print(" ".join(argv))
-            return 0
-    print(
-        "no interpreter can import " + ", ".join(REQUIRED),
-        file=sys.stderr,
+    log(
+        "This is Python %d.%d, which is too old to run the REAPER server."
+        % (sys.version_info[0], sys.version_info[1])
     )
-    return 1
+    log("Looking for a newer one - your default Python is left alone.")
 
-
-def main() -> int:
-    root = plugin_root()
-
-    if "--self-test" in sys.argv[1:]:
-        return self_test(root)
-
-    if os.environ.get(RELAUNCH_FLAG):
-        # We are the re-launched child. Do not search again - if the parent
-        # picked us and we still cannot import, searching would loop.
-        try:
-            return run_server_here(root)
-        except Exception as e:
-            return run_fallback(root, f"Imports failed under {sys.executable}: {e}")
-
-    for candidate in candidates(root):
-        argv = probe(candidate, root)
-        if not argv:
+    for argv in candidates():
+        if len(argv) == 1 and not os.path.isfile(argv[0]):
+            # A bare name like "python3" may still resolve; a path that does not
+            # exist cannot.
+            if os.sep in argv[0] or (os.altsep and os.altsep in argv[0]):
+                continue
+        if not is_usable(argv):
             continue
 
-        same = len(argv) == 1 and Path(argv[0]).resolve() == Path(sys.executable).resolve()
-        if same:
-            return run_server_here(root)
+        log("Using: " + " ".join(argv))
+        try:
+            return subprocess.call(argv + [REAL_LAUNCHER] + args)
+        except (OSError, ValueError):
+            error = sys.exc_info()[1]
+            log("Could not start it: " + str(error))
+            continue
 
-        log(f"Using interpreter: {' '.join(argv)}")
-        proc = subprocess.run(
-            argv + [str(Path(__file__).resolve())],
-            env=child_env(root, relaunched=True),
-        )
-        return proc.returncode
-
-    detail = (
-        "No Python interpreter on this machine can import the REAPER MCP "
-        "dependencies (" + ", ".join(REQUIRED) + ").\n\n"
-        "Fix it by creating the plugin's managed environment:\n"
-        f"    python \"{root / 'scripts' / 'bootstrap.py'}\"\n\n"
-        "That builds a virtualenv the plugin owns and installs everything into "
-        "it, leaving your system Python untouched. Restart Claude afterwards.\n\n"
-        "If you keep the dependencies somewhere specific, point the plugin at "
-        "that interpreter instead by setting REAPER_MCP_PYTHON to its full path."
-    )
-    log(detail.replace("\n", " "))
-    return run_fallback(root, detail)
+    log("")
+    log("No Python 3.8 or newer could be found on this machine.")
+    log("")
+    log("The REAPER server needs one. Your existing Python is not touched -")
+    log("install a newer one alongside it, then restart Claude:")
+    log("")
+    log("    winget install -e --id Python.Python.3.12")
+    log("")
+    log("If you already have one somewhere unusual, point this at it by")
+    log("setting REAPER_MCP_PYTHON to its full path.")
+    return 1
 
 
 if __name__ == "__main__":

@@ -45,9 +45,11 @@ REQUIREMENTS = ROOT / "requirements.txt"
 # are silent, which is exactly why they are not duplicated.
 #
 # sys.path[0] is this script's own directory when run as a script, so the
-# sibling import resolves without any path juggling.
-from launch_server import REQUIRED as CORE_IMPORTS  # noqa: E402
-from launch_server import data_dir  # noqa: E402
+# sibling import resolves without any path juggling. _launcher.py rather than
+# launch_server.py: the latter is now a Python 2 compatible shim that only
+# forwards, and holds none of these definitions.
+from _launcher import REQUIRED as CORE_IMPORTS  # noqa: E402
+from _launcher import data_dir  # noqa: E402
 
 
 def venv_python(root: Path) -> Path:

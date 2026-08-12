@@ -37,6 +37,7 @@ REQUIRED_LAYOUT = (
     ".claude-plugin/plugin.json",
     ".claude-plugin/marketplace.json",
     "scripts/launch_server.py",
+    "scripts/_launcher.py",
     "scripts/bootstrap.py",
     "scripts/bridge.py",
     "src/reaper_mcp/server.py",
@@ -50,7 +51,7 @@ MANIFEST = ".claude-plugin/plugin.json"
 # environment healthy against a different list from the one that actually
 # selects the interpreter. sys.path[0] is this script's directory when run as a
 # script, so the sibling import resolves.
-from launch_server import REQUIRED as CORE_IMPORTS  # noqa: E402
+from _launcher import REQUIRED as CORE_IMPORTS  # noqa: E402
 
 # Installed by earlier versions of this project. This plugin contains everything
 # they did, and left in place they load in parallel with it.
