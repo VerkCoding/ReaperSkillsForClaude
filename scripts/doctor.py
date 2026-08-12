@@ -257,18 +257,16 @@ def check_python(r: Report) -> None:
         )
         r.info("Without it, activate_reapy_server fails and the distant API never starts.")
 
-    # Lazily imported by the analysis tools only, so absence is a reduced
-    # feature set rather than a broken install - a legitimate outcome of
-    # bootstrap.py --core, which exists because these four packages are ~440 MB
-    # of a 477 MB install.
+    # Imported lazily by the analysis tools, so the server starts without them
+    # and the shortfall shows up only when one of those tools is called - which
+    # is why it is checked here rather than left to surface mid-task.
     p = run([sys.executable, "-c", "import librosa, soundfile, pyloudnorm"])
     if p and p.returncode == 0:
         r.ok("analysis libraries present (loudness, spectrum, transients)")
     else:
-        r.warn(
-            "analysis libraries not installed - this is a core-only environment",
-            "Structural tools work. For loudness/spectrum/transient analysis: "
-            "python scripts/bootstrap.py",
+        r.fail(
+            "analysis libraries are missing - the offline analysis tools will fail",
+            f'"{sys.executable}" "{ROOT / "scripts" / "bootstrap.py"}"',
         )
 
     launcher = ROOT / "scripts" / "launch_server.py"

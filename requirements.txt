@@ -1,22 +1,28 @@
-# Full dependency set for the REAPER MCP server.
+# Dependencies for the REAPER MCP server.
 #
 # `scripts/bootstrap.py` installs this into a virtualenv the plugin owns, and
 # hashes the file to decide whether a reinstall is needed, so editing it is what
 # triggers an update on the next bootstrap.
-
--r requirements-core.txt
-
-# Everything below is imported lazily, inside the functions that use it, and
-# powers only the offline analysis tools - loudness, spectrum, transients,
-# stereo field, clipping.
 #
-# It is also most of the install: librosa drags in llvmlite (117 MB), scipy
-# (116 MB), scikit-learn (45 MB) and numba (30 MB). Measured, this block is
-# 345 MB of the 477 MB total and 6,865 of the 12,212 files.
+# Pinned below 2.0 on purpose. mcp 2.0 removed mcp.server.fastmcp - the API all
+# nine tool modules are written against - and replaced it with mcp.server
+# .mcpserver. With an open `>=1.0.0` range, a fresh clone installs 2.x and the
+# server cannot import, while the machine it was developed on keeps working
+# because it already had 1.x. Lift this only alongside a port of the tool
+# modules.
+mcp>=1.0.0,<2.0.0
+
+python-reapy>=0.10.0
+numpy>=1.24.0
+platformdirs>=3.0.0
+
+# Imported lazily, inside the functions that use them, so the server starts
+# without them - but they are part of a normal install and the offline analysis
+# tools (loudness, spectrum, transients, stereo field, clipping) need them.
 #
-# `bootstrap.py --core` skips this block. The server starts and every structural
-# tool works; the analysis tools report that they need the full install. Worth
-# it on a disposable VM or a metered connection.
+# This is the bulk of the install: librosa drags in llvmlite, scipy,
+# scikit-learn and numba, which is most of ~477 MB across ~12,000 files. That is
+# slow on a cold cache, and slower still in a VM. It is not optional.
 librosa>=0.10.0
 pyloudnorm>=0.1.1
 soundfile>=0.12.0

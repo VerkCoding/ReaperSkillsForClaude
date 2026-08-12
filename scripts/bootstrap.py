@@ -36,7 +36,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REQUIREMENTS = ROOT / "requirements.txt"
-REQUIREMENTS_CORE = ROOT / "requirements-core.txt"
 
 # Kept in step with launch_server.REQUIRED - the imports that must succeed for
 # the server to come up at all, as opposed to the lazily imported analysis
@@ -136,19 +135,8 @@ def ensure_reaper_side(force: bool = False) -> bool:
     return True
 
 
-def requirements_digest(core_only: bool) -> str:
-    """Hash both files plus the mode.
-
-    The mode is part of the identity on purpose: a --core install and a full one
-    can hash the same requirements text, and without it, switching between them
-    would look like "already up to date" and silently do nothing.
-    """
-    h = hashlib.sha256()
-    h.update(b"core" if core_only else b"full")
-    h.update(REQUIREMENTS_CORE.read_bytes())
-    if not core_only:
-        h.update(REQUIREMENTS.read_bytes())
-    return h.hexdigest()
+def requirements_digest() -> str:
+    return hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()
 
 
 def check(python: Path) -> list:
@@ -173,13 +161,6 @@ def main() -> int:
         "--recreate", action="store_true", help="Delete and rebuild the virtualenv."
     )
     ap.add_argument(
-        "--core",
-        action="store_true",
-        help="Skip the analysis libraries (librosa, scipy, scikit-learn, numba). "
-        "132 MB instead of 477 MB. Every structural tool still works; the "
-        "offline analysis tools do not.",
-    )
-    ap.add_argument(
         "--allow-source",
         action="store_true",
         help="Permit building packages from source. Off by default: a missing "
@@ -188,10 +169,9 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    for f in (REQUIREMENTS, REQUIREMENTS_CORE):
-        if not f.is_file():
-            print(f"Missing {f}", file=sys.stderr)
-            return 1
+    if not REQUIREMENTS.is_file():
+        print(f"Missing {REQUIREMENTS}", file=sys.stderr)
+        return 1
 
     target = data_dir() / "venv"
     stamp = data_dir() / "requirements.sha256"
@@ -220,11 +200,13 @@ def main() -> int:
             print("             -> python scripts/bootstrap.py")
             return 1
 
-        analysis = can_import(py, "librosa")
-        print(f"Analysis:    {'available' if analysis else 'not installed (core-only)'}")
-        if not analysis:
-            print("             Structural tools work; loudness, spectrum and")
-            print("             transient analysis need the full install.")
+        if not can_import(py, "librosa"):
+            # The server still starts - these are imported lazily - so this is
+            # an incomplete install rather than a broken one.
+            print("Analysis:    MISSING - loudness, spectrum and transient tools")
+            print("             will fail. Re-run without --check to install.")
+            return 1
+        print("Analysis:    available")
         print("Status:      ready")
         return 0
 
@@ -244,7 +226,7 @@ def main() -> int:
         print(f"Virtualenv creation did not produce {py}", file=sys.stderr)
         return 1
 
-    digest = requirements_digest(args.core)
+    digest = requirements_digest()
     current = stamp.read_text().strip() if stamp.is_file() else ""
     if current == digest and not args.force and not check(py):
         print("Status:      already up to date (requirements unchanged)")
@@ -252,16 +234,11 @@ def main() -> int:
         # while REAPER's own interpreter has never had reapy installed.
         return 0 if ensure_reaper_side() else 1
 
-    req = REQUIREMENTS_CORE if args.core else REQUIREMENTS
-    if args.core:
-        print("Mode:        core only - 132 MB, no analysis libraries")
-    else:
-        print("Mode:        full - 477 MB, 12,212 files")
-        print("             345 MB of that is librosa's chain: llvmlite, scipy,")
-        print("             scikit-learn, numba. --core skips it and still")
-        print("             serves every structural tool.")
+    print("Size:        about 477 MB across ~12,000 files, most of it librosa's")
+    print("             chain - llvmlite, scipy, scikit-learn, numba. A cold")
+    print("             install takes a few minutes, longer in a VM.")
 
-    cmd = [str(py), "-m", "pip", "install", "--upgrade", "-r", str(req)]
+    cmd = [str(py), "-m", "pip", "install", "--upgrade", "-r", str(REQUIREMENTS)]
     if not args.allow_source:
         # Without this, a missing wheel silently falls back to building from
         # source. For llvmlite that is an hour of compilation that usually ends

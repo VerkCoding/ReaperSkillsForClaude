@@ -288,16 +288,10 @@ pip wheel cache to reuse, so every byte is downloaded again; Defender scans all
 virtualised disk is at its slowest with exactly this pattern — very many small
 files.
 
-Use the core install instead:
-
-```powershell
-python scripts\bootstrap.py --core
-```
-
-**132 MB, 5,347 files.** The server starts and all 58 tools register; only the
-offline analysis tools (loudness, spectrum, transients, stereo field, clipping)
-are unavailable, because those libraries are imported lazily. Run bootstrap
-again without `--core` later to add them.
+Slow is the expected outcome there, and the install is not divisible: the
+analysis tools are part of what this plugin is for. Let it run once - the
+virtualenv lives outside the plugin, so it survives plugin updates and is not
+rebuilt by the next install.
 
 If it is not just slow but **stuck**, check whether pip is *building* rather
 than downloading — a line like `Building wheel for llvmlite`. That means no
