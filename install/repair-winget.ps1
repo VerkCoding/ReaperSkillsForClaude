@@ -73,9 +73,76 @@ if ((Test-Winget) -and -not $Force) {
     exit 0
 }
 
-Write-Info "You may not need this at all: install-python.ps1 downloads Python"
-Write-Info "directly from python.org when winget is missing, so the setup does"
-Write-Info "not depend on winget existing."
+function Get-File {
+    <#
+      Download to a path, and refuse anything implausibly small.
+
+      A proxy or captive portal answers with an HTML login page and HTTP 200,
+      which then gets saved under an .appx name and fails to install with an
+      error about the package rather than about the network.
+    #>
+    param([string]$Url, [string]$Path, [double]$MinMB)
+
+    Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -UserAgent 'Mozilla/5.0'
+    $mb = (Get-Item $Path).Length / 1MB
+    if ($mb -lt $MinMB) {
+        throw ("downloaded only {0:N1} MB from {1} - expected at least {2} MB, so that is not the package" -f $mb, $Url, $MinMB)
+    }
+    return $mb
+}
+
+function Install-WingetDirect {
+    <#
+      Install winget from Microsoft's own release, with its dependencies.
+
+      This is the route that actually works where winget is genuinely absent -
+      Windows Sandbox, Windows Server, a stripped image. It needs nothing but
+      HTTPS: no PowerShell Gallery, no NuGet provider, no Store.
+
+      Order matters. The bundle declares VCLibs and UI.Xaml as dependencies, so
+      installing it first fails with a dependency error that reads like a
+      corrupt download.
+    #>
+    $tmp = Join-Path $env:TEMP ("winget-setup-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+    $parts = @(
+        @{ Name = 'VCLibs';  Min = 3;   File = 'VCLibs.appx'
+           Url  = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx' }
+        @{ Name = 'UI.Xaml'; Min = 2;   File = 'UIXaml.appx'
+           Url  = 'https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx' }
+        @{ Name = 'winget';  Min = 100; File = 'winget.msixbundle'
+           Url  = 'https://aka.ms/getwinget' }
+    )
+
+    try {
+        foreach ($p in $parts) {
+            $dest = Join-Path $tmp $p.File
+            Write-Info ("Downloading {0}..." -f $p.Name)
+            $mb = Get-File -Url $p.Url -Path $dest -MinMB $p.Min
+            Write-Info ("  {0:N1} MB" -f $mb)
+        }
+
+        foreach ($p in $parts) {
+            $dest = Join-Path $tmp $p.File
+            Write-Info ("Installing {0}..." -f $p.Name)
+            try {
+                Add-AppxPackage -Path $dest -ErrorAction Stop
+            } catch {
+                # The dependencies are frequently already present and a newer
+                # version refuses to downgrade. That is not a failure unless the
+                # bundle itself cannot install.
+                if ($p.Name -eq 'winget') { throw }
+                Write-Info ("  already present or newer; continuing")
+            }
+        }
+        return $true
+    } finally {
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Info "winget is the backbone of the install, so this tries hard to get it."
 Write-Host ""
 
 # ---------------------------------------------------------------------------
@@ -106,6 +173,48 @@ try {
     # because it is one, but it is the cheap attempt, not the plan.
     Write-Info "Nothing to register here ($($_.Exception.Message.Split([Environment]::NewLine)[0]))"
     Write-Info "That is normal when App Installer was never present. Falling back..."
+}
+
+# ---------------------------------------------------------------------------
+# TLS first: everything below downloads, and Windows PowerShell 5.1 on older
+# builds still offers TLS 1.0, which these hosts refuse.
+# ---------------------------------------------------------------------------
+try {
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {
+    Write-Warn2 "Could not force TLS 1.2; continuing."
+}
+
+# ---------------------------------------------------------------------------
+# Install it straight from Microsoft's release.
+#
+# This is deliberately ahead of the PowerShell Gallery route. The Gallery route
+# is the one people quote, and it fails on exactly the machines that need it:
+# the inbox PackageManagement module cannot fetch its provider list from
+# go.microsoft.com on a Sandbox, a Server, or anything proxied, and reports
+#
+#   Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'
+#
+# before it has done anything. Downloading three files over HTTPS has no such
+# dependency, which is why it goes first now rather than last.
+# ---------------------------------------------------------------------------
+Write-Info "Installing winget from Microsoft's release (about 220 MB)..."
+try {
+    if (Install-WingetDirect) {
+        if (Test-Winget) {
+            Write-Ok "winget is working: $(& winget --version)"
+            if (-not $Embedded) {
+                Write-Host ""
+                Write-Host "  Close this window and run RunThisToStart.bat again." -ForegroundColor Gray
+            }
+            exit 0
+        }
+        Write-Info "Installed, but winget does not respond yet."
+    }
+} catch {
+    Write-Warn2 "Direct install did not succeed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+    Write-Info  "Falling back to the PowerShell Gallery route."
 }
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] `

@@ -223,22 +223,34 @@ if ($SkipApps) {
     if ($haveWinget) {
         Write-Ok "winget $(& winget --version)"
     } else {
-        # Deliberately NOT repairing winget here.
+        # winget is the backbone: REAPER, Claude, Git and Python all come
+        # through it, so getting it installed is worth doing properly rather
+        # than working around.
         #
-        # The repair pulls Microsoft's module from PowerShell Gallery, takes
-        # minutes, and fails on precisely the machines that lack winget - a
-        # Sandbox, a Server, anything behind a proxy - because the inbox
-        # PackageManagement module cannot fetch its provider list. Sitting
-        # through that before falling back anyway is the clunky part.
-        #
-        # Python is the only thing this setup genuinely cannot do without, and
-        # it comes straight from python.org. So skip to that, and leave winget
-        # repair as something the user can run on purpose if they want winget
-        # itself back.
-        Write-Warn2 "winget is not available."
-        Write-Info  "Not repairing it: that route is slow and usually fails on"
-        Write-Info  "machines without winget. Going straight to a direct download."
-        Write-Info  "To try anyway, run install\repair-winget.ps1 yourself."
+        # repair-winget.ps1 now downloads it from Microsoft's release directly,
+        # which needs nothing but HTTPS - no PowerShell Gallery, no NuGet
+        # provider, no Store - and is the route that works on the machines that
+        # lack it. The Gallery bootstrap is still there behind it.
+        Write-Warn2 "winget is not available - installing it."
+        try {
+            & (Join-Path $Here 'repair-winget.ps1') -Embedded | Out-Host
+        } catch {
+            Write-Warn2 "winget install did not succeed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+        }
+
+        # Re-check by path as well as by name. Add-AppxPackage puts the shim in
+        # WindowsApps, which is already on PATH, but this process cached its
+        # command lookups at startup.
+        $shim = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+        if (Test-Path $shim) { $env:PATH = "$(Split-Path $shim);$env:PATH" }
+        Get-Command winget -ErrorAction SilentlyContinue | Out-Null
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            $prevEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try { $null = & winget --version 2>&1; $haveWinget = ($LASTEXITCODE -eq 0) } catch { }
+            $ErrorActionPreference = $prevEAP
+        }
+        if ($haveWinget) { Write-Ok "winget is now available: $(& winget --version)" }
     }
 
     Write-Step "Applications"

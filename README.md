@@ -273,13 +273,25 @@ wheels for a brand-new Python. And more seriously:
 > 3.14, which is why the two interpreters are chosen separately.
 
 **No winget?** It ships with App Installer, absent on a fresh Windows Server, on
-images built without the Store, and inside Windows Sandbox. Nothing here needs
-it: `[1]` falls back to downloading Python straight from python.org.
-`repair-winget.ps1` exists if you want winget itself back — it tries the offline
-repair first (registering an App Installer that is present but unregistered for
-your user, the usual state in Sandbox and on Server) before Microsoft's
-PSGallery bootstrap, which frequently fails on those same machines with
-`Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'`.
+images built without the Store, and inside Windows Sandbox. `[1]` installs it
+rather than working around it, in this order:
+
+1. **Register an App Installer that is already provisioned** — instant, offline,
+   and the usual fix when winget is present but not registered for your user.
+2. **Download it from Microsoft's release** — VCLibs, UI.Xaml and the
+   ~207 MB `Microsoft.DesktopAppInstaller` bundle, installed in that order
+   because the bundle declares the other two as dependencies. Needs nothing but
+   HTTPS, which is why it is the route that works on the machines that lack
+   winget.
+3. **Microsoft's PowerShell Gallery bootstrap** — last, because it fails on
+   precisely those machines: the inbox `PackageManagement` module cannot fetch
+   its provider list and reports
+   `Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'`
+   before doing anything.
+
+Each download is size-checked, so a proxy or captive portal answering with an
+HTML login page is rejected rather than saved under an `.appx` name and failing
+later with an error about the package.
 
 
 ## What runs where
