@@ -401,7 +401,15 @@ if ($doClaude) {
         # presents much later as a server pointing at a path that no longer
         # exists. Warn rather than refuse: the write is harmless when it sticks,
         # and the health check catches it when it does not.
-        $desktopRunning = @(Get-Process -Name 'Claude' -ErrorAction SilentlyContinue).Count -gt 0
+        # Path-aware, because the Claude Code CLI is also claude.exe: matching on
+        # name alone warns about Desktop being open when only the CLI is
+        # running, which is the normal state when this is run from a terminal.
+        $desktopRunning = @(
+            Get-Process -Name 'claude', 'Claude' -ErrorAction SilentlyContinue | Where-Object {
+                $p = try { $_.Path } catch { $null }
+                $p -notlike '*claude-code*'
+            }
+        ).Count -gt 0
         if ($desktopRunning) {
             Write-Warn2 "Claude Desktop is running. It can rewrite this file from its own state,"
             Write-Warn2 "reverting what is written below."

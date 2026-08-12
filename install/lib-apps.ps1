@@ -47,6 +47,22 @@ function Get-ProcPath {
     try { return $Process.Path } catch { return $null }
 }
 
+function Test-KeyPressed {
+    <#
+      Non-blocking keypress check, so a wait loop can offer "press a key to
+      skip" without giving up its polling. Guarded because [Console]::KeyAvailable
+      throws outright when stdin is redirected, which is exactly what happens if
+      anyone drives this from a script.
+    #>
+    try {
+        if ([Console]::KeyAvailable) {
+            [void][Console]::ReadKey($true)
+            return $true
+        }
+    } catch { }
+    return $false
+}
+
 function Get-TargetProcesses {
     <#
       .PARAMETER Kind
@@ -149,7 +165,19 @@ function Request-AppClosed {
         Write-Ok "$Label closed."
         return $true
     }
+
+    # Say what continuing actually costs, rather than just noting it. Both
+    # applications rewrite their settings from memory when they exit, so the
+    # step that writes to them is the one that will be lost.
     Write-Warn2 "Continuing with $Label still running."
+    if ($Kind -eq 'reaper') {
+        Write-Info "REAPER's connection settings will be SKIPPED rather than written"
+        Write-Info "and then discarded when it exits. Close REAPER and re-run [1] to"
+        Write-Info "finish that step."
+    } else {
+        Write-Info "Claude may revert the MCP server entry written later. If the REAPER"
+        Write-Info "tools are missing afterwards, close Claude fully and re-run [1]."
+    }
     return $false
 }
 
@@ -314,7 +342,13 @@ function Invoke-ClaudeFirstRun {
       it, let the user sign in, and confirm from config rather than from a
       window title - a window can be open with nobody signed in.
     #>
-    param([int]$TimeoutSeconds = 600)
+    param(
+        [int]$TimeoutSeconds = 600,
+        # How long to give Claude to show a process before deciding the launch
+        # did not take. Generous: a cold Electron start on a slow disk is not
+        # quick.
+        [int]$AppearSeconds = 45
+    )
 
     if (Test-ClaudeSignedIn) {
         Write-Ok "Claude is already signed in."
@@ -328,27 +362,88 @@ function Invoke-ClaudeFirstRun {
 
     Write-Host ""
     Write-Host "  Sign in to Claude in the window that opened." -ForegroundColor Yellow
-    Write-Host "  This waits for you - it checks every few seconds and continues" -ForegroundColor Yellow
-    Write-Host "  by itself once you are signed in." -ForegroundColor Yellow
+    Write-Host "  This continues by itself once you are signed in." -ForegroundColor Yellow
+    Write-Host "  Press any key here to skip and carry on without signing in." -ForegroundColor Gray
     Write-Host ""
 
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $dots = 0
+    $deadline   = (Get-Date).AddSeconds($TimeoutSeconds)
+    $launchedAt = Get-Date
+    $sawRunning = $false
+    $ticks      = 0
+
+    # Reopening extends the deadline, so without a cap the timeout can never be
+    # reached and a Claude that fails to stay open - crashing at launch, say -
+    # would prompt forever.
+    $reopens    = 0
+    $maxReopens = 3
+
     while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 3
+        Start-Sleep -Milliseconds 1000
+        $ticks++
+
         if (Test-ClaudeSignedIn) {
             Write-Host ""
             Write-Ok "Signed in to Claude."
             [void](Request-AppClosed -Kind claude -Label 'Claude')
             return $true
         }
-        $dots++
-        if ($dots % 10 -eq 0) {
-            Write-Host "  still waiting for sign-in..." -ForegroundColor DarkGray
+
+        # Skipping has to be possible. Without it, someone who decides not to
+        # sign in now has no way out of this loop but Ctrl+C, which would
+        # abandon the install halfway.
+        if (Test-KeyPressed) {
+            Write-Host ""
+            Write-Warn2 "Skipped at your request - no sign-in recorded."
+            return $false
+        }
+
+        # Two ways this stalls, both of which would otherwise burn the whole
+        # timeout waiting on a window that is never going to be signed into:
+        # Claude was open and the user closed it, or it never appeared at all.
+        # A launch call returning success only means a launch was attempted.
+        $running = @(Get-TargetProcesses 'claude').Count -gt 0
+        $stall   = $null
+        if ($running) {
+            $sawRunning = $true
+        } elseif ($sawRunning) {
+            $stall = "Claude was closed before a sign-in was recorded."
+        } elseif (((Get-Date) - $launchedAt).TotalSeconds -gt $AppearSeconds) {
+            $stall = "Claude does not appear to have started."
+        }
+
+        if ($stall) {
+            Write-Host ""
+            Write-Warn2 $stall
+
+            if ($reopens -ge $maxReopens) {
+                Write-Info "Tried $maxReopens times. Carrying on without a session."
+                return $false
+            }
+
+            Write-Host "    [R] open it again and wait" -ForegroundColor Gray
+            Write-Host "    [S] skip - sign in later yourself" -ForegroundColor Gray
+            $ans = Read-Host "  Choose [R/S]"
+            if ($ans -match '^[Rr]') {
+                $reopens++
+                if (Start-ClaudeDesktop) {
+                    $sawRunning = $false
+                    $launchedAt = Get-Date
+                    $deadline   = (Get-Date).AddSeconds($TimeoutSeconds)
+                    Write-Info "Waiting again (attempt $reopens of $maxReopens)..."
+                    continue
+                }
+                Write-Warn2 "Could not reopen Claude."
+            }
+            Write-Info "Carrying on without a Claude session."
+            return $false
+        }
+
+        if ($ticks % 30 -eq 0) {
+            Write-Host "  still waiting for sign-in... (press a key to skip)" -ForegroundColor DarkGray
         }
     }
 
     Write-Warn2 "No sign-in detected after $([int]($TimeoutSeconds / 60)) minutes."
-    Write-Info  "You can sign in later; the plugin will be installed either way."
+    Write-Info  "You can sign in later; the plugin is installed either way."
     return $false
 }

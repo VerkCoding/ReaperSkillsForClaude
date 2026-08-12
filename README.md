@@ -67,6 +67,20 @@ Both steps run **only for applications this run installed**. Anything already on
 your machine has a config and a session already, and opening it uninvited would
 be presumptuous.
 
+### If you don't follow the prompts
+
+None of it is mandatory, and none of it hangs:
+
+| You do this | What happens |
+| --- | --- |
+| Press Enter **without closing REAPER** | The REAPER connection step is **skipped, not attempted** — writing it under a running REAPER would only be discarded on exit. Reported at the end; close REAPER and re-run `[1]` to finish it. |
+| Press Enter **without closing Claude** | The setup continues and warns that Claude may revert the MCP entry it writes. If the REAPER tools are missing afterwards, close Claude fully and re-run `[1]`. |
+| **Close Claude without signing in** | Detected within seconds. You are offered *reopen* or *skip* — it does not sit there waiting out the timeout. |
+| **Never sign in**, or Claude fails to start | Capped: three reopen attempts, then it carries on without a session and says so. |
+| Decide to skip the sign-in | Press any key during the wait. |
+
+Everything unfinished is listed at the end of `[1]`, and re-running it is safe.
+
 ### What `[1]` installs
 
 From the winget community source, which uses each vendor's own installer
