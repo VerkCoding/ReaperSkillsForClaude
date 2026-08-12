@@ -234,6 +234,27 @@ def check_python(r: Report) -> None:
         else:
             r.warn(f"import {mod} fails under {sys.executable}")
 
+    # REAPER embeds a Python shared library and runs ReaScripts inside it. That
+    # interpreter is the base installation - never the virtualenv, which is only
+    # a redirect layer and contains no python3XX.dll. reapy has to be importable
+    # there for activate_reapy_server to start the distant API.
+    #
+    # Checked separately because the failure is invisible from the server side:
+    # the virtualenv can be flawless while REAPER has nothing to answer with.
+    base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
+    if not base.is_file():
+        base = Path(sys.executable)
+    p = run([str(base), "-c", "import reapy"])
+    if p and p.returncode == 0:
+        r.ok(f"REAPER's interpreter can import reapy ({base})")
+    else:
+        r.fail(
+            f"REAPER's interpreter cannot import reapy ({base})",
+            f'"{base}" -m pip install --user python-reapy   '
+            "(or re-run scripts/bootstrap.py, which does it)",
+        )
+        r.info("Without it, activate_reapy_server fails and the distant API never starts.")
+
     launcher = ROOT / "scripts" / "launch_server.py"
     if launcher.is_file():
         # The only check that matters. Every cheaper proxy for "will the server

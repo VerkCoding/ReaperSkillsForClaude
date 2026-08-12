@@ -75,6 +75,20 @@ deliberately not derived from the host's plugin data directory: that only exists
 when Claude launches the server, so a venv built from a terminal would land
 somewhere the server never looks.
 
+**Two interpreters need reapy, and the virtualenv only covers one.** REAPER
+loads a Python shared library and runs ReaScripts inside its own process, so it
+uses the *base* installation and cannot see a virtualenv. `reapy` therefore has
+to be importable by the base Python as well, or `activate_reapy_server` fails
+and the distant API never starts — which presents as "everything installed,
+nothing connects". `bootstrap.py` handles this, installing only `python-reapy`
+there. If it ever needs doing by hand:
+
+```
+"<base python>" -m pip install --user python-reapy
+```
+
+`--check` reports both sides separately, and so does the health check.
+
 Older documentation claimed reapy requires Python 3.11 or 3.12. Treat that as a
 symptom, not a rule: reapy has broken and been fixed across releases, so test
 whether the imports work rather than reading the version number. `--check` is

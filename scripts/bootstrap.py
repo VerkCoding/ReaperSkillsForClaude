@@ -68,6 +68,73 @@ def venv_python(root: Path) -> Path:
     return root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
+def base_python() -> Path:
+    """The interpreter REAPER embeds, which is never the virtualenv.
+
+    REAPER loads a Python *shared library* - python3XX.dll - and runs ReaScripts
+    inside it. A virtualenv contains no such library; it is a redirect layer
+    around the base installation, and REAPER knows nothing about it. So the
+    embedded interpreter is always the base one, using the base site-packages.
+    """
+    if sys.prefix != sys.base_prefix:
+        exe = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
+        if exe.is_file():
+            return exe
+    return Path(sys.executable)
+
+
+def can_import(python: Path, module: str) -> bool:
+    return subprocess.run(
+        [str(python), "-c", f"import {module}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+def ensure_reaper_side(force: bool = False) -> bool:
+    """Put reapy where REAPER can import it, which the virtualenv cannot do.
+
+    Two different interpreters have to import reapy, and only one of them is
+    ours:
+
+      * the MCP server, running outside REAPER - that is the virtualenv
+      * activate_reapy_server.py, the ReaScript REAPER runs to start the distant
+        API - that is REAPER's embedded interpreter
+
+    Miss the second and everything looks installed while nothing connects: the
+    server has reapy, REAPER does not, so the API it dials never comes up.
+
+    Only reapy goes here, never the rest. It needs psutil and typing-extensions
+    and nothing else - no numpy, no numba, no librosa - so this adds three small
+    pure-Python packages to the base installation rather than the compiled
+    numeric stack that makes a global install worth avoiding.
+    """
+    base = base_python()
+    print(f"REAPER-side: {base}")
+
+    if not force and can_import(base, "reapy"):
+        print("             reapy already importable there")
+        return True
+
+    print("             installing python-reapy so REAPER's ReaScripts can import it")
+    proc = subprocess.run(
+        [str(base), "-m", "pip", "install", "--user", "--upgrade", "python-reapy>=0.10.0"]
+    )
+    if proc.returncode != 0:
+        print("             pip failed; see the output above", file=sys.stderr)
+        return False
+
+    if not can_import(base, "reapy"):
+        print(
+            "             installed, but reapy still does not import there.",
+            file=sys.stderr,
+        )
+        return False
+
+    print("             ok")
+    return True
+
+
 def requirements_digest() -> str:
     return hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()
 
@@ -107,12 +174,23 @@ def main() -> int:
     print(f"Environment: {target}")
 
     if args.check:
+        base = base_python()
+        reaper_ok = can_import(base, "reapy")
+        print(f"REAPER-side: {base}")
+        print(f"             reapy importable: {'yes' if reaper_ok else 'NO - required'}")
+
         if not py.is_file():
             print("Status:      not created yet  ->  python scripts/bootstrap.py")
             return 1
         missing = check(py)
         if missing:
             print(f"Status:      incomplete, cannot import: {', '.join(missing)}")
+            return 1
+        if not reaper_ok:
+            # The virtualenv being complete is not enough. REAPER runs its own
+            # interpreter, and without reapy there the distant API never starts.
+            print("Status:      server ready, but REAPER cannot start its side")
+            print("             -> python scripts/bootstrap.py")
             return 1
         print("Status:      ready")
         return 0
@@ -137,7 +215,9 @@ def main() -> int:
     current = stamp.read_text().strip() if stamp.is_file() else ""
     if current == digest and not args.force and not check(py):
         print("Status:      already up to date (requirements unchanged)")
-        return 0
+        # Still verify the REAPER side: the virtualenv can be perfectly current
+        # while REAPER's own interpreter has never had reapy installed.
+        return 0 if ensure_reaper_side() else 1
 
     print("Installing dependencies. A cold install takes a few minutes.")
     proc = subprocess.run(
@@ -160,6 +240,16 @@ def main() -> int:
 
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(digest)
+
+    print()
+    if not ensure_reaper_side(force=args.force):
+        print(
+            "\nThe server environment is ready, but REAPER's own interpreter cannot "
+            "import reapy, so the distant API will not start. Install it by hand:\n"
+            f'    "{base_python()}" -m pip install --user python-reapy',
+            file=sys.stderr,
+        )
+        return 1
 
     print("\nStatus:      ready")
     print("Restart Claude so it picks up the new environment.")

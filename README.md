@@ -101,6 +101,7 @@ just not the skills.
 | Thing | Where | Why |
 | --- | --- | --- |
 | Dependency virtualenv | `%USERPROFILE%\.reaper-for-claude\venv` | Survives plugin updates; cannot break your system Python |
+| `python-reapy` (only) | your base Python's user site-packages | REAPER embeds that interpreter and cannot see a virtualenv — see [Two interpreters](#two-interpreters-and-why-a-virtualenv-is-not-enough) |
 | `claude_bridge.lua` | `<REAPER>\Scripts\` | The bridge listener |
 | `__startup.lua` | `<REAPER>\Scripts\` | Gets a one-line `dofile()` — **appended, never overwritten**, with a `.bak` |
 | Distant API settings | `reaper.ini`, `reaper-kb.ini`, `reaper-extstate.ini` | How the MCP server reaches REAPER |
@@ -217,6 +218,37 @@ directory. That variable only exists when Claude launches the server, so a venv
 built by the installer from a terminal would land somewhere the server never
 looks; and its value differs between a marketplace install and a developer link,
 which would mean building the whole dependency set twice.
+
+### Two interpreters, and why a virtualenv is not enough
+
+REAPER does not run Python as a subprocess. It loads a Python **shared library**
+— `python3XX.dll` — and runs ReaScripts inside its own process. A virtualenv
+contains no such library; it is a redirect layer around a base installation, and
+REAPER knows nothing about it.
+
+So two different interpreters have to import `reapy`, and only one of them is
+ours:
+
+| Interpreter | Runs | Needs |
+| --- | --- | --- |
+| The virtualenv | the MCP server, outside REAPER | everything in `requirements.txt` |
+| REAPER's embedded Python | `activate_reapy_server.py`, which starts the distant API | `reapy` |
+
+Miss the second and the setup looks complete while nothing connects: the server
+has `reapy`, REAPER does not, so the API the server dials never comes up.
+`bootstrap.py` therefore also installs `python-reapy` into the base Python's
+user site-packages, and the health check tests both sides separately.
+
+That is a deliberate exception to keeping things out of your system Python, and
+a narrow one. `python-reapy` needs only `psutil` and `typing-extensions` — three
+small pure-Python packages. The compiled numeric stack that makes a global
+install worth avoiding (`numpy`, `numba`, `llvmlite`, `scipy`, `scikit-learn`,
+`librosa`) stays in the virtualenv, where REAPER never looks and nothing else
+can be broken by it.
+
+You do **not** have to configure the DLL path by hand. `enable_reapy.py` resolves
+the base installation even when it is run from inside the virtualenv, and writes
+`pythonlibpath64` / `pythonlibdll64` into `reaper.ini` for you.
 
 ### Reaching REAPER
 
