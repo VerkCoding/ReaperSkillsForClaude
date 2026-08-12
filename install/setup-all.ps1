@@ -241,6 +241,7 @@ if ($SkipApps) {
         # Re-check by path as well as by name. Add-AppxPackage puts the shim in
         # WindowsApps, which is already on PATH, but this process cached its
         # command lookups at startup.
+        Update-PathFromRegistry
         $shim = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
         if (Test-Path $shim) { $env:PATH = "$(Split-Path $shim);$env:PATH" }
         Get-Command winget -ErrorAction SilentlyContinue | Out-Null
@@ -360,8 +361,18 @@ if ($SkipApps) {
     }
 
     # A process reads PATH once at startup, so anything installed above is
-    # invisible to this one. Prepend the known locations so the steps below can
-    # actually call python.
+    # invisible to this one.
+    #
+    # The authoritative answer is in the registry: installers write there, and
+    # "restart your shell" means nothing more than "read it again". So read it
+    # again. This is what makes `claude`, `git` and `python` findable below
+    # without this script having to know where any of them chose to live.
+    Update-PathFromRegistry
+
+    # Then the specific locations, as a safety net for anything that puts a
+    # binary somewhere without recording it in the registry. Kept deliberately:
+    # the registry read above covers the general case, this covers the ones that
+    # do not play by the rules, and neither is a reason to drop the other.
     $newPaths = @(
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\Scripts'),
@@ -535,3 +546,12 @@ if ($transcribing) {
     Write-Host ""
     try { Stop-Transcript | Out-Null } catch { }
 }
+
+# Tell the caller whether this worked.
+#
+# Until now nothing here set an exit code, so RunThisToStart.bat had no way to
+# know - and printed "Start REAPER, restart Claude, you are done" after every
+# run, including one where winget died, REAPER and Claude were never installed
+# and five separate things had failed. A one-click installer that cannot tell
+# the user yes or no has not finished the job.
+exit $(if ($script:Problems.Count -eq 0) { 0 } else { 1 })

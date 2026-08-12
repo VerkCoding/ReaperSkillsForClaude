@@ -287,17 +287,33 @@ if ($galleryOk) {
 }
 
 if ($galleryOk) {
-    try {
-        Write-Info "Repairing the winget client. This can take a couple of minutes..."
-        if ($isAdmin) { Repair-WinGetPackageManager -AllUsers }
-        else          { Repair-WinGetPackageManager }
-    } catch {
-        Write-Warn2 "Repair-WinGetPackageManager failed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
-        if (-not $isAdmin) {
-            Write-Info "  Some repairs need administrator rights."
+    # Retried, and this is the one that most needs it.
+    #
+    # Repair-WinGetPackageManager downloads the winget release from GitHub, so
+    # it fails with "An error occurred while sending the request" on any network
+    # hiccup - seen on a Sandbox run that then had no package manager at all,
+    # and so installed neither REAPER nor Claude. That is a dropped connection,
+    # not a machine that cannot run winget, and asking again usually settles it.
+    $repaired = $false
+    for ($try = 1; $try -le 3; $try++) {
+        try {
+            Write-Info "Repairing the winget client. This can take a couple of minutes..."
+            if ($isAdmin) { Repair-WinGetPackageManager -AllUsers }
+            else          { Repair-WinGetPackageManager }
+            $repaired = $true
+            break
+        } catch {
+            $msg = $_.Exception.Message.Split([Environment]::NewLine)[0]
+            if ($try -lt 3) {
+                Write-Warn2 "  attempt $try failed ($msg); retrying..."
+                Start-Sleep -Seconds (5 * $try)
+            } else {
+                Write-Warn2 "Repair-WinGetPackageManager failed after $try attempts: $msg"
+                if (-not $isAdmin) { Write-Info "  Some repairs need administrator rights." }
+            }
         }
-        $galleryOk = $false
     }
+    if (-not $repaired) { $galleryOk = $false }
 }
 
 if (Test-Winget) {

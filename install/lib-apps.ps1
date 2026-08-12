@@ -35,6 +35,46 @@
 # Process identity
 # ---------------------------------------------------------------------------
 
+function Update-PathFromRegistry {
+    <#
+      Re-read PATH from the registry into this process.
+
+      A process gets its environment when it starts and never hears about
+      changes. Installers write the new PATH to the registry and print "restart
+      your shell" - and this script cannot restart itself, so anything it
+      installs is invisible to it for the rest of the run.
+
+      That was being worked around with a hand-maintained list of guessed
+      install directories, which has to track every vendor's packaging decisions
+      forever and was already wrong once: Claude Code is a portable winget
+      package under WinGet\Packages, not an alias in WinGet\Links, so the
+      plugin was never registered with Claude Code at all.
+
+      Reading the registry is what "restart your shell" actually does. The
+      current value is merged in rather than replaced, so anything deliberately
+      prepended earlier in the run survives.
+    #>
+    $parts = @()
+    foreach ($scope in 'Machine', 'User') {
+        try {
+            $v = [Environment]::GetEnvironmentVariable('Path', $scope)
+            if ($v) { $parts += $v.Split(';') }
+        } catch {
+            # A locked-down or unreadable hive is not fatal: the process PATH
+            # below still holds whatever was there at startup.
+        }
+    }
+    $parts += $env:PATH.Split(';')
+
+    $seen  = New-Object System.Collections.Generic.HashSet[string] ([StringComparer]::OrdinalIgnoreCase)
+    $clean = @()
+    foreach ($d in $parts) {
+        $d = $d.Trim()
+        if ($d -and $seen.Add($d)) { $clean += $d }
+    }
+    $env:PATH = ($clean -join ';')
+}
+
 function Get-AncestorPids {
     <#
       Every process between this one and the root, so we can refuse to close any

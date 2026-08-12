@@ -111,9 +111,38 @@ rem -Confirmed: the user has just read all of the above and agreed. Asking a
 rem second time inside the script reads as though something changed.
 %PS% "%PLUGIN%install\setup-all.ps1" -Confirmed
 
+rem Captured on its own line, before anything else can overwrite it. setup-all
+rem now exits 0 only when it has nothing left to report.
+rem
+rem This menu used to print "you are done" no matter what came back - the same
+rem cheerful block after a run where winget died, REAPER and Claude were never
+rem installed, and five things had failed. Sending somebody off to test a setup
+rem that did not happen is worse than telling them nothing at all.
+set "RC=%ERRORLEVEL%"
+
 echo.
+if "%RC%"=="0" goto install_ok
+
 echo ===============================================
-echo   Last steps
+echo   Setup did not finish
+echo ===============================================
+echo.
+echo   The numbered list above says what is still needed.
+echo   Do not start REAPER and Claude expecting this to work
+echo   yet - the steps that failed are listed there.
+echo.
+echo   Fix those, then choose [1] again. It keeps whatever
+echo   already worked and only fills in the rest.
+echo.
+echo   Full log of the run:
+echo     %USERPROFILE%\.reaper-for-claude\logs
+echo.
+pause
+goto menu
+
+:install_ok
+echo ===============================================
+echo   Setup finished
 echo ===============================================
 echo.
 echo   1. Start REAPER.

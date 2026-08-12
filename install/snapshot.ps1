@@ -21,11 +21,24 @@
   anything Claude has stored. This tracks the specific configuration files the
   installer writes to, and nothing else.
 
+  Exactly one snapshot matters: the state of the machine BEFORE this setup ever
+  touched it. It lives in a directory called `original` and is written once.
+
+  This is not a detail. Eight different failure messages across these scripts
+  tell the user to "re-run [1]", and every run used to take a fresh snapshot and
+  restore the NEWEST one. So the second run photographed the machine we had
+  already modified, and Revert then restored our own half-finished install -
+  quietly, with no error, having also pruned the real original away after ten
+  runs. The backup silently stopped being a backup at exactly the moment the
+  design told people to lean on it hardest.
+
+  So: written once, never overwritten, never pruned.
+
 .PARAMETER Backup
-  Take a snapshot. Prints the directory it created.
+  Create the original snapshot if there is not one already. Prints its directory.
 
 .PARAMETER Restore
-  Restore the most recent snapshot, or the one named by -From.
+  Restore the original snapshot, or the one named by -From.
 
 .PARAMETER List
   Show the snapshots that exist.
@@ -112,10 +125,49 @@ function Get-InstalledApps {
     return $result
 }
 
+function Get-OriginalSnapshot {
+    <#
+      The pre-setup snapshot, or $null if this machine has never had one.
+
+      Machines set up before this changed have timestamped directories instead.
+      There the OLDEST is the pristine one, for the same reason the newest is
+      not: each later run photographed a machine the previous run had modified.
+      It is promoted in place so this only has to be worked out once.
+    #>
+    $original = Join-Path $Store 'original'
+    if (Test-Path (Join-Path $original 'manifest.json')) { return $original }
+
+    $oldest = Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
+              Where-Object { Test-Path (Join-Path $_.FullName 'manifest.json') } |
+              Sort-Object Name | Select-Object -First 1
+    if (-not $oldest) { return $null }
+
+    try {
+        Rename-Item -LiteralPath $oldest.FullName -NewName 'original' -ErrorAction Stop
+        Write-Info "Promoted the earliest snapshot ($($oldest.Name)) to the original."
+        return $original
+    } catch {
+        # Could not rename - use it where it stands rather than lose it.
+        return $oldest.FullName
+    }
+}
+
 # ---------------------------------------------------------------------------
 if ($Backup) {
-    $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
-    $dir   = Join-Path $Store $stamp
+    $dir = Get-OriginalSnapshot
+    if ($dir) {
+        # Already have the one that matters. Taking another now would photograph
+        # a machine this setup has already changed.
+        $when = try {
+            (Get-Content (Join-Path $dir 'manifest.json') -Raw | ConvertFrom-Json).created
+        } catch { 'an earlier run' }
+        Write-Ok "Original configuration already backed up ($when)."
+        Write-Info "Keeping it - that is the one [2] Revert Everything restores."
+        Write-Output $dir
+        exit 0
+    }
+
+    $dir   = Join-Path $Store 'original'
     $files = Join-Path $dir 'files'
     New-Item -ItemType Directory -Force -Path $files | Out-Null
 
@@ -146,14 +198,10 @@ if ($Backup) {
         (New-Object System.Text.UTF8Encoding $false))
 
     $saved = ($entries | Where-Object { $_.existed }).Count
-    Write-Ok "Snapshot saved: $dir"
+    Write-Ok "Original configuration backed up: $dir"
     Write-Info "$saved existing file(s) copied, $($entries.Count - $saved) noted as absent."
-
-    # Keep a handful. These are small text files, but an unbounded pile of them
-    # is its own kind of mess.
-    Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending | Select-Object -Skip 10 |
-        ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    # Nothing is pruned here any more. There is one snapshot, it is the only one
+    # that can undo this setup, and it is not ours to delete.
 
     Write-Output $dir
     exit 0
@@ -161,13 +209,8 @@ if ($Backup) {
 
 # ---------------------------------------------------------------------------
 if ($Restore) {
-    if ($From) {
-        $dir = $From
-    } else {
-        $dir = Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
-               Sort-Object Name -Descending | Select-Object -First 1 |
-               ForEach-Object { $_.FullName }
-    }
+    # The original, not the newest. See the note at the top of this file.
+    $dir = if ($From) { $From } else { Get-OriginalSnapshot }
     if (-not $dir -or -not (Test-Path (Join-Path $dir 'manifest.json'))) {
         Write-Err "No snapshot found under $Store"
         Write-Info "A snapshot is taken automatically at the start of [1] Install everything."

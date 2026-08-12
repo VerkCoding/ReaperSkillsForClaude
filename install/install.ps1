@@ -237,8 +237,25 @@ if ($doReaper) {
     $ReaperFound = Test-Path (Join-Path $ReaperResourcePath 'reaper.ini')
 
     if (-not $ReaperFound) {
-        Write-Err "No reaper.ini under $ReaperResourcePath"
-        Add-Problem "Launch REAPER once so it creates its config, then re-run. Portable install? Pass -ReaperResourcePath."
+        # Two very different situations, and telling them apart matters: the
+        # advice for one is useless for the other. A run where winget was
+        # unavailable reported "Launch REAPER once so it creates its config" on
+        # a machine with no REAPER on it at all - an instruction the user cannot
+        # follow, pointing away from the thing that actually needs doing.
+        $exe = @(
+            (Join-Path $env:ProgramFiles 'REAPER (x64)eaper.exe'),
+            (Join-Path $env:ProgramFiles 'REAPEReaper.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'REAPEReaper.exe')
+        ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+
+        if ($exe) {
+            Write-Err "REAPER is installed but has never run - no reaper.ini under $ReaperResourcePath"
+            Add-Problem "Launch REAPER once so it creates its config, then re-run. Portable install? Pass -ReaperResourcePath."
+        } else {
+            Write-Err "REAPER does not appear to be installed."
+            Write-Info "Nothing here can configure it until it exists: https://www.reaper.fm/download.php"
+            Add-Problem "Install REAPER, run it once so it creates its config, then re-run."
+        }
     } else {
         Write-Info "Resource path: $ReaperResourcePath"
         $ScriptsDir = Join-Path $ReaperResourcePath 'Scripts'
@@ -613,3 +630,5 @@ if ($script:Problems.Count -eq 0) {
     Write-Host "  Re-running this installer after fixing them is safe."
 }
 Write-Host ""
+
+exit $(if ($script:Problems.Count -eq 0) { 0 } else { 1 })

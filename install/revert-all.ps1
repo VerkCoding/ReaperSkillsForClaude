@@ -59,10 +59,24 @@ Write-Host "===============================================" -ForegroundColor Cy
 Write-Host "  REAPER for Claude - revert everything" -ForegroundColor Cyan
 Write-Host "===============================================" -ForegroundColor Cyan
 
+# The original, not the newest.
+#
+# "Revert Everything" can only mean "back to before this setup ever ran", and
+# that is one specific snapshot. Picking the newest meant that on any machine
+# where [1] had been run twice - which eight different failure messages tell
+# people to do - Revert restored the half-installed state left by the first run
+# instead. snapshot.ps1 now writes `original` once and promotes the earliest
+# directory on machines that predate that; this mirrors the same choice.
 $snapshot = if ($From) { $From } else {
-    Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending | Select-Object -First 1 |
-        ForEach-Object { $_.FullName }
+    $original = Join-Path $Store 'original'
+    if (Test-Path (Join-Path $original 'manifest.json')) {
+        $original
+    } else {
+        Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.FullName 'manifest.json') } |
+            Sort-Object Name | Select-Object -First 1 |
+            ForEach-Object { $_.FullName }
+    }
 }
 
 if (-not $snapshot -or -not (Test-Path (Join-Path $snapshot 'manifest.json'))) {
