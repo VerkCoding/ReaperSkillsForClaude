@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "reaper-for-claude",
+  "displayName": "REAPER for Claude",
+  "version": "1.0.0",
+  "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",
+  "author": {
+    "name": "Mark",
+    "email": "markjrk1997@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "reaper",
+    "daw",
+    "audio",
+    "mixing",
+    "mastering",
+    "midi",
+    "music-production",
+    "dsp"
+  ],
+  "mcpServers": "./config/mcp.json"
+}

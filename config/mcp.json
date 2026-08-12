@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "reaper": {
+      "command": "python",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/launch_server.py"],
+      "env": {
+        "REAPER_MCP_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
+      }
+    }
+  }
+}

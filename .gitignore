@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Claude / editor
+*.bak
+.vscode/
+.idea/
+
+# Claude Code writes machine-specific state here, and rewrites settings.json
+# itself when plugin or marketplace commands run - so nothing in it is safe to
+# ship. Install routes are documented in README.md instead.
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# REAPER
+*.RPP-bak
+*.reapeaks
+claude_bridge/

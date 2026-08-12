@@ -1,0 +1,37 @@
+# Line endings are load-bearing here, so none of this is left to chance.
+#
+# Git on Windows commonly runs with core.autocrlf=true, which rewrites line
+# endings on checkout. That is harmless for most files and fatal for two kinds
+# in this repository, so every type is pinned explicitly rather than inherited
+# from whatever the cloner has configured.
+
+* text=auto
+
+# bin/reaper-bridge is a shell script run by the Bash tool. With CRLF endings
+# the shebang becomes "#!/bin/sh\r" and the interpreter is not found - the error
+# points at the file, not at the line endings, which makes it a slow one to
+# diagnose.
+bin/reaper-bridge text eol=lf
+
+# cmd.exe mis-parses labels and goto in a .bat file with LF-only endings, and
+# fails in ways that look like logic errors rather than encoding ones.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell reads either, but CRLF is the Windows convention and keeps diffs
+# clean for contributors on Windows.
+*.ps1 text eol=crlf
+
+*.py   text eol=lf
+*.lua  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.txt  text eol=lf
+
+# Not text, and must never be normalised.
+*.png  binary
+*.jpg  binary
+*.wav  binary
+*.flac binary
+*.rpp  binary

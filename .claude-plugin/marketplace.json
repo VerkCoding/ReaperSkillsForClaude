@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "reaper-skills-for-claude",
+  "description": "REAPER tooling for Claude: the audio-engineering playbook, the setup doctor, and the REAPER MCP server.",
+  "owner": {
+    "name": "Mark",
+    "email": "markjrk1997@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "reaper-for-claude",
+      "source": "./",
+      "displayName": "REAPER for Claude",
+      "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",
+      "version": "1.0.0",
+      "license": "MIT",
+      "category": "audio",
+      "keywords": [
+        "reaper",
+        "daw",
+        "audio",
+        "mixing",
+        "mastering",
+        "midi",
+        "music-production",
+        "dsp"
+      ]
+    }
+  ]
+}
