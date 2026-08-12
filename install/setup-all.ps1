@@ -40,6 +40,10 @@
 param(
     [switch]$SkipApps,
     [switch]$Force,
+    # Set by RunThisToStart.bat, which has already explained what this does and
+    # had the user agree. Suppresses the second "press Enter" that would
+    # otherwise ask the same question again.
+    [switch]$Confirmed,
     [string]$ReaperResourcePath
 )
 
@@ -93,14 +97,18 @@ Write-Info "Plugin: $PluginRoot"
 #    the same one the X button sends, so REAPER's save prompt still appears.
 # ---------------------------------------------------------------------------
 Write-Step "Closing REAPER and Claude"
-Write-Host ""
-Write-Host "  Please SAVE ANY OPEN WORK in REAPER and Claude now." -ForegroundColor Yellow
-Write-Host ""
-Write-Host "  Both need to be closed while this runs: they rewrite their own" -ForegroundColor Gray
-Write-Host "  settings when they exit, which would undo the setup." -ForegroundColor Gray
-Write-Host ""
-Write-Host "  Press Enter when your work is saved (Ctrl+C to stop)." -ForegroundColor Yellow
-[void](Read-Host)
+
+# No prompt here when the menu already asked. Two confirmations for one decision
+# is one too many: the user has already read what this does and said yes, and
+# being asked again reads as though something changed.
+if (-not $Confirmed) {
+    Write-Host ""
+    Write-Host "  Save any open work in REAPER and Claude now." -ForegroundColor Yellow
+    Write-Host "  Both are closed while this runs." -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  Press Enter to continue, or Ctrl+C to stop." -ForegroundColor Yellow
+    [void](Read-Host)
+}
 
 $reaperClosed = Request-AppClosed -Kind reaper -Label 'REAPER'
 $claudeClosed = Request-AppClosed -Kind claude -Label 'Claude'

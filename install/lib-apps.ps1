@@ -245,9 +245,8 @@ function Request-AppClosed {
             return $false
         }
 
-        Write-Warn2 "$Label is still running."
-        Write-Info  "It may be showing a 'save changes?' prompt - answer it, then continue."
-        Write-Host  "  Press Enter once $Label is closed (or to continue anyway)." -ForegroundColor Yellow
+        Write-Warn2 "$Label is still open - it may be asking you to save."
+        Write-Host  "  Close $Label, then press Enter here." -ForegroundColor Yellow
         [void](Read-Host)
         # The next loop iteration re-enumerates and re-sends the close, so a
         # window that reappeared while the prompt was waiting is caught here
@@ -398,10 +397,10 @@ function Invoke-ReaperFirstRun {
         return $false
     }
 
-    Write-Info "Starting REAPER once so it creates its configuration..."
     Write-Host ""
-    Write-Host "  REAPER is opening. If it shows a first-run or licence dialog," -ForegroundColor Yellow
-    Write-Host "  click through it. This will close REAPER again automatically." -ForegroundColor Yellow
+    Write-Host "  Opening REAPER so it can create its settings." -ForegroundColor Yellow
+    Write-Host "  If it shows a first-run or licence dialog, click through it." -ForegroundColor Yellow
+    Write-Host "  It closes again by itself - nothing to press here." -ForegroundColor Gray
     Write-Host ""
     try { Start-Process $exe } catch {
         Write-Warn2 "Could not start REAPER: $_"
@@ -447,8 +446,8 @@ function Invoke-ReaperFirstRun {
         }
     }
 
-    Write-Warn2 "REAPER did not create reaper.ini within $TimeoutSeconds seconds."
-    Write-Host "  Finish any dialog it is showing, then press Enter." -ForegroundColor Yellow
+    Write-Warn2 "REAPER has not finished starting after $TimeoutSeconds seconds."
+    Write-Host "  Click through whatever dialog it is showing, then press Enter here." -ForegroundColor Yellow
     [void](Read-Host)
     [void](Request-AppClosed -Kind reaper -Label 'REAPER' -GraceSeconds 10 -AllowForce)
     Start-Sleep -Seconds 2
@@ -481,13 +480,16 @@ function Invoke-ClaudeFirstRun {
     }
 
     Write-Host ""
-    Write-Host "  SIGN IN TO CLAUDE in the window that opened." -ForegroundColor Yellow
+    Write-Host "  ----------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "   SIGN IN TO CLAUDE in the window that just opened." -ForegroundColor Yellow
+    Write-Host "  ----------------------------------------------------" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  This is required, not optional. Claude was just installed, so it" -ForegroundColor Yellow
-    Write-Host "  has no account attached - and without one it cannot load the" -ForegroundColor Yellow
-    Write-Host "  plugin or reach REAPER, which is the whole point of this setup." -ForegroundColor Yellow
+    Write-Host "  This is the only thing the setup needs from you." -ForegroundColor Gray
+    Write-Host "  It continues on its own the moment you are signed in -" -ForegroundColor Gray
+    Write-Host "  nothing to press here." -ForegroundColor Gray
     Write-Host ""
-    Write-Host "  This continues by itself the moment you are signed in." -ForegroundColor Gray
+    Write-Host "  Claude was just installed, so it has no account yet, and" -ForegroundColor Gray
+    Write-Host "  without one it cannot use the plugin at all." -ForegroundColor Gray
     Write-Host ""
 
     $deadline   = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -511,12 +513,39 @@ function Invoke-ClaudeFirstRun {
         if (Test-ClaudeSignedIn) {
             Write-Host ""
             Write-Ok "Signed in to Claude."
-            # The session is already on disk - that is what was just detected -
-            # so there is nothing for a clean shutdown to preserve.
-            [void](Request-AppClosed -Kind claude -Label 'Claude' -GraceSeconds 10 -AllowForce)
-            # Signing in often leaves Claude relaunching or restoring a window,
-            # so verify rather than trusting the first close.
+
+            # Claude must be allowed to shut down cleanly here, and this is the
+            # one place where forcing it caused real damage: killing it moments
+            # after a sign-in signed the user back OUT.
+            #
+            # Detecting the session in config.json proves the OAuth token
+            # reached disk, but that is not the whole session. Electron keeps the
+            # rest in Chromium's Local Storage, which is a LevelDB - and LevelDB
+            # is exactly the kind of store that a SIGKILL mid-write leaves
+            # corrupt. Claude then starts with no usable session and asks the
+            # user to sign in again, undoing the step that just succeeded.
+            #
+            # So: give it time to flush, then ask politely and wait properly.
+            # Forcing remains available, but only after half a minute of being
+            # asked, by which point it is hung rather than busy.
+            Write-Info "Letting Claude save its session before closing it..."
+            Start-Sleep -Seconds 8
+            [void](Request-AppClosed -Kind claude -Label 'Claude' -GraceSeconds 30 -AllowForce)
+            # A tray process that survived is fine to end now - the session has
+            # had its chance to flush, and this sweep is what stops Claude
+            # holding the config file the setup writes next.
+            Start-Sleep -Seconds 2
             [void](Confirm-AppsClosed -AllowForce)
+
+            if (-not (Test-ClaudeSignedIn)) {
+                # Worth saying out loud rather than discovering later. If the
+                # session did not survive the shutdown, the fix is simply to
+                # sign in again once Claude reopens.
+                Write-Warn2 "Claude's session did not survive the shutdown."
+                Write-Info  "Sign in again when you next open Claude - everything else is done."
+                return $false
+            }
+            Write-Ok "Session intact."
             return $true
         }
 

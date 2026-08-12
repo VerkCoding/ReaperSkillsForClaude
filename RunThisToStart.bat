@@ -86,48 +86,41 @@ echo ===============================================
 echo   Install Everything
 echo ===============================================
 echo.
-echo   SAVE YOUR WORK in REAPER and Claude first.
+echo   SAVE YOUR WORK in REAPER and Claude before continuing.
+echo   Both get closed automatically while this runs.
 echo.
-echo   This asks you to close both, then closes them for you
-echo   if they are still open. They rewrite their own settings
-echo   when they exit, so anything written while they run gets
-echo   discarded. Nothing is force-quit - REAPER's "save
-echo   changes?" prompt still appears and waits for you.
+echo   From here it is hands-off, except for one thing: if
+echo   Claude has to be installed, you will be asked to sign
+echo   in. Everything else opens, waits and closes by itself.
 echo.
-echo   This will:
-echo     1. back up your REAPER and Claude configuration
+echo   What happens:
+echo     1. back up your REAPER and Claude settings
 echo     2. install Python, Git, and - only if missing -
 echo        REAPER and Claude
-echo     3. if it installed REAPER, open it once so it can
-echo        create its settings, then close it for you
-echo     4. if it installed Claude, open it and wait while
-echo        you sign in
-echo     5. set up the plugin and run a health check
+echo     3. open each newly installed one, let it finish
+echo        setting itself up, then close it
+echo     4. set up the plugin and check it works
 echo.
-echo   Everything comes from each vendor's own installer,
-echo   not the Microsoft Store.
+echo   Takes several minutes. Vendor installers, not the Store.
 echo.
 set "GO="
-set /p GO="  Continue? [y/N]: "
+set /p GO="  Start? [y/N]: "
 if /I not "%GO%"=="y" goto menu
 
-%PS% "%PLUGIN%install\setup-all.ps1"
+rem -Confirmed: the user has just read all of the above and agreed. Asking a
+rem second time inside the script reads as though something changed.
+%PS% "%PLUGIN%install\setup-all.ps1" -Confirmed
 
 echo.
 echo ===============================================
-echo   Last steps - do these in order
+echo   Last steps
 echo ===============================================
 echo.
 echo   1. Start REAPER.
-echo      It reloads its settings at launch and starts the
-echo      bridge listener automatically.
-echo.
-echo   2. Restart Claude, Desktop or Code, so it picks up
-echo      the server.
-echo.
+echo   2. Restart Claude.
 echo   3. Ask Claude: "Check the current REAPER project info"
 echo.
-echo   If that answers, you are done.
+echo   If it answers, you are done.
 echo.
 pause
 goto menu
