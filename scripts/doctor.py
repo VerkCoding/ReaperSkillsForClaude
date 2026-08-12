@@ -202,7 +202,21 @@ def check_mcp_command(r: Report) -> None:
 
     resolved = shutil.which(command)
     if resolved:
-        r.ok(f"`{command}` resolves to {resolved}")
+        # Existing is not the same as usable. launch_server.py uses f-strings, so
+        # a Python 2 on PATH - still common on older machines - fails to PARSE
+        # it. The server then dies with a SyntaxError before any of its own
+        # diagnostics run, and every cheaper check here would have said fine.
+        p = run([resolved, "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"])
+        if p and p.returncode == 0:
+            v = run([resolved, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"])
+            ver = (v.stdout or "").strip() if v else "?"
+            r.ok(f"`{command}` resolves to {resolved} (Python {ver})")
+        else:
+            r.fail(
+                f"`{command}` resolves to {resolved}, which is too old to run the launcher",
+                "Point the MCP entry at a Python 3.8+ interpreter, or put one earlier on PATH. "
+                "The launcher itself needs only to start; the server runs from the virtualenv.",
+            )
     else:
         alt = next((c for c in ("python3", "python") if shutil.which(c)), None)
         if alt:

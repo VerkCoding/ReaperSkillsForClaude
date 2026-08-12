@@ -451,8 +451,43 @@ if ($doClaude) {
         # Desktop has no ${CLAUDE_PLUGIN_ROOT} outside the plugin runtime, so the
         # config gets an absolute path. That is safe to write here precisely
         # because the installer knows where the plugin actually is.
+        # An absolute interpreter, not the word "python".
+        #
+        # This file is ours to write and Desktop reads it verbatim, so there is
+        # no reason to leave it depending on PATH - which is exactly the thing
+        # that changes when the user installs another Python next month, or that
+        # points at Python 2 on an older machine, where launch_server.py would
+        # not even parse.
+        #
+        # A system interpreter rather than the virtualenv's: the launcher
+        # re-execs into the venv itself, and pinning the venv here would turn
+        # "the venv was rebuilt" into a broken Desktop config instead of a
+        # recoverable one.
+        $desktopPython = 'python'
+        $resolved = Get-Command python -ErrorAction SilentlyContinue
+        if ($resolved) {
+            $prevEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $null = & python -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" 2>&1
+                if ($LASTEXITCODE -eq 0) { $desktopPython = $resolved.Source }
+            } catch { }
+            $ErrorActionPreference = $prevEAP
+        }
+        if ($desktopPython -eq 'python') {
+            # PATH python is missing or too old. Ask the launcher's own search,
+            # which knows how to reach a `py -3.12` that PATH never mentions.
+            $best = Invoke-Native { & python $Launcher --self-test 2>$null | Select-Object -Last 1 }
+            if ($LASTEXITCODE -eq 0 -and $best -and (Test-Path "$best")) {
+                $desktopPython = "$best".Trim()
+            } else {
+                Write-Warn2 "No usable Python found for Claude Desktop; leaving the entry as 'python'."
+            }
+        }
+        Write-Info "Desktop will launch: $desktopPython"
+
         $mcpEntry = [ordered]@{
-            command = 'python'
+            command = $desktopPython
             args    = @($Launcher)
             env     = [ordered]@{ REAPER_MCP_PLUGIN_ROOT = $PluginRoot }
         }

@@ -68,11 +68,54 @@ $PluginRoot = Split-Path -Parent $Here
 # Dot-sourced so its helpers share these Write-* functions and $script: scope.
 . (Join-Path $Here 'lib-apps.ps1')
 
+# ---------------------------------------------------------------------------
+# Whether installing Python may touch PATH.
+#
+# PrependPath=1 makes our 3.12 the machine's `python`. On a system that already
+# has one - 3.14, or an old 2.7 - that silently changes what every other project
+# on the machine resolves, which is not ours to do for the sake of an audio
+# plugin.
+#
+# It turns out we do not need it. Three different things want a Python here, and
+# none of them wants the default one:
+#
+#   the MCP server      runs from the virtualenv, which any 3.10+ can build
+#   REAPER's ReaScripts run under whatever reaper.ini's pythonlibpath64 names
+#   the configure step  needs <=3.12, reached with `py -3.12`, which ignores
+#                       PATH order entirely
+#
+# The only PATH dependency left is that SOME python has to exist to launch
+# scripts/launch_server.py, which then re-execs into the virtualenv. That needs
+# 3.6 or newer merely to parse - the file uses f-strings - so an existing 3.x is
+# perfectly good and is left exactly where it is.
+#
+# The exception is a machine whose `python` is Python 2, or has none at all.
+# There, launch_server.py will not even parse, so PATH does have to change.
+# ---------------------------------------------------------------------------
+$pathPythonUsable = $false
+if (Get-Command python -ErrorAction SilentlyContinue) {
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $null = & python -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" 2>&1
+        $pathPythonUsable = ($LASTEXITCODE -eq 0)
+    } catch { }
+    $ErrorActionPreference = $prevEAP
+}
+
+$pythonCustom = if ($pathPythonUsable) {
+    Write-Info "A usable Python is already on PATH - leaving it as the default."
+    'InstallAllUsers=0 Include_test=0'
+} else {
+    Write-Info "No usable Python on PATH, so the new one will be added to it."
+    'PrependPath=1 InstallAllUsers=0 Include_test=0'
+}
+
 # Applications, in dependency order. `Safe` means "leave it alone if present",
 # which is the whole of the promise not to touch user data.
 $Apps = @(
     [pscustomobject]@{ Id = 'Python.Python.3.12'; Name = 'Python 3.12'; Safe = $false
-                       Custom = 'PrependPath=1 InstallAllUsers=0 Include_test=0' }
+                       Custom = $pythonCustom }
     [pscustomobject]@{ Id = 'Git.Git';            Name = 'Git';          Safe = $false; Custom = $null }
     [pscustomobject]@{ Id = 'Cockos.REAPER';      Name = 'REAPER';       Safe = $true;  Custom = $null }
     [pscustomobject]@{ Id = 'Anthropic.Claude';   Name = 'Claude Desktop'; Safe = $true; Custom = $null }

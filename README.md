@@ -162,7 +162,31 @@ Everything below is handled by `[1]`; this is what it is arranging for you.
 | | |
 | --- | --- |
 | **REAPER** | v6 or v7+. If `[1]` installs it, launch it once and close it, then run `[1]` again so the REAPER-side setup can find its config folder. |
-| **Python** | 3.10 or newer, on PATH. `[1]` installs 3.12 when it is missing — via winget, or straight from python.org when winget is unavailable. |
+| **Python** | Any 3.8+ on PATH is enough. `[1]` installs 3.12 alongside it when needed, and **does not make it your default** — see below. |
+
+### If you already have Python
+
+`[1]` installs Python 3.12 **side by side** and leaves your existing one exactly
+where it is. It only adds itself to `PATH` when there is no usable Python 3
+there already, because changing what `python` means would affect every other
+project on the machine.
+
+That works because nothing here actually wants the *default* interpreter:
+
+| What | Which Python | How it finds it |
+| --- | --- | --- |
+| The MCP server | the plugin's virtualenv | built by any 3.10+, found by absolute path |
+| REAPER's ReaScripts | whatever `reaper.ini` names | `pythonlibpath64`, written by the installer |
+| The configure step | 3.12 or older | `py -3.12`, which ignores `PATH` order |
+
+The only thing `PATH` is used for is starting `scripts/launch_server.py`, which
+immediately re-execs into the virtualenv. That needs Python 3.6+ merely to
+parse, so an existing 3.x is fine and is left alone. Claude Desktop does not
+even use `PATH` — the installer writes an absolute interpreter into its config.
+
+**Python 2 is the exception.** If `python` is 2.x, the launcher will not parse at
+all, so `[1]` does add 3.12 to `PATH` in that case. Your Python 2 stays
+installed; it simply stops being what `python` means.
 
 ### Running the steps individually
 
