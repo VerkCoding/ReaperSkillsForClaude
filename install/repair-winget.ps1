@@ -68,6 +68,34 @@ if ((Test-Winget) -and -not $Force) {
     exit 0
 }
 
+Write-Info "You may not need this at all: install-python.ps1 downloads Python"
+Write-Info "directly from python.org when winget is missing, so the setup does"
+Write-Info "not depend on winget existing."
+Write-Host ""
+
+# ---------------------------------------------------------------------------
+# Try the offline repair first.
+#
+# App Installer is frequently *provisioned* but not *registered* for the current
+# user - the usual state in Windows Sandbox, on Windows Server, and after some
+# in-place upgrades. Registering it is instant, needs no network, and fixes a
+# large share of cases. Reaching for PowerShell Gallery first means depending on
+# an internet round trip to solve a problem that is often purely local.
+# ---------------------------------------------------------------------------
+Write-Info "Trying to register the App Installer package already on this machine..."
+try {
+    Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
+    if (Test-Winget) {
+        Write-Ok "winget is working: $(& winget --version)"
+        Write-Host ""
+        Write-Host "  Close this window and run RunThisToStart.bat again." -ForegroundColor Gray
+        exit 0
+    }
+    Write-Info "Registered, but winget still does not respond."
+} catch {
+    Write-Info "Not available to register: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+}
+
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
             [Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -94,7 +122,14 @@ try {
     Write-Ok "NuGet provider ready."
 } catch {
     Write-Err "Could not install the NuGet provider: $_"
-    Write-Info "Usually a network or proxy problem. Check your connection and retry."
+    Write-Host ""
+    Write-Info "This is the inbox PackageManagement module failing to fetch its"
+    Write-Info "provider list from go.microsoft.com. It is common on Windows"
+    Write-Info "Sandbox, Windows Server, and behind a proxy, and there is no"
+    Write-Info "reliable way around it from here."
+    Write-Host ""
+    Write-Info "You do not need winget. Run option [8] instead - it downloads"
+    Write-Info "Python straight from python.org when winget is unavailable."
     exit 1
 }
 

@@ -72,7 +72,8 @@ echo   [8] Install Python
 echo       Uses winget. Only needed if the check above says MISSING.
 echo.
 echo   [9] Install or repair winget
-echo       Only if [8] says winget is unavailable. Needs internet.
+echo       Optional. [8] does not need winget, so only bother if you
+echo       want winget itself back.
 echo.
 echo   [0] Exit
 echo.
@@ -157,33 +158,11 @@ if "%PYOK%"=="1" (
     goto done
 )
 
-rem Full path for the same reason as find.exe above.
-"%SystemRoot%\System32\where.exe" winget >nul 2>&1
-if errorlevel 1 (
-    echo   winget is not available on this machine.
-    echo.
-    echo   It ships with App Installer, which is missing on a fresh Windows
-    echo   Server, on images built without the Store, and sometimes after an
-    echo   in-place upgrade.
-    echo.
-    echo   Option [9] can install it. Run that first, then come back here.
-    echo.
-    echo   Or install Python by hand:
-    echo       https://www.python.org/downloads/
-    echo   On the FIRST screen, tick "Add python.exe to PATH".
-    echo.
-    goto done
-)
-
-echo   This runs:
+echo   Installs Python 3.12, per-user, with PATH enabled.
 echo.
-echo       winget install -e --id Python.Python.3.12 --custom "PrependPath=1"
-echo.
-echo   -e forces an exact ID match. Without it "Python.Python.3" is
-echo   ambiguous and can resolve to Python 3.0, which is real and useless.
-echo.
-echo   --custom appends to winget's own silent switches rather than
-echo   replacing them, which is what --override would do.
+echo   It uses winget when winget works, and downloads the installer
+echo   straight from python.org when it does not - so this does not
+echo   depend on winget existing. No administrator rights needed.
 echo.
 echo   3.12 rather than the newest release: numba and llvmlite, which
 echo   librosa depends on, often take months to publish wheels for a
@@ -193,13 +172,7 @@ set "GO="
 set /p GO="Install it now? [y/N]: "
 if /I not "%GO%"=="y" goto menu
 
-echo.
-rem InstallAllUsers=0 rather than --scope user: winget matches --scope against
-rem the manifest, and this one is a burn bundle that does not declare a user
-rem installer, so --scope user fails with "no applicable installer found".
-rem Passing the bundle's own switch reaches the same result and never needs
-rem elevation.
-winget install -e --id Python.Python.3.12 --source winget --accept-package-agreements --accept-source-agreements --custom "PrependPath=1 InstallAllUsers=0 Include_test=0"
+%PS% "%PLUGIN%install\install-python.ps1"
 
 echo.
 echo   Making this window see the new install...
@@ -208,9 +181,9 @@ call :refreshpython
 python --version >nul 2>&1
 if errorlevel 1 (
     echo.
-    echo   Python was installed, but this window still cannot see it.
-    echo   PATH is read once when a program starts, so close this window
-    echo   and run RunThisToStart.bat again.
+    echo   This window still cannot see Python. PATH is read once when a
+    echo   program starts, so close this window and run RunThisToStart.bat
+    echo   again.
 ) else (
     for /f "delims=" %%V in ('python --version 2^>^&1') do echo   Ready: %%V
 )

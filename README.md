@@ -19,7 +19,12 @@ them is cross-platform. See [Porting](#porting).
 | **REAPER** | v6 or v7+. **Launch it once and close it** before installing — the first launch creates its config folder, and REAPER rewrites `reaper.ini` on exit, discarding anything written while it is open. |
 | **Python** | 3.10 or newer, on PATH. If you don't have it, `RunThisToStart.bat` option **`[8]`** installs it for you. |
 
-Option `[8]` runs:
+Option `[8]` does not depend on winget. It uses winget when winget works, and
+otherwise downloads the installer straight from python.org — the same file
+winget would have fetched, since that is exactly what its manifest points at.
+Either way the install is per-user and needs no administrator rights.
+
+When winget is available it runs:
 
 ```powershell
 winget install -e --id Python.Python.3.12 --custom "PrependPath=1 InstallAllUsers=0 Include_test=0"
@@ -50,22 +55,34 @@ directory to its own session and re-checks, so you don't have to reopen
 anything — and says so plainly if that fails.
 
 **No winget?** It ships with App Installer, which is absent on a fresh Windows
-Server, on images built without the Store, and sometimes after an in-place
-upgrade. Option **`[9]`** runs Microsoft's documented bootstrap:
+Server, on images built without the Store, and inside Windows Sandbox. Nothing
+here needs it — `[8]` falls through to the direct download and carries on.
+
+Option **`[9]`** exists if you want winget itself back. It first tries the
+offline repair, which costs nothing and fixes the common case where App
+Installer is provisioned but not registered for your user:
 
 ```powershell
-Install-PackageProvider -Name NuGet -Force
-Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
-Repair-WinGetPackageManager
+Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
 ```
 
-Two departures from the sequence as usually quoted, both about privilege:
-`-AllUsers` is passed to `Repair-WinGetPackageManager` **only when the window is
-actually elevated**, since it errors otherwise, and `Install-Module`'s scope is
-matched to the same condition rather than defaulting to `AllUsers`. It also
-forces TLS 1.2 before touching PSGallery — Windows PowerShell 5.1 on older
-builds still negotiates TLS 1.0, which PSGallery refuses with a misleading
-"unable to download from URI".
+Only if that fails does it fall back to Microsoft's PSGallery bootstrap
+(`Install-PackageProvider` → `Install-Module Microsoft.WinGet.Client` →
+`Repair-WinGetPackageManager`), passing `-AllUsers` only when the session is
+genuinely elevated and matching `Install-Module`'s scope to the same condition.
+
+Be aware that the PSGallery route **frequently fails on precisely the machines
+that need it**, with:
+
+```
+WARNING: Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338...'
+[FAIL] No match was found for the specified search criteria for the provider 'NuGet'.
+```
+
+That is the inbox `PackageManagement` module unable to fetch its provider list —
+common in Sandbox, on Server, and behind a proxy, and not something this script
+can work around. It is also why winget was taken off the critical path: getting
+Python is the goal, and python.org serves it directly.
 
 ## Install
 
