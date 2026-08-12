@@ -89,10 +89,30 @@ there. If it ever needs doing by hand:
 
 `--check` reports both sides separately, and so does the health check.
 
-Older documentation claimed reapy requires Python 3.11 or 3.12. Treat that as a
-symptom, not a rule: reapy has broken and been fixed across releases, so test
-whether the imports work rather than reading the version number. `--check` is
-the authority.
+**The version limit applies to configuring REAPER, not to running the server.**
+Two interpreters, two different requirements:
+
+| Job | Requirement |
+| --- | --- |
+| Running the MCP server | any Python where the imports work — 3.14 is fine |
+| Configuring REAPER (`enable_reapy.py`) | **3.12 or older** |
+
+reapy 0.10.0 crashes partway through rewriting `reaper.ini` on Python 3.13+,
+because `configparser` gained unnamed sections and reapy calls `.lower()` on the
+sentinel. The crash leaves `reaper.ini` **empty** — every REAPER preference
+gone, with nothing in the error naming the file.
+
+`enable_reapy.py` refuses to run there, backs the file up first and restores it
+if it shrinks, and the installer picks a 3.12-or-older interpreter for that step
+alone. If the health check says REAPER *cannot be reconfigured*, that is what it
+means, and the fix is:
+
+```
+winget install -e --id Python.Python.3.12
+py -3.12 -m pip install python-reapy
+```
+
+Never work around this by forcing the configure step onto a newer interpreter.
 
 **`No module named 'mcp.server.fastmcp'`** means `mcp` 2.0 or newer got
 installed. It dropped the FastMCP API the tool modules are written against.

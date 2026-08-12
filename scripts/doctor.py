@@ -331,6 +331,31 @@ def check_reaper(r: Report, explicit: str) -> None:
                     f"Close REAPER, then: {sys.executable} \"{enable}\"",
                 )
 
+    # Configuring REAPER needs an interpreter reapy can drive safely, which is a
+    # stricter requirement than running the server. Worth reporting even when
+    # the distant API is already set up, because without one it cannot be
+    # repaired later - and attempting it anyway empties reaper.ini.
+    safe = None
+    for cand in (["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"], ["python"]):
+        if not shutil.which(cand[0]):
+            continue
+        p = run(cand + ["-c", "import sys; sys.exit(0 if sys.version_info[:2] <= (3,12) else 1)"])
+        if not p or p.returncode != 0:
+            continue
+        p = run(cand + ["-c", "import reapy"])
+        if p and p.returncode == 0:
+            safe = " ".join(cand)
+            break
+    if safe:
+        r.ok(f"REAPER can be (re)configured with `{safe}`")
+    else:
+        r.warn(
+            "no Python 3.12-or-older interpreter with reapy - REAPER cannot be reconfigured",
+            "reapy 0.10.0 empties reaper.ini under Python 3.13+, so the installer refuses. "
+            "Fix: winget install -e --id Python.Python.3.12 "
+            "then py -3.12 -m pip install python-reapy",
+        )
+
     bridge = res / "claude_bridge"
     status = bridge / "status.txt"
     if not bridge.is_dir():

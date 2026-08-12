@@ -123,34 +123,61 @@ if ($doPython) {
 }
 
 # ---------------------------------------------------------------------------
-# From here on, use the interpreter that can actually import reapy, not the
-# first `python` on PATH.
+# Choosing the interpreter that configures REAPER.
 #
-# bootstrap.py installs into a virtualenv, so on a fresh machine the system
-# Python still has nothing. Running enable_reapy.py with it fails at `import
-# reapy`, the distant API is never configured, and the user is left with a
-# working-looking install where every REAPER tool errors at runtime. The
-# launcher already knows how to pick correctly, so ask it.
+# This is NOT the interpreter that runs the server, and conflating them destroys
+# data. Two independent requirements:
+#
+#   * `import reapy` must work. bootstrap.py installs into a virtualenv, so on a
+#     fresh machine the system Python has nothing, and configuring would fail at
+#     the import - leaving a working-looking install where every REAPER tool
+#     errors later.
+#
+#   * Python must be 3.12 or older. reapy 0.10.0 crashes partway through
+#     rewriting reaper.ini on 3.13+, because configparser gained unnamed
+#     sections and reapy calls .lower() on the sentinel. The crash leaves
+#     reaper.ini EMPTY - every REAPER preference gone, with nothing in the error
+#     naming the file. enable_reapy.py refuses to run there, and this picks an
+#     interpreter that will not hit it in the first place.
+#
+# The server has no such limit and happily runs on 3.14, which is why it is
+# selected separately.
 # ---------------------------------------------------------------------------
-$ReapyPython     = 'python'
+$ReapyPython     = $null
 $ReapyPythonArgs = @()
 
-if ($PythonExe) {
-    # Select-Object -Last 1: a native command's output arrives as an array when
-    # it emits more than one line, and .Trim() on an array throws - which, under
-    # $ErrorActionPreference = 'Stop', would abort the whole install over a
-    # stray line of output.
-    $best = & python $Launcher --self-test 2>$null | Select-Object -Last 1
-    if ($LASTEXITCODE -eq 0 -and $best) {
-        $best = "$best".Trim()
-        if ($best -like 'py -*') {
-            $parts           = $best.Split(' ')
-            $ReapyPython     = $parts[0]
-            $ReapyPythonArgs = @($parts[1])
-        } else {
-            $ReapyPython = $best
+$probe = 'import sys; sys.exit(0 if sys.version_info[:2] <= (3, 12) else 1)'
+
+# `py -3.12` on a machine without 3.12 writes to stderr, and redirecting a
+# native command's stderr under $ErrorActionPreference = 'Stop' raises a
+# NativeCommandError - aborting the installer over a probe that was expected to
+# fail. Relax the preference for the search, and put it back afterwards.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    foreach ($cand in @('py -3.12', 'py -3.11', 'py -3.10', 'python')) {
+        $exe = $cand
+        $pre = @()
+        if ($cand -like 'py -*') {
+            $parts = $cand.Split(' ')
+            $exe   = $parts[0]
+            $pre   = @($parts[1])
         }
+        if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
+
+        # Version first, then reapy: a 3.13+ interpreter is disqualified
+        # whatever else it has installed.
+        $null = & $exe @pre -c $probe 2>&1
+        if ($LASTEXITCODE -ne 0) { continue }
+        $null = & $exe @pre -c 'import reapy' 2>&1
+        if ($LASTEXITCODE -ne 0) { continue }
+
+        $ReapyPython     = $exe
+        $ReapyPythonArgs = $pre
+        break
     }
+} finally {
+    $ErrorActionPreference = $prevEAP
 }
 
 function Invoke-Reapy {
@@ -232,6 +259,14 @@ end
     } elseif (-not $ReaperFound -or -not $PythonExe) {
         Write-Warn2 "Skipped: needs both Python and a REAPER config folder."
         Add-Problem "After fixing the above, run: python `"$EnableRpy`""
+    } elseif (-not $ReapyPython) {
+        # Refusing is the safe outcome. Running this under 3.13+ would empty
+        # reaper.ini, and no amount of connectivity is worth that.
+        Write-Err "No Python 3.12-or-older interpreter with reapy is available."
+        Write-Info "reapy 0.10.0 empties reaper.ini when it configures REAPER under"
+        Write-Info "Python 3.13+, so this step is skipped rather than risked."
+        Write-Info "Everything else - the bridge, the server, Claude - is unaffected."
+        Add-Problem "Install Python 3.12 (winget install -e --id Python.Python.3.12), then: py -3.12 -m pip install python-reapy  and re-run with -Only reaper"
     } else {
         $reaperRunning = @(Get-Process -Name 'reaper' -ErrorAction SilentlyContinue).Count -gt 0
         if ($reaperRunning -and -not $Force) {

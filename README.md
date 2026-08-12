@@ -12,125 +12,149 @@ them is cross-platform. See [Porting](#porting).
 
 ---
 
-## Requirements
-
-| | |
-| --- | --- |
-| **REAPER** | v6 or v7+. **Launch it once and close it** before installing — the first launch creates its config folder, and REAPER rewrites `reaper.ini` on exit, discarding anything written while it is open. |
-| **Python** | 3.10 or newer, on PATH. If you don't have it, `RunThisToStart.bat` option **`[8]`** installs it for you. |
-
-Option `[8]` does not depend on winget. It uses winget when winget works, and
-otherwise downloads the installer straight from python.org — the same file
-winget would have fetched, since that is exactly what its manifest points at.
-Either way the install is per-user and needs no administrator rights.
-
-When winget is available it runs:
-
-```powershell
-winget install -e --id Python.Python.3.12 --custom "PrependPath=1 InstallAllUsers=0 Include_test=0"
-```
-
-Three details in there matter:
-
-- **`-e`** forces an exact ID match. Without it, `Python.Python.3` is ambiguous
-  and can resolve to **Python 3.0**, which really is in the winget catalogue.
-  Only versioned IDs exist — there is no `Python.Python.3`.
-- **`--custom`**, not `--override`. `--custom` appends to winget's own silent
-  switches; `--override` *replaces* them, so you inherit responsibility for
-  every default you just discarded.
-- **`InstallAllUsers=0`** rather than `--scope user`. winget matches `--scope`
-  against the manifest, and this one is a `burn` bundle with no user-scope
-  installer declared, so `--scope user` fails with *"no applicable installer
-  found"*. The bundle's own switch reaches the same result and never needs
-  elevation.
-
-**3.12 rather than the newest release** because `numba` and `llvmlite` — which
-`librosa` depends on — routinely take months to publish wheels for a brand-new
-Python. Any 3.10+ works; the installer tests whether the dependencies actually
-build rather than checking a version number, and tells you if yours cannot.
-
-PATH is read once when a program starts, so a Python installed thirty seconds
-ago is invisible to the window that installed it. Option `[8]` prepends the new
-directory to its own session and re-checks, so you don't have to reopen
-anything — and says so plainly if that fails.
-
-**No winget?** It ships with App Installer, which is absent on a fresh Windows
-Server, on images built without the Store, and inside Windows Sandbox. Nothing
-here needs it — `[8]` falls through to the direct download and carries on.
-
-Option **`[9]`** exists if you want winget itself back. It first tries the
-offline repair, which costs nothing and fixes the common case where App
-Installer is provisioned but not registered for your user:
-
-```powershell
-Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
-```
-
-Only if that fails does it fall back to Microsoft's PSGallery bootstrap
-(`Install-PackageProvider` → `Install-Module Microsoft.WinGet.Client` →
-`Repair-WinGetPackageManager`), passing `-AllUsers` only when the session is
-genuinely elevated and matching `Install-Module`'s scope to the same condition.
-
-Be aware that the PSGallery route **frequently fails on precisely the machines
-that need it**, with:
-
-```
-WARNING: Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338...'
-[FAIL] No match was found for the specified search criteria for the provider 'NuGet'.
-```
-
-That is the inbox `PackageManagement` module unable to fetch its provider list —
-common in Sandbox, on Server, and behind a proxy, and not something this script
-can work around. It is also why winget was taken off the critical path: getting
-Python is the goal, and python.org serves it directly.
-
 ## Install
 
 ```bash
 git clone <this repo>
 ```
 
-Then **double-click `RunThisToStart.bat`** and choose **`[1] Install
-everything`**.
+Double-click **`RunThisToStart.bat`** and choose **`[1] Install Everything`**.
 
-The menu checks Python and REAPER before it starts and shows `[OK]`/`[MISSING]`
-for each, rather than failing halfway through a five-minute dependency install.
-Option `[8]` walks through installing Python.
+That is the whole thing. It backs up your current configuration, installs
+anything missing, sets up the plugin, and runs a health check. Then start
+REAPER, restart Claude, and ask *"Check the current REAPER project info."*
 
-Option `[1]` then does four independent things, each idempotent, each able to
-fail without taking the others down:
-
-1. Builds the dependency virtualenv
-2. Installs the Lua bridge listener into REAPER
-3. Configures REAPER's distant API, which the MCP server connects through
-4. Registers the plugin with Claude Code and Claude Desktop
-
-Finally:
-
-1. **Start REAPER.** It reloads `reaper.ini` at launch and starts the bridge
-   listener automatically.
-2. **Restart Claude.**
-3. Ask: *"Check the current REAPER project info."*
-
-If that answers, you are done. If it does not, run **`[2] Health check`** —
-every failure it reports carries the command that fixes it.
-
-### The rest of the menu
+There are two options, because everything the setup does belongs to one of
+them:
 
 | | |
 | --- | --- |
-| `[2]` | Health check. Changes nothing. |
-| `[3]` | Dependencies only |
-| `[4]` | REAPER side only — bridge and distant API. Close REAPER first. |
-| `[5]` | Claude side only — Code and Desktop |
-| `[6]` | Repair the connection — removes the stray port 2306 interface |
-| `[7]` | [Developer link](#editing-the-plugin) — load this folder in place so edits are live |
-| `[8]` | Install Python via winget — see [Requirements](#requirements) |
-| `[9]` | Install or repair winget itself |
+| **`[1]` Install Everything** | Snapshot → install missing applications → configure the plugin → health check |
+| **`[2]` Revert Everything** | Restore that snapshot, remove what `[1]` added |
 
-`install.ps1` takes the same jobs as flags: `-Only python|reaper|claude`,
-`-Link`, `-Force`, `-SkipBootstrap`, `-SkipDesktop`, `-SkipCode`,
-`-SkipReaperConfig`, `-ReaperResourcePath "E:\REAPER\Portable"`.
+### What `[1]` installs
+
+From the winget community source, which uses each vendor's own installer
+(reaper.fm, claude.ai, git-scm) rather than a Microsoft Store package.
+
+| Package | If already installed |
+| --- | --- |
+| Python 3.12 | upgraded normally |
+| Git | upgraded normally |
+| REAPER | **skipped entirely** |
+| Claude Desktop | **skipped entirely** |
+| Claude Code | **skipped entirely** |
+
+REAPER and Claude are skipped rather than reinstalled on purpose. Their
+installers are well behaved, but a reinstall is a needless risk to a REAPER
+resource folder holding years of preferences, FX chains and templates, and to
+Claude's local history. Nothing in this setup is worth that.
+
+**Close REAPER first** if it is open. REAPER rewrites `reaper.ini` when it
+exits, so anything written while it is running is discarded — `[1]` warns and
+waits rather than letting that happen silently.
+
+### What `[2]` restores
+
+`[1]` takes a snapshot before its first write, into
+`%USERPROFILE%\.reaper-for-claude\backups\<timestamp>\`. It records two kinds of
+entry, and the difference is what makes a clean revert possible: files that
+already existed are copied, and files that did **not** exist are noted as
+absent, so reverting deletes exactly the ones the setup created and no others.
+
+Tracked: `reaper.ini`, `reaper-kb.ini`, `reaper-extstate.ini`,
+`Scripts\__startup.lua`, `Scripts\claude_bridge.lua`, `Scripts\enable_reapy.py`,
+`claude_desktop_config.json` (both plain and Store installs), and
+`~\.claude\settings.json`.
+
+`[2]` restores those, deletes the dependency virtualenv, and unregisters the
+plugin from Claude Code. It **does not uninstall REAPER, Claude, Python or
+Git** — by the time anyone reverts, those may hold projects, chats and
+repositories that have nothing to do with this plugin. It reports which ones
+`[1]` installed and leaves removing them to you. Projects, media, presets, FX
+chains and conversations are never touched.
+
+## Requirements
+
+Everything below is handled by `[1]`; this is what it is arranging for you.
+
+| | |
+| --- | --- |
+| **REAPER** | v6 or v7+. If `[1]` installs it, launch it once and close it, then run `[1]` again so the REAPER-side setup can find its config folder. |
+| **Python** | 3.10 or newer, on PATH. `[1]` installs 3.12 when it is missing — via winget, or straight from python.org when winget is unavailable. |
+
+### Running the steps individually
+
+The menu is a front end. Every step is a script in `install\`, runnable on its
+own, and `[1]` is just the two of them in order:
+
+| Script | Does |
+| --- | --- |
+| `setup-all.ps1` | Everything `[1]` does. `-SkipApps` configures the plugin only. |
+| `revert-all.ps1` | Everything `[2]` does. `-From <dir>` picks an older snapshot. |
+| `snapshot.ps1` | `-Backup`, `-Restore`, `-List` — the backup engine on its own. |
+| `install.ps1` | Plugin setup only: `-Only python\|reaper\|claude`, `-Link`, `-Force`. |
+| `doctor.ps1` | Health check. Changes nothing. Run it any time. |
+| `install-python.ps1` | Python only, winget or direct download. |
+| `repair-winget.ps1` | Install or repair winget itself. |
+
+The health check is worth knowing about by name — `[1]` runs it at the end, but
+it is the thing to reach for whenever something stops working:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install\doctor.ps1
+```
+
+### About the winget invocation
+
+When winget is available, Python is installed with:
+
+```powershell
+winget install -e --id Python.Python.3.12 --custom "PrependPath=1 InstallAllUsers=0 Include_test=0"
+```
+
+Three details matter, and each cost a debugging session to find:
+
+- **`-e`** forces an exact ID match. Without it `Python.Python.3` is ambiguous
+  and can resolve to **Python 3.0**, which really is in the catalogue — and
+  `REAPER` alone also matches an unrelated `ScytheLabs.Reaper`.
+- **`--custom`**, not `--override`. `--custom` appends to winget's own silent
+  switches; `--override` *replaces* them, so you inherit responsibility for
+  every default you just discarded.
+- **`InstallAllUsers=0`** rather than `--scope user`. winget matches `--scope`
+  against the manifest, and Python's is a `burn` bundle with no user-scope
+  installer declared, so `--scope user` fails with *"no applicable installer
+  found"*. The bundle's own switch works and never needs elevation.
+
+**Python 3.12 rather than the newest release** for two reasons. `numba` and
+`llvmlite` — which `librosa` depends on — routinely take months to publish
+wheels for a brand-new Python. And more seriously:
+
+> **reapy 0.10.0 destroys `reaper.ini` on Python 3.13+.** Python 3.13 added
+> unnamed sections to `configparser`, so parsing yields a `_UnnamedSection`
+> sentinel among the section names; reapy calls `.lower()` on each of them and
+> raises — *partway through rewriting the file*, leaving it **zero bytes**.
+> Every REAPER preference, audio device setting and path is gone, and nothing in
+> the resulting error mentions `reaper.ini`.
+>
+> Three separate guards now exist. `enable_reapy.py` refuses to configure on
+> 3.13+ and says why; it copies `reaper.ini` first and restores it if the file
+> ends up smaller than it started, whatever the cause; and the installer selects
+> a 3.12-or-older interpreter for this step specifically, skipping it with an
+> explanation rather than risking the file when none exists.
+>
+> Only this configuration step is affected. The MCP server itself runs fine on
+> 3.14, which is why the two interpreters are chosen separately.
+
+**No winget?** It ships with App Installer, absent on a fresh Windows Server, on
+images built without the Store, and inside Windows Sandbox. Nothing here needs
+it: `[1]` falls back to downloading Python straight from python.org.
+`repair-winget.ps1` exists if you want winget itself back — it tries the offline
+repair first (registering an App Installer that is present but unregistered for
+your user, the usual state in Sandbox and on Server) before Microsoft's
+PSGallery bootstrap, which frequently fails on those same machines with
+`Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'`.
+
 
 ## What runs where
 
@@ -387,7 +411,7 @@ Installing from a marketplace **copies** this folder into a versioned cache
 `version` in both manifests and reinstall — right for a release, infuriating
 while working.
 
-For live editing use `RunThisToStart.bat` → `[7]`, or:
+For live editing, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install\install.ps1 -Only claude -Link
@@ -407,7 +431,8 @@ claude plugin uninstall reaper-for-claude@reaper-skills-for-claude
 claude plugin marketplace remove reaper-skills-for-claude
 ```
 
-`[7]` does both for you, and the health check flags the shadowed state.
+`install.ps1 -Only claude -Link` does both for you, and the health check flags
+the shadowed state.
 
 Changes to a `SKILL.md` apply immediately. Changes to `config/mcp.json` or
 `plugin.json` need `/reload-plugins` or a restart.

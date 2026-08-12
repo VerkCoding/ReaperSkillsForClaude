@@ -58,6 +58,18 @@ warnings.filterwarnings("ignore", module=r"reapy\..*")
 REAPY_SERVER_PORT = 2306   # reapy's server socket. NOT a web interface.
 WEB_INTERFACE_PORT = 2307  # REAPER's web interface, which reapy talks through.
 
+# The newest Python that reapy 0.10.0 can safely CONFIGURE with.
+#
+# Python 3.13 added unnamed sections to configparser, so parsing a file now
+# yields a `_UnnamedSection` sentinel among the section names. reapy calls
+# .lower() on each of them, which raises - and it does so partway through
+# rewriting reaper.ini, leaving the file ZERO BYTES. Every REAPER preference,
+# device setting and path is gone, with no error that mentions reaper.ini.
+#
+# Reading is unaffected, so --check still runs on any version. This gate applies
+# only to the paths that write.
+CONFIGURE_MAX_PYTHON = (3, 12)
+
 
 # --------------------------------------------------------------------------
 # Output that works both in a terminal and in REAPER's console
@@ -191,11 +203,75 @@ def report(resource_path: str) -> bool:
 # Actions
 # --------------------------------------------------------------------------
 
+def _guard_ini(resource_path: str):
+    """Protect reaper.ini across a write, whatever goes wrong inside reapy.
+
+    The version gate above catches the failure we know about. This catches the
+    ones we do not: reaper.ini holds every preference, audio device setting and
+    path a user has, and reapy rewrites it in place. An exception partway
+    through leaves a truncated or empty file, and nothing in the resulting error
+    mentions reaper.ini, so the loss is discovered much later.
+
+    Returns a callable that restores the file if it ended up smaller than it
+    started - the signature of a partial write - or if the caller reports a
+    failure.
+    """
+    import shutil
+    import tempfile
+
+    ini = os.path.join(resource_path, "reaper.ini")
+    if not os.path.isfile(ini):
+        return lambda ok=True: None
+
+    size_before = os.path.getsize(ini)
+    fd, tmp = tempfile.mkstemp(prefix="reaper.ini.", suffix=".guard")
+    os.close(fd)
+    shutil.copyfile(ini, tmp)
+
+    def finish(ok: bool = True) -> None:
+        try:
+            shrank = os.path.isfile(ini) and os.path.getsize(ini) < size_before
+            if (not ok) or shrank:
+                shutil.copyfile(tmp, ini)
+                if shrank:
+                    say(f"reaper.ini shrank from {size_before} to "
+                        f"{os.path.getsize(ini)} bytes - restored from backup.")
+                else:
+                    say("Restored reaper.ini after a failed write.")
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    return finish
+
+
 def do_configure(resource_path: str) -> None:
+    v = sys.version_info[:2]
+    if v > CONFIGURE_MAX_PYTHON:
+        fail(
+            f"Python {v[0]}.{v[1]} cannot configure REAPER safely.\n\n"
+            "reapy 0.10.0 crashes partway through rewriting reaper.ini on Python "
+            "3.13 and newer, because configparser gained unnamed sections in 3.13 "
+            "and reapy does not expect them. The crash leaves reaper.ini EMPTY, "
+            "taking every REAPER preference with it.\n\n"
+            "Run this with Python 3.12 or older:\n"
+            f"    py -3.12 \"{os.path.abspath(__file__)}\"\n\n"
+            "Only this configuration step is affected. The MCP server itself runs "
+            "fine on newer versions, so nothing else needs downgrading."
+        )
+
     from reapy.config import configure_reaper
 
     say("Configuring REAPER for reapy...")
-    configure_reaper(resource_path=resource_path)
+    restore = _guard_ini(resource_path)
+    try:
+        configure_reaper(resource_path=resource_path)
+    except Exception:
+        restore(ok=False)
+        raise
+    restore(ok=True)
     say("Done. All four steps applied (they are idempotent, so re-running is safe).")
 
 
