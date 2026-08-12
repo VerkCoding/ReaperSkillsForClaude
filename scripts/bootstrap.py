@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import venv
@@ -54,18 +55,81 @@ def venv_python(root: Path) -> Path:
 
 
 def base_python() -> Path:
-    """The interpreter REAPER embeds, which is never the virtualenv.
+    """The base of whatever interpreter is running this.
 
-    REAPER loads a Python *shared library* - python3XX.dll - and runs ReaScripts
-    inside it. A virtualenv contains no such library; it is a redirect layer
-    around the base installation, and REAPER knows nothing about it. So the
-    embedded interpreter is always the base one, using the base site-packages.
+    A virtualenv contains no python3XX.dll - it is a redirect layer around a
+    real installation - so anything that needs a shared library needs the base.
     """
     if sys.prefix != sys.base_prefix:
         exe = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
         if exe.is_file():
             return exe
     return Path(sys.executable)
+
+
+def _probe(argv) -> Path | None:
+    """Return an interpreter's own path if it is <= 3.12, else None."""
+    code = (
+        "import sys;"
+        "sys.stdout.write(sys.executable)"
+        " if sys.version_info[:2] <= (3, 12) else sys.exit(1)"
+    )
+    try:
+        p = subprocess.run(argv + ["-c", code], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0 or not p.stdout.strip():
+        return None
+    exe = Path(p.stdout.strip())
+    return exe if exe.is_file() else None
+
+
+def reaper_python() -> Path:
+    """The interpreter REAPER should embed, and where reapy belongs.
+
+    REAPER loads a Python *shared library* and runs ReaScripts inside it. Which
+    one it loads is written into reaper.ini as pythonlibpath64, and reapy derives
+    that from whichever interpreter runs the configure step. So this choice is
+    the choice of REAPER's Python - and it has nothing to do with PATH.
+
+    Preferring a 3.12 we installed over the user's default is the whole point.
+    It keeps two promises at once:
+
+      * Nothing is installed into the user's own Python. reapy has to live
+        wherever REAPER looks, and pointing REAPER at our copy means that is our
+        copy - not the interpreter their other projects depend on.
+      * The version stays <= 3.12, which reapy needs in order to configure
+        REAPER without emptying reaper.ini.
+
+    Falls back to the running interpreter's base only when nothing better exists,
+    so an installation that predates this still works.
+    """
+    override = os.environ.get("REAPER_MCP_REAPER_PYTHON")
+    if override and Path(override).is_file():
+        return Path(override)
+
+    candidates = []
+    if os.name == "nt":
+        # The `py` launcher reaches a side-by-side install that PATH never
+        # mentions, which is exactly the arrangement this is built around.
+        for v in ("3.12", "3.11", "3.10"):
+            candidates.append(["py", "-" + v])
+        candidates.append([str(Path(os.environ.get("LOCALAPPDATA", ""))
+                               / "Programs" / "Python" / "Python312" / "python.exe")])
+    else:
+        for v in ("3.12", "3.11", "3.10"):
+            candidates.append(["python" + v])
+
+    for argv in candidates:
+        if argv[0] and (len(argv) > 1 or Path(argv[0]).is_file() or shutil.which(argv[0])):
+            found = _probe(argv)
+            if found:
+                return found
+
+    base = base_python()
+    if _probe([str(base)]):
+        return base
+    return base
 
 
 def can_import(python: Path, module: str) -> bool:
@@ -89,12 +153,16 @@ def ensure_reaper_side(force: bool = False) -> bool:
     Miss the second and everything looks installed while nothing connects: the
     server has reapy, REAPER does not, so the API it dials never comes up.
 
-    Only reapy goes here, never the rest. It needs psutil and typing-extensions
-    and nothing else - no numpy, no numba, no librosa - so this adds three small
-    pure-Python packages to the base installation rather than the compiled
-    numeric stack that makes a global install worth avoiding.
+    It goes into the interpreter REAPER embeds - see reaper_python() - which is
+    a 3.12 installed alongside the user's own wherever one is available. That is
+    deliberate: reapy has to live where REAPER looks, and pointing REAPER at our
+    copy is what stops this writing into the Python their other projects use.
+
+    Only reapy goes there, never the rest. It needs psutil and typing-extensions
+    and nothing else - no numpy, no numba, no librosa - so even that is three
+    small pure-Python packages rather than the compiled numeric stack.
     """
-    base = base_python()
+    base = reaper_python()
     print(f"REAPER-side: {base}")
 
     if not force and can_import(base, "reapy"):
@@ -146,6 +214,12 @@ def main() -> int:
         "--recreate", action="store_true", help="Delete and rebuild the virtualenv."
     )
     ap.add_argument(
+        "--print-reaper-python",
+        action="store_true",
+        help="Print the interpreter REAPER should embed, and exit. The installer "
+        "uses this so the choice is made in exactly one place.",
+    )
+    ap.add_argument(
         "--allow-source",
         action="store_true",
         help="Permit building packages from source. Off by default: a missing "
@@ -153,6 +227,11 @@ def main() -> int:
         "fails.",
     )
     args = ap.parse_args()
+
+    if args.print_reaper_python:
+        # Nothing else prints, so the caller can read stdout directly.
+        print(reaper_python())
+        return 0
 
     if not REQUIREMENTS.is_file():
         print(f"Missing {REQUIREMENTS}", file=sys.stderr)
@@ -166,7 +245,7 @@ def main() -> int:
     print(f"Environment: {target}")
 
     if args.check:
-        base = base_python()
+        base = reaper_python()
         reaper_ok = can_import(base, "reapy")
         print(f"REAPER-side: {base}")
         print(f"             reapy importable: {'yes' if reaper_ok else 'NO - required'}")
@@ -267,7 +346,7 @@ def main() -> int:
         print(
             "\nThe server environment is ready, but REAPER's own interpreter cannot "
             "import reapy, so the distant API will not start. Install it by hand:\n"
-            f'    "{base_python()}" -m pip install --user python-reapy',
+            f'    "{reaper_python()}" -m pip install --user python-reapy',
             file=sys.stderr,
         )
         return 1

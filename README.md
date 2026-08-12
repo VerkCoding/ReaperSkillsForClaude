@@ -176,8 +176,21 @@ That works because nothing here actually wants the *default* interpreter:
 | What | Which Python | How it finds it |
 | --- | --- | --- |
 | The MCP server | the plugin's virtualenv | built by any 3.10+, found by absolute path |
-| REAPER's ReaScripts | whatever `reaper.ini` names | `pythonlibpath64`, written by the installer |
-| The configure step | 3.12 or older | `py -3.12`, which ignores `PATH` order |
+| REAPER's ReaScripts | **the 3.12 installed for this** | `pythonlibpath64` in `reaper.ini` |
+| The configure step | the same 3.12 | `py -3.12`, which ignores `PATH` order |
+
+**REAPER is pointed at our Python, not yours.** REAPER loads a Python *shared
+library* named by `pythonlibpath64` in `reaper.ini`, and reapy writes that from
+whichever interpreter runs the configure step — so choosing that interpreter *is*
+choosing REAPER's Python, with no reference to `PATH` at all.
+
+That is what keeps `python-reapy` out of your own installation. reapy has to live
+wherever REAPER looks; pointing REAPER at the 3.12 installed for this plugin
+means it lives there instead of in the interpreter your other projects use. It
+also keeps that side on 3.12, which is what reapy needs in order to configure
+REAPER without emptying `reaper.ini`.
+
+Set `REAPER_MCP_REAPER_PYTHON` to override which interpreter REAPER embeds.
 
 The only thing `PATH` is used for is starting `scripts/launch_server.py`, which
 immediately re-execs into the virtualenv. That needs Python 3.6+ merely to

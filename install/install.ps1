@@ -170,37 +170,40 @@ if ($doPython) {
 $ReapyPython     = $null
 $ReapyPythonArgs = @()
 
-$probe = 'import sys; sys.exit(0 if sys.version_info[:2] <= (3, 12) else 1)'
+# bootstrap.py owns this choice, so ask it rather than repeating the search.
+# The interpreter that runs enable_reapy.py BECOMES REAPER's embedded Python -
+# reapy writes its shared library path into reaper.ini - so this decision and
+# "where does reapy get installed" are the same decision, and having two
+# implementations of it would eventually point REAPER at one interpreter while
+# installing reapy into another.
+if ($PythonExe) {
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $chosen = & python $Bootstrap --print-reaper-python 2>$null | Select-Object -Last 1
+        if ($LASTEXITCODE -eq 0 -and $chosen) {
+            $chosen = "$chosen".Trim()
+            # Two conditions, both required, and neither is bootstrap's job to
+            # enforce: it reports the best available interpreter even when the
+            # best available is unsuitable.
+            #
+            #   <= 3.12   or enable_reapy refuses and reaper.ini is left alone
+            #   has reapy or configuring fails at the import
+            #
+            # Rejecting here rather than attempting means the user gets the
+            # "install 3.12" instruction instead of watching a step fail first.
+            $ver = & $chosen -c 'import sys; sys.exit(0 if sys.version_info[:2] <= (3, 12) else 1)' 2>&1
+            $verOk = ($LASTEXITCODE -eq 0)
+            $null = & $chosen -c 'import reapy' 2>&1
+            $reapyOk = ($LASTEXITCODE -eq 0)
 
-# `py -3.12` on a machine without 3.12 writes to stderr, and redirecting a
-# native command's stderr under $ErrorActionPreference = 'Stop' raises a
-# NativeCommandError - aborting the installer over a probe that was expected to
-# fail. Relax the preference for the search, and put it back afterwards.
-$prevEAP = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-try {
-    foreach ($cand in @('py -3.12', 'py -3.11', 'py -3.10', 'python')) {
-        $exe = $cand
-        $pre = @()
-        if ($cand -like 'py -*') {
-            $parts = $cand.Split(' ')
-            $exe   = $parts[0]
-            $pre   = @($parts[1])
+            if ($verOk -and $reapyOk -and (Test-Path $chosen)) {
+                $ReapyPython = $chosen
+            } elseif (-not $verOk) {
+                Write-Info "Best available interpreter is $chosen, which is newer than 3.12."
+            }
         }
-        if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
-
-        # Version first, then reapy: a 3.13+ interpreter is disqualified
-        # whatever else it has installed.
-        $null = & $exe @pre -c $probe 2>&1
-        if ($LASTEXITCODE -ne 0) { continue }
-        $null = & $exe @pre -c 'import reapy' 2>&1
-        if ($LASTEXITCODE -ne 0) { continue }
-
-        $ReapyPython     = $exe
-        $ReapyPythonArgs = $pre
-        break
-    }
-} finally {
+    } catch { }
     $ErrorActionPreference = $prevEAP
 }
 
