@@ -5,6 +5,7 @@ import reapy
 from reapy import reascript_api as RPR
 
 from reaper_mcp.connection import get_project
+from reaper_mcp.units import get_volume_db, set_volume_db
 
 logger = logging.getLogger("reaper_mcp.mastering_tools")
 
@@ -69,8 +70,7 @@ def register_tools(mcp):
         try:
             project = get_project()
             master = project.master_track
-            master.volume = volume_db
-            return {"success": True, "volume_db": master.volume}
+            return {"success": True, "volume_db": set_volume_db(master, volume_db)}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -187,8 +187,7 @@ def register_tools(mcp):
             gain_db = target_lufs - current_lufs
             project = get_project()
             master = project.master_track
-            new_vol_db = master.volume + gain_db
-            master.volume = new_vol_db
+            new_vol_db = set_volume_db(master, get_volume_db(master) + gain_db)
 
             return {
                 "success": True,

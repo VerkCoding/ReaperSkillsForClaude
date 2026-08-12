@@ -6,6 +6,7 @@ import reapy
 from reapy import reascript_api as RPR
 
 from reaper_mcp.connection import get_project
+from reaper_mcp.units import set_solo
 
 logger = logging.getLogger("reaper_mcp.render_tools")
 
@@ -149,7 +150,7 @@ def register_tools(mcp):
                 track_name = track.name or f"Track_{idx}"
                 # Solo this track exclusively
                 for j in range(project.n_tracks):
-                    project.tracks[j].solo = (j == idx)
+                    set_solo(project.tracks[j], j == idx)
                 # Sanitize filename
                 safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in track_name)
                 stem_path = os.path.join(output_directory, f"{safe_name}.{format}")
@@ -164,7 +165,7 @@ def register_tools(mcp):
 
             # Unsolo all tracks
             for j in range(project.n_tracks):
-                project.tracks[j].solo = False
+                set_solo(project.tracks[j], False)
 
             return {
                 "success": True,
@@ -176,7 +177,7 @@ def register_tools(mcp):
             try:
                 proj = get_project()
                 for j in range(proj.n_tracks):
-                    proj.tracks[j].solo = False
+                    set_solo(proj.tracks[j], False)
             except Exception:
                 pass
             logger.error(f"render_stems failed: {e}")
