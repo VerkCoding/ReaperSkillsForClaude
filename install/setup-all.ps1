@@ -122,11 +122,36 @@ $Apps = @(
     [pscustomobject]@{ Id = 'Anthropic.ClaudeCode'; Name = 'Claude Code'; Safe = $true; Custom = $null }
 )
 
+# ---------------------------------------------------------------------------
+# Record the whole run to a file.
+#
+# Everything here is console output, and the interesting part - why pip or
+# winget gave up - scrolls past several minutes before the end. When something
+# does not work, "what did it say?" has no answer, and the only evidence left is
+# the symptom hours later. A transcript costs nothing and turns that into a file
+# anyone can read or send on.
+# ---------------------------------------------------------------------------
+$LogDir = Join-Path $env:USERPROFILE '.reaper-for-claude\logs'
+$LogFile = Join-Path $LogDir ("setup-{0}.log" -f (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
+$transcribing = $false
+try {
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    Start-Transcript -Path $LogFile -Force | Out-Null
+    $transcribing = $true
+    # Keep the last handful; these are small, but unbounded is its own mess.
+    Get-ChildItem $LogDir -Filter 'setup-*.log' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -Skip 10 |
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+} catch {
+    # Transcription is a nicety, never a reason not to install.
+}
+
 Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host "  REAPER for Claude - install everything" -ForegroundColor Cyan
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Info "Plugin: $PluginRoot"
+if ($transcribing) { Write-Info "Log:    $LogFile" }
 
 # ---------------------------------------------------------------------------
 # 0. Get REAPER and Claude closed first.
@@ -198,30 +223,45 @@ if ($SkipApps) {
     if ($haveWinget) {
         Write-Ok "winget $(& winget --version)"
     } else {
-        Write-Info "winget is missing; attempting a repair..."
-        try {
-            & (Join-Path $Here 'repair-winget.ps1') -Embedded | Out-Host
-        } catch {
-            Write-Warn2 "winget repair did not succeed."
-        }
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            try { $null = & winget --version 2>&1; $haveWinget = ($LASTEXITCODE -eq 0) } catch { }
-        }
+        # Deliberately NOT repairing winget here.
+        #
+        # The repair pulls Microsoft's module from PowerShell Gallery, takes
+        # minutes, and fails on precisely the machines that lack winget - a
+        # Sandbox, a Server, anything behind a proxy - because the inbox
+        # PackageManagement module cannot fetch its provider list. Sitting
+        # through that before falling back anyway is the clunky part.
+        #
+        # Python is the only thing this setup genuinely cannot do without, and
+        # it comes straight from python.org. So skip to that, and leave winget
+        # repair as something the user can run on purpose if they want winget
+        # itself back.
+        Write-Warn2 "winget is not available."
+        Write-Info  "Not repairing it: that route is slow and usually fails on"
+        Write-Info  "machines without winget. Going straight to a direct download."
+        Write-Info  "To try anyway, run install\repair-winget.ps1 yourself."
     }
 
     Write-Step "Applications"
     if (-not $haveWinget) {
-        Write-Warn2 "No winget, so applications cannot be installed automatically."
-        # Python is the one thing the plugin genuinely cannot run without, and
-        # install-python.ps1 can fetch it straight from python.org.
-        Write-Info "Falling back to a direct Python download..."
+        # Python from python.org, which needs nothing but a network connection.
+        # Everything else in the plugin depends on it; REAPER and Claude do not
+        # have an equally stable direct URL, so those are named for the user
+        # rather than guessed at.
+        Write-Info "Installing Python directly from python.org..."
         try {
             & (Join-Path $Here 'install-python.ps1') -Version '3.12.10' | Out-Host
         } catch {
             Write-Err "Python could not be installed: $_"
             Add-Problem "Install Python from https://www.python.org/downloads/ with 'Add python.exe to PATH' ticked."
         }
-        Add-Problem "Install REAPER (reaper.fm) and Claude (claude.ai/download) by hand - winget was unavailable."
+        Write-Host ""
+        Write-Info "REAPER and Claude cannot be fetched without winget. If you do"
+        Write-Info "not already have them:"
+        Write-Info "    REAPER  https://www.reaper.fm/download.php"
+        Write-Info "    Claude  https://claude.ai/download"
+        Write-Info "Install them, then run [1] again - everything else will be"
+        Write-Info "left as it is and only the missing pieces filled in."
+        Add-Problem "Install REAPER and Claude by hand (winget was unavailable), then re-run [1]."
     } else {
         foreach ($app in $Apps) {
             # Each application is isolated.
@@ -410,8 +450,10 @@ if (-not $serverOk) {
     Write-Host ""
     Write-Host "      python `"$PluginRoot\scripts\bootstrap.py`"" -ForegroundColor White
     Write-Host ""
-    Write-Host "  Watch that command for pip errors - if it failed during this" -ForegroundColor Gray
-    Write-Host "  install, the reason scrolled past above." -ForegroundColor Gray
+    Write-Host "  Whatever went wrong is in the log, above the summary:" -ForegroundColor Gray
+    if ($transcribing) {
+        Write-Host "      $LogFile" -ForegroundColor White
+    }
     Add-Problem "The REAPER server cannot start - run scripts\bootstrap.py and read its output."
 }
 
@@ -428,3 +470,10 @@ if ($script:Problems.Count -eq 0) {
     foreach ($p in $script:Problems) { Write-Host "  $i. $p" -ForegroundColor Yellow; $i++ }
 }
 Write-Host ""
+
+if ($transcribing) {
+    Write-Host "  Full log of this run:" -ForegroundColor Gray
+    Write-Host "    $LogFile" -ForegroundColor Gray
+    Write-Host ""
+    try { Stop-Transcript | Out-Null } catch { }
+}
