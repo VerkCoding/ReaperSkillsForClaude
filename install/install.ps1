@@ -360,6 +360,19 @@ if ($doClaude) {
         Write-Info "Writing the MCP server directly into the Desktop config as well, so the"
         Write-Info "REAPER tools work immediately without waiting on that."
 
+        # Claude Desktop holds this file's contents in memory and rewrites it -
+        # exactly like REAPER and reaper.ini. An edit made underneath a running
+        # Desktop can be silently reverted to whatever it had before, which
+        # presents much later as a server pointing at a path that no longer
+        # exists. Warn rather than refuse: the write is harmless when it sticks,
+        # and the health check catches it when it does not.
+        $desktopRunning = @(Get-Process -Name 'Claude' -ErrorAction SilentlyContinue).Count -gt 0
+        if ($desktopRunning) {
+            Write-Warn2 "Claude Desktop is running. It can rewrite this file from its own state,"
+            Write-Warn2 "reverting what is written below."
+            Add-Problem "Quit Claude Desktop fully (tray icon too), re-run with -Only claude, then start it again."
+        }
+
         # Desktop has no ${CLAUDE_PLUGIN_ROOT} outside the plugin runtime, so the
         # config gets an absolute path. That is safe to write here precisely
         # because the installer knows where the plugin actually is.

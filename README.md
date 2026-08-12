@@ -153,6 +153,14 @@ duplicate it.
 absolute path, so moving or renaming this folder breaks it. Re-add it:
 `claude plugin marketplace add <new path>`.
 
+**Claude Desktop reverted to an old MCP entry** — Desktop holds
+`claude_desktop_config.json` in memory and can rewrite it from its own state,
+exactly the way REAPER does with `reaper.ini`. An edit made while it is running
+may be silently undone, which shows up later as a server pointing at a path that
+no longer exists. Quit Desktop fully (including the tray icon), run
+`install.ps1 -Only claude`, then start it again. The installer warns when it
+detects Desktop running, and the health check catches the reverted state.
+
 ---
 
 ## How it works
