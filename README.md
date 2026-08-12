@@ -49,6 +49,24 @@ ago is invisible to the window that installed it. Option `[8]` prepends the new
 directory to its own session and re-checks, so you don't have to reopen
 anything — and says so plainly if that fails.
 
+**No winget?** It ships with App Installer, which is absent on a fresh Windows
+Server, on images built without the Store, and sometimes after an in-place
+upgrade. Option **`[9]`** runs Microsoft's documented bootstrap:
+
+```powershell
+Install-PackageProvider -Name NuGet -Force
+Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
+Repair-WinGetPackageManager
+```
+
+Two departures from the sequence as usually quoted, both about privilege:
+`-AllUsers` is passed to `Repair-WinGetPackageManager` **only when the window is
+actually elevated**, since it errors otherwise, and `Install-Module`'s scope is
+matched to the same condition rather than defaulting to `AllUsers`. It also
+forces TLS 1.2 before touching PSGallery — Windows PowerShell 5.1 on older
+builds still negotiates TLS 1.0, which PSGallery refuses with a misleading
+"unable to download from URI".
+
 ## Install
 
 ```bash
@@ -91,6 +109,7 @@ every failure it reports carries the command that fixes it.
 | `[6]` | Repair the connection — removes the stray port 2306 interface |
 | `[7]` | [Developer link](#editing-the-plugin) — load this folder in place so edits are live |
 | `[8]` | Install Python via winget — see [Requirements](#requirements) |
+| `[9]` | Install or repair winget itself |
 
 `install.ps1` takes the same jobs as flags: `-Only python|reaper|claude`,
 `-Link`, `-Force`, `-SkipBootstrap`, `-SkipDesktop`, `-SkipCode`,

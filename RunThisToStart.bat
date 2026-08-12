@@ -71,6 +71,9 @@ echo.
 echo   [8] Install Python
 echo       Uses winget. Only needed if the check above says MISSING.
 echo.
+echo   [9] Install or repair winget
+echo       Only if [8] says winget is unavailable. Needs internet.
+echo.
 echo   [0] Exit
 echo.
 set "CHOICE="
@@ -84,6 +87,7 @@ if "%CHOICE%"=="5" goto claude
 if "%CHOICE%"=="6" goto repair
 if "%CHOICE%"=="7" goto devlink
 if "%CHOICE%"=="8" goto pyinstall
+if "%CHOICE%"=="9" goto wingetfix
 if "%CHOICE%"=="0" goto :eof
 goto menu
 
@@ -158,11 +162,15 @@ rem Full path for the same reason as find.exe above.
 if errorlevel 1 (
     echo   winget is not available on this machine.
     echo.
-    echo   Install Python by hand instead:
-    echo       https://www.python.org/downloads/
+    echo   It ships with App Installer, which is missing on a fresh Windows
+    echo   Server, on images built without the Store, and sometimes after an
+    echo   in-place upgrade.
     echo.
-    echo   On the FIRST screen, tick "Add python.exe to PATH". Without it,
-    echo   Claude cannot launch the REAPER server.
+    echo   Option [9] can install it. Run that first, then come back here.
+    echo.
+    echo   Or install Python by hand:
+    echo       https://www.python.org/downloads/
+    echo   On the FIRST screen, tick "Add python.exe to PATH".
     echo.
     goto done
 )
@@ -206,6 +214,30 @@ if errorlevel 1 (
 ) else (
     for /f "delims=" %%V in ('python --version 2^>^&1') do echo   Ready: %%V
 )
+goto done
+
+:wingetfix
+cls
+echo ===============================================
+echo   Install or repair winget
+echo ===============================================
+echo.
+echo   Pulls Microsoft's WinGet PowerShell module from PSGallery and lets
+echo   it repair the client:
+echo.
+echo       Install-PackageProvider -Name NuGet -Force
+echo       Install-Module Microsoft.WinGet.Client -Repository PSGallery
+echo       Repair-WinGetPackageManager
+echo.
+echo   Needs an internet connection and takes a minute or two.
+echo.
+echo   Running this window as administrator gets a machine-wide repair
+echo   (-AllUsers). Without it, a per-user repair is attempted instead.
+echo.
+set "GO="
+set /p GO="Proceed? [y/N]: "
+if /I not "%GO%"=="y" goto menu
+%PS% "%PLUGIN%install\repair-winget.ps1"
 goto done
 
 rem ---------------------------------------------------------------------------
