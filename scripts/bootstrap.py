@@ -37,31 +37,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REQUIREMENTS = ROOT / "requirements.txt"
 
-# Kept in step with launch_server.REQUIRED - the imports that must succeed for
-# the server to come up at all, as opposed to the lazily imported analysis
-# libraries whose absence only costs individual tools. The submodule matters:
-# mcp 2.0 dropped mcp.server.fastmcp, so a bare `import mcp` passes on a version
-# the server cannot run on.
-CORE_IMPORTS = ("mcp.server.fastmcp", "reapy", "numpy")
-
-
-def data_dir() -> Path:
-    """One fixed location, deliberately NOT the host's plugin data directory.
-
-    CLAUDE_PLUGIN_DATA looks like the right home for this, and it is wrong for
-    two reasons. It is only set when the host launches the server, so the
-    installer - run from a terminal - would build the venv somewhere else and
-    the server would never find it. And its value encodes the install route, so
-    the marketplace copy and a developer link get different directories, meaning
-    a multi-minute librosa install per route.
-
-    A fixed path under the home directory is found identically by the installer,
-    the launcher and the health check, however each was started.
-    """
-    env = os.environ.get("REAPER_MCP_DATA_DIR")
-    if env and not env.startswith("${"):
-        return Path(env)
-    return Path.home() / ".reaper-for-claude"
+# Imported, not restated. The launcher owns both of these because it is the one
+# that acts on them - it picks the interpreter - and a private copy here that
+# drifted would have this script report an environment ready that the launcher
+# then rejects, or build one somewhere the launcher never looks. Both failures
+# are silent, which is exactly why they are not duplicated.
+#
+# sys.path[0] is this script's own directory when run as a script, so the
+# sibling import resolves without any path juggling.
+from launch_server import REQUIRED as CORE_IMPORTS  # noqa: E402
+from launch_server import data_dir  # noqa: E402
 
 
 def venv_python(root: Path) -> Path:

@@ -14,7 +14,6 @@ mcp>=1.0.0,<2.0.0
 
 python-reapy>=0.10.0
 numpy>=1.24.0
-platformdirs>=3.0.0
 
 # Imported lazily, inside the functions that use them, so the server starts
 # without them - but they are part of a normal install and the offline analysis

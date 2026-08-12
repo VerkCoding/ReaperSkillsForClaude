@@ -67,8 +67,14 @@ def plugin_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def data_dir(root: Path) -> Path:
-    """Where the managed virtualenv lives. Must agree with bootstrap.py.
+def data_dir() -> Path:
+    """Where the managed virtualenv lives.
+
+    This module is the single definition; bootstrap.py and doctor.py import it.
+    They previously each carried a copy with a comment saying the three had to
+    agree, which is the kind of arrangement that holds right up until it does
+    not - and a disagreement here is silent, because the installer would build
+    an environment in one place while the launcher looked in another.
 
     Deliberately a fixed path rather than CLAUDE_PLUGIN_DATA. The host only sets
     that when it launches the server, so a venv built by the installer - run
@@ -85,9 +91,8 @@ def data_dir(root: Path) -> Path:
     return Path.home() / ".reaper-for-claude"
 
 
-def venv_python(root: Path) -> Path | None:
-    d = data_dir(root) / "venv"
-    exe = d / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+def venv_python() -> Path | None:
+    exe = data_dir() / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     return exe if exe.is_file() else None
 
 
@@ -123,7 +128,7 @@ def candidates(root: Path) -> list:
     if override:
         out.append(override)
 
-    venv = venv_python(root)
+    venv = venv_python()
     if venv:
         out.append(venv)
 

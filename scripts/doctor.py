@@ -9,11 +9,15 @@ carrying a parallel copy in PowerShell: two health checks that can disagree
 about what "working" means are worse than none, because the one you happen to
 run tells you the setup is fine.
 
-It tests whether things work rather than whether they look right. In particular
-it does not judge Python by version number - python-reapy has broken and been
-repaired across several releases, so a version gate encodes a claim that goes
-stale and starts failing setups that are actually fine. What matters is whether
-the imports succeed and the server starts, so that is what gets run.
+It tests whether things work rather than whether they look right: it runs the
+imports and starts the server rather than reading a version number and inferring
+the rest.
+
+There is one deliberate exception. Configuring REAPER is gated on Python 3.12 or
+older, because reapy 0.10 crashes partway through rewriting reaper.ini on 3.13+
+and leaves the file empty. That is a known-bad combination with a destructive
+outcome, not a guess about compatibility, so it is checked by version - and it
+applies only to that step. The server itself is judged by whether it runs.
 """
 
 from __future__ import annotations
@@ -42,9 +46,11 @@ REQUIRED_LAYOUT = (
 
 MANIFEST = ".claude-plugin/plugin.json"
 
-# The submodule, not just `mcp`: mcp 2.0 dropped mcp.server.fastmcp, so a bare
-# `import mcp` reports healthy on a version the server cannot run on.
-CORE_IMPORTS = ("mcp.server.fastmcp", "reapy", "numpy")
+# Imported from the launcher rather than restated, so this cannot report an
+# environment healthy against a different list from the one that actually
+# selects the interpreter. sys.path[0] is this script's directory when run as a
+# script, so the sibling import resolves.
+from launch_server import REQUIRED as CORE_IMPORTS  # noqa: E402
 
 # Installed by earlier versions of this project. This plugin contains everything
 # they did, and left in place they load in parallel with it.
