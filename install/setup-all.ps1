@@ -224,44 +224,73 @@ if ($SkipApps) {
         Add-Problem "Install REAPER (reaper.fm) and Claude (claude.ai/download) by hand - winget was unavailable."
     } else {
         foreach ($app in $Apps) {
-            $installed = (& winget list --id $app.Id --exact --source winget 2>&1 | Out-String) -match [regex]::Escape($app.Id)
+            # Each application is isolated.
+            #
+            # This loop previously ran bare under $ErrorActionPreference =
+            # 'Stop', so anything winget did that PowerShell treats as a
+            # terminating error - and merging a native command's stderr is
+            # enough - aborted the WHOLE run at that application. REAPER and
+            # Claude sit at the end of the list, so a hiccup on Python or Git
+            # took them with it, along with the plugin configuration below, and
+            # the output stopped mid-step with no line naming the cause.
+            #
+            # One application failing is now one application failing.
+            try {
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                try {
+                    $listing = & winget list --id $app.Id --exact --source winget 2>&1 | Out-String
+                } finally {
+                    $ErrorActionPreference = $prevEAP
+                }
+                $installed = $listing -match [regex]::Escape($app.Id)
 
-            # Remembered so the first-run steps below only fire for applications
-            # this run actually introduced. Opening and closing an app somebody
-            # already uses would be presumptuous, and pointless - it has a
-            # config and a session already.
-            $script:WasPresent[$app.Id] = $installed
+                # Remembered so the first-run steps below only fire for
+                # applications this run actually introduced. Opening and closing
+                # an app somebody already uses would be presumptuous, and
+                # pointless - it has a config and a session already.
+                $script:WasPresent[$app.Id] = $installed
 
-            if ($installed -and $app.Safe) {
-                Write-Ok "$($app.Name) is already installed - left untouched."
-                continue
-            }
-            if ($installed) {
-                Write-Info "$($app.Name) is already installed; checking for an upgrade."
-            } else {
-                Write-Info "Installing $($app.Name)..."
-            }
+                if ($installed -and $app.Safe) {
+                    Write-Ok "$($app.Name) is already installed - left untouched."
+                    continue
+                }
+                if ($installed) {
+                    Write-Info "$($app.Name) is already installed; checking for an upgrade."
+                } else {
+                    Write-Info "Installing $($app.Name)..."
+                }
 
-            # -e for an exact ID match: "REAPER" alone also matches an unrelated
-            # ScytheLabs.Reaper, and Python.Python.3 can resolve to Python 3.0.
-            # --source winget for the vendor's own installer rather than a Store
-            # package.
-            $wargs = @(
-                'install', '-e', '--id', $app.Id, '--source', 'winget',
-                '--accept-package-agreements', '--accept-source-agreements'
-            )
-            if ($app.Custom) { $wargs += @('--custom', $app.Custom) }
+                # -e for an exact ID match: "REAPER" alone also matches an
+                # unrelated ScytheLabs.Reaper, and Python.Python.3 can resolve to
+                # Python 3.0. --source winget for the vendor's own installer
+                # rather than a Store package.
+                $wargs = @(
+                    'install', '-e', '--id', $app.Id, '--source', 'winget',
+                    '--accept-package-agreements', '--accept-source-agreements'
+                )
+                if ($app.Custom) { $wargs += @('--custom', $app.Custom) }
 
-            & winget @wargs
-            $code = $LASTEXITCODE
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                try {
+                    & winget @wargs
+                    $code = $LASTEXITCODE
+                } finally {
+                    $ErrorActionPreference = $prevEAP
+                }
 
-            # 0x8A15002B / -1978335189: "no applicable upgrade found", i.e. it is
-            # already current. Not a failure.
-            if ($code -eq 0 -or $code -eq -1978335189) {
-                Write-Ok "$($app.Name) ready."
-            } else {
-                Write-Err "$($app.Name) install returned $code."
-                Add-Problem "Install $($app.Name) by hand, then re-run."
+                # 0x8A15002B / -1978335189: "no applicable upgrade found", i.e.
+                # it is already current. Not a failure.
+                if ($code -eq 0 -or $code -eq -1978335189) {
+                    Write-Ok "$($app.Name) ready."
+                } else {
+                    Write-Err "$($app.Name): winget exited $code."
+                    Add-Problem "$($app.Name) did not install (winget exit $code). Install it by hand, then re-run [1]."
+                }
+            } catch {
+                Write-Err "$($app.Name): $($_.Exception.Message)"
+                Add-Problem "$($app.Name) could not be installed - see the error above. The rest of the setup continued."
             }
         }
     }
