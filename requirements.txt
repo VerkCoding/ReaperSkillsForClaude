@@ -1,29 +1,22 @@
-# Dependencies for the REAPER MCP server.
+# Full dependency set for the REAPER MCP server.
 #
-# This is the single copy. `scripts/bootstrap.py` installs it into a virtualenv
-# the plugin owns, and hashes this file to decide whether a reinstall is needed,
-# so editing it is what triggers an update on the next bootstrap.
-#
-# Only mcp, python-reapy and numpy are needed for the server to start. The rest
-# are imported lazily by the tools that use them, so a failure to build one of
-# them costs a few analysis tools rather than the whole server.
-#
-# Deliberately absent: the PyPI packages `reaper_mcp` and `reaper_reapy_mcp`.
-# The server runs from bundled source on PYTHONPATH, which shadows site-packages
-# anyway, so installing them achieved nothing except a confusing second copy.
+# `scripts/bootstrap.py` installs this into a virtualenv the plugin owns, and
+# hashes the file to decide whether a reinstall is needed, so editing it is what
+# triggers an update on the next bootstrap.
 
-# Pinned below 2.0 on purpose. mcp 2.0 removed mcp.server.fastmcp - the API all
-# nine tool modules are written against - and replaced it with mcp.server
-# .mcpserver. With an open `>=1.0.0` range, a fresh clone installs 2.x and the
-# server cannot import, while the machine it was developed on keeps working
-# because it already had 1.x. Lift this only alongside a port of the tool
-# modules.
-mcp>=1.0.0,<2.0.0
-python-reapy>=0.10.0
-numpy>=1.24.0
+-r requirements-core.txt
 
-# Lazily imported: analysis and mastering measurement only.
+# Everything below is imported lazily, inside the functions that use it, and
+# powers only the offline analysis tools - loudness, spectrum, transients,
+# stereo field, clipping.
+#
+# It is also most of the install: librosa drags in llvmlite (117 MB), scipy
+# (116 MB), scikit-learn (45 MB) and numba (30 MB). Measured, this block is
+# 345 MB of the 477 MB total and 6,865 of the 12,212 files.
+#
+# `bootstrap.py --core` skips this block. The server starts and every structural
+# tool works; the analysis tools report that they need the full install. Worth
+# it on a disposable VM or a metered connection.
 librosa>=0.10.0
 pyloudnorm>=0.1.1
 soundfile>=0.12.0
-platformdirs>=3.0.0

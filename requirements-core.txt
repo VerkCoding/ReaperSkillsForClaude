@@ -1,0 +1,19 @@
+# The minimum for the MCP server to start and serve every structural tool:
+# projects, tracks, FX, MIDI, mixing, routing, rendering.
+#
+# Measured: 132 MB and 5,347 files, against 477 MB and 12,212 for the full set.
+# The difference is librosa's chain - llvmlite, scipy, scikit-learn, numba -
+# which powers three analysis tools and is imported lazily, so on a slow or
+# disposable machine `bootstrap.py --core` gets a working server much faster.
+
+# Pinned below 2.0 on purpose. mcp 2.0 removed mcp.server.fastmcp - the API all
+# nine tool modules are written against - and replaced it with mcp.server
+# .mcpserver. With an open `>=1.0.0` range, a fresh clone installs 2.x and the
+# server cannot import, while the machine it was developed on keeps working
+# because it already had 1.x. Lift this only alongside a port of the tool
+# modules.
+mcp>=1.0.0,<2.0.0
+
+python-reapy>=0.10.0
+numpy>=1.24.0
+platformdirs>=3.0.0

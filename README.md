@@ -187,6 +187,35 @@ shows no sign of the problem.
 Rebuild the environment, optionally with a different Python:
 `py -3.12 scripts\bootstrap.py --recreate`.
 
+**The dependency install is extremely slow** — especially in a VM or Windows
+Sandbox. Expected, and it is the size that does it: the full set is **477 MB
+across 12,212 files**, and `librosa`'s chain alone (`llvmlite` 117 MB, `scipy`
+116 MB, `scikit-learn` 45 MB, `numba` 30 MB) is 345 MB of that.
+
+A disposable environment makes it worse in three compounding ways: there is no
+pip wheel cache to reuse, so every byte is downloaded again; Defender scans all
+12,000-odd extracted files and cannot be turned off in Sandbox; and the
+virtualised disk is at its slowest with exactly this pattern — very many small
+files.
+
+Use the core install instead:
+
+```powershell
+python scripts\bootstrap.py --core
+```
+
+**132 MB, 5,347 files.** The server starts and all 58 tools register; only the
+offline analysis tools (loudness, spectrum, transients, stereo field, clipping)
+are unavailable, because those libraries are imported lazily. Run bootstrap
+again without `--core` later to add them.
+
+If it is not just slow but **stuck**, check whether pip is *building* rather
+than downloading — a line like `Building wheel for llvmlite`. That means no
+wheel exists for your Python version and pip is compiling LLVM, which takes
+about an hour and usually fails. Bootstrap passes `--only-binary=:all:` to
+prevent exactly this, so you would only see it with `--allow-source`. The fix is
+an older interpreter: `py -3.12 scripts\bootstrap.py --recreate`.
+
 **Socket error / `WinError 10053`** — run
 `python reaper\enable_reapy.py --check`. If it reports a web interface on 2306,
 that is the problem: `--repair`, then restart REAPER.
