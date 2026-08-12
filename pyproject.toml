@@ -20,8 +20,16 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 
+# requirements.txt and requirements-core.txt are authoritative - bootstrap.py
+# installs from those, and hashes them to decide when to reinstall. This list
+# exists so `pip install -e .` works for development and must be kept in step
+# with them.
+#
+# The mcp upper bound is not optional: mcp 2.0 removed mcp.server.fastmcp, the
+# API every tool module is written against, so an unpinned install produces a
+# server that cannot import.
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2.0.0",
     "python-reapy>=0.10.0",
     "numpy>=1.24.0",
     "librosa>=0.10.0",

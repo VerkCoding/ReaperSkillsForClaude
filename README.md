@@ -337,29 +337,40 @@ ReaperSkillsForClaude/              # marketplace root AND plugin root
 ├── .claude-plugin/
 │   ├── plugin.json                 #   the plugin manifest
 │   └── marketplace.json            #   lists this plugin, source "./"
-├── config/mcp.json                 # the `reaper` MCP server
-├── skills/
+├── skills/                         # documentation only, no executables
 │   ├── reaper-audio-engineer/      #   the engineering playbook
 │   │   ├── SKILL.md
-│   │   ├── references/{measurement,plugin-control,rendering}.md
-│   │   └── scripts/bridge.py       #   the file-bridge client
+│   │   └── references/{measurement,plugin-control,rendering}.md
 │   └── reaper-setup/SKILL.md       #   install, diagnose, repair
-├── bin/reaper-bridge               # bare command on the Bash tool's PATH
-├── scripts/
+├── scripts/                        # every cross-platform executable
 │   ├── launch_server.py            #   picks an interpreter, then serves
 │   ├── bootstrap.py                #   builds the dependency virtualenv
+│   ├── bridge.py                   #   the file-bridge client
 │   └── doctor.py                   #   the health check itself
+├── bin/reaper-bridge               # puts bridge.py on the Bash tool's PATH
 ├── src/reaper_mcp/                 # the MCP server
 ├── reaper/                         # REAPER-side assets
 │   ├── claude_bridge.lua
 │   └── enable_reapy.py
-└── install/{install.ps1,doctor.ps1}
+└── install/                        # Windows setup, PowerShell
+    ├── setup-all.ps1  revert-all.ps1  snapshot.ps1
+    ├── install.ps1    doctor.ps1      lib-apps.ps1
+    └── install-python.ps1  repair-winget.ps1
 ```
 
-`config/mcp.json` rather than `.mcp.json` on purpose: a root `.mcp.json` is also
-a *project* MCP config, so opening this folder in Claude Code would start the
-server twice — once as the plugin's and once as the project's, the second with
-`${CLAUDE_PLUGIN_ROOT}` unresolved.
+Three rules keep this navigable:
+
+- **`skills/` holds documentation and nothing else.** The bridge client used to
+  live under a skill while `bin/` reached in to run it; it is a plugin-level
+  tool, so it sits with the others.
+- **`scripts/` is every cross-platform executable**, whether it runs at setup
+  time or while the plugin is live. **`install/`** is the Windows-only
+  PowerShell that drives them.
+- **The MCP server is declared inline in `plugin.json`.** A root `.mcp.json`
+  would also be read as a *project* MCP config, starting the server twice when
+  this folder is opened in Claude Code — the second time with
+  `${CLAUDE_PLUGIN_ROOT}` unresolved. Inlining sidesteps that without needing a
+  separate file to point at.
 
 `doctor.ps1` is a thin wrapper around `doctor.py`. Two health checks that can
 disagree about what "working" means are worse than one, because whichever you
@@ -367,7 +378,7 @@ happen to run tells you the setup is fine.
 
 ### Starting the MCP server
 
-`config/mcp.json` runs `scripts/launch_server.py` with whatever `python` is on
+`plugin.json` runs `scripts/launch_server.py` with whatever `python` is on
 PATH. That interpreter is frequently the wrong one, and a stdio server that dies
 during startup surfaces only as *"server failed to connect"* — the real
 ImportError is invisible. So the launcher:
@@ -483,16 +494,16 @@ claude plugin marketplace remove reaper-skills-for-claude
 `install.ps1 -Only claude -Link` does both for you, and the health check flags
 the shadowed state.
 
-Changes to a `SKILL.md` apply immediately. Changes to `config/mcp.json` or
-`plugin.json` need `/reload-plugins` or a restart.
+Changes to a `SKILL.md` apply immediately. Changes to `plugin.json` need
+`/reload-plugins` or a restart.
 
 ## Porting
 
 Only `RunThisToStart.bat` and `install/*.ps1` are Windows-specific. The MCP
 server, `launch_server.py`, `bootstrap.py`, `doctor.py`, `bridge.py`,
 `enable_reapy.py` and the Lua listener are all cross-platform, so macOS or Linux
-support means writing an installer and changing `config/mcp.json` from `python`
-to `python3` — not touching any of the logic.
+support means writing an installer and changing the `command` in `plugin.json`
+from `python` to `python3` — not touching any of the logic.
 
 ## Credits
 

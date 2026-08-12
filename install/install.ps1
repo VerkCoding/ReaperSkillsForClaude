@@ -370,9 +370,15 @@ if ($doClaude) {
             Write-Info  "  /plugin marketplace add `"$PluginRoot`""
             Write-Info  "  /plugin install $PluginRef"
         } else {
-            & claude plugin marketplace add "$PluginRoot" 2>&1 |
+            # --scope user is the CLI default, but stated explicitly because it
+            # is the design intent rather than a convenience: the plugin belongs
+            # to this user account, in every project, and never to one
+            # repository or to the machine as a whole. A project-scoped install
+            # would work only inside this folder, which is not what anyone wants
+            # from an audio toolkit.
+            & claude plugin marketplace add "$PluginRoot" --scope user 2>&1 |
                 ForEach-Object { Write-Info $_ }
-            & claude plugin install $PluginRef 2>&1 |
+            & claude plugin install $PluginRef --scope user 2>&1 |
                 ForEach-Object { Write-Info $_ }
             if ($LASTEXITCODE -eq 0) {
                 Write-Ok "Installed $PluginRef"

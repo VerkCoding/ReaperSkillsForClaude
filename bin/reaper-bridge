@@ -24,7 +24,7 @@ while [ -L "$self" ]; do
 done
 
 root=$(cd "$(dirname "$self")/.." && pwd)
-script=$root/skills/reaper-audio-engineer/scripts/bridge.py
+script=$root/scripts/bridge.py
 
 [ -f "$script" ] || {
     echo "reaper-bridge: cannot find $script" >&2

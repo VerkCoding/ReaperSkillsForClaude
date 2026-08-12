@@ -32,13 +32,15 @@ ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_LAYOUT = (
     ".claude-plugin/plugin.json",
     ".claude-plugin/marketplace.json",
-    "config/mcp.json",
     "scripts/launch_server.py",
     "scripts/bootstrap.py",
+    "scripts/bridge.py",
     "src/reaper_mcp/server.py",
     "skills/reaper-audio-engineer/SKILL.md",
     "skills/reaper-setup/SKILL.md",
 )
+
+MANIFEST = ".claude-plugin/plugin.json"
 
 # The submodule, not just `mcp`: mcp 2.0 dropped mcp.server.fastmcp, so a bare
 # `import mcp` reports healthy on a version the server cannot run on.
@@ -176,20 +178,20 @@ def check_layout(r: Report) -> None:
 def check_mcp_command(r: Report) -> None:
     """The command Claude will actually launch has to exist on this machine.
 
-    config/mcp.json says `python`, and if that does not resolve, the server dies
+    The manifest says `python`, and if that does not resolve, the server dies
     before any of its own diagnostics can run - the host reports only "failed to
     connect", with no cause. Worth checking explicitly, because the fix is a
     one-word edit and the symptom points nowhere near it.
     """
     r.section("MCP launch command")
-    cfg = ROOT / "config" / "mcp.json"
+    cfg = ROOT / MANIFEST
     if not cfg.is_file():
-        r.fail("config/mcp.json is missing")
+        r.fail(f"{MANIFEST} is missing")
         return
     try:
-        command = json.loads(cfg.read_text())["mcpServers"]["reaper"]["command"]
+        command = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["reaper"]["command"]
     except Exception as e:
-        r.fail(f"config/mcp.json is not readable: {e}")
+        r.fail(f"{MANIFEST} does not declare the reaper server: {e}")
         return
 
     resolved = shutil.which(command)
@@ -199,12 +201,12 @@ def check_mcp_command(r: Report) -> None:
         alt = next((c for c in ("python3", "python") if shutil.which(c)), None)
         if alt:
             r.fail(
-                f"config/mcp.json launches `{command}`, which is not on PATH",
+                f"{MANIFEST} launches `{command}`, which is not on PATH",
                 f'Change "command" in {cfg} to "{alt}".',
             )
         else:
             r.fail(
-                f"config/mcp.json launches `{command}`, and no Python is on PATH at all",
+                f"{MANIFEST} launches `{command}`, and no Python is on PATH at all",
                 "Install Python (RunThisToStart.bat option 8 explains how) and reopen your terminal.",
             )
 

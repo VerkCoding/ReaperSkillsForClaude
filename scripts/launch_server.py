@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Entry point for the `reaper` MCP server, bundled with the plugin.
 
-`config/mcp.json` runs this with whatever `python` happens to be on PATH. That
+The plugin manifest runs this with whatever `python` happens to be on PATH. That
 interpreter is frequently the wrong one: `python-reapy` ships C-level and
 stdlib-sensitive code that has broken on several Python releases, and a user's
 default Python is whatever they installed last. Pointing the MCP config
@@ -58,7 +58,7 @@ def plugin_root() -> Path:
     """Locate the plugin directory.
 
     Claude Code and Claude Desktop both export CLAUDE_PLUGIN_ROOT into the MCP
-    subprocess, and config/mcp.json forwards it. Falling back to this file's
+    subprocess, and the manifest forwards it. Falling back to this file's
     grandparent keeps the script runnable by hand for debugging.
     """
     env = os.environ.get("REAPER_MCP_PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")

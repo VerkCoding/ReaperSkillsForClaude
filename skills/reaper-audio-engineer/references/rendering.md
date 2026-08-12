@@ -120,7 +120,7 @@ for ($i=0; $i -lt 40; $i++) {
 }
 ```
 
-`scripts/bridge.py` — the client behind `reaper-bridge` — does the equivalent for
+`scripts/bridge.py`, the client behind `reaper-bridge`, does the equivalent for
 ordinary commands by watching `out.txt`'s timestamp rather than sleeping, so it
 never returns the previous command's output. Raise `--timeout` for a render
 instead of polling by hand; reach for the side-file pattern above only when the

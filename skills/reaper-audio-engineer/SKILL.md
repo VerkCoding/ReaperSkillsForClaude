@@ -63,7 +63,7 @@ reaper-bridge --code 'return reaper.GetAppVersion()'
 it is not found, call the script directly:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/reaper-audio-engineer/scripts/bridge.py" --code 'return reaper.GetAppVersion()'
+python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.py" --code 'return reaper.GetAppVersion()'
 ```
 
 For anything longer than a line, write the Lua to a file with a file-writing
@@ -81,7 +81,7 @@ Rules that matter:
 
 If `${CLAUDE_PLUGIN_ROOT}` appears literally in the command instead of a real
 path, the host did not substitute it: find the plugin directory yourself (look
-for `skills/reaper-audio-engineer/scripts/bridge.py` under `~/.claude/plugins/`
+for `scripts/bridge.py` under `~/.claude/plugins/`
 or the repository) and use the absolute path.
 
 ## The Measure → Change → Verify loop
