@@ -127,7 +127,12 @@ try {
     # switch, and the call fails with "a positional parameter cannot be found".
     $snapArgs = @{ Backup = $true }
     if ($ReaperResourcePath) { $snapArgs['ReaperResourcePath'] = $ReaperResourcePath }
-    & (Join-Path $Here 'snapshot.ps1') @snapArgs | Out-Host | Out-Null
+    # Out-Null alone, not Out-Host. snapshot.ps1 reports progress with Write-Host,
+    # which bypasses the pipeline and is displayed either way, and returns the
+    # snapshot directory on the success stream for programmatic callers. Piping
+    # through Out-Host renders that path too, so the transcript showed the
+    # directory twice - once in the [ok] line and once bare.
+    & (Join-Path $Here 'snapshot.ps1') @snapArgs | Out-Null
     Write-Info "Undo this whole setup later with [2] Revert Everything."
 } catch {
     Write-Err "Could not take a snapshot: $_"
