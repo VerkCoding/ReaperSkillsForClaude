@@ -54,8 +54,15 @@ function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 $script:Problems = @()
 function Add-Problem($m) { $script:Problems += $m }
 
+# Which applications existed before this run. Populated during the install loop
+# and read by the first-run steps.
+$script:WasPresent = @{}
+
 $Here       = $PSScriptRoot
 $PluginRoot = Split-Path -Parent $Here
+
+# Dot-sourced so its helpers share these Write-* functions and $script: scope.
+. (Join-Path $Here 'lib-apps.ps1')
 
 # Applications, in dependency order. `Safe` means "leave it alone if present",
 # which is the whole of the promise not to touch user data.
@@ -75,16 +82,31 @@ Write-Host "===============================================" -ForegroundColor Cy
 Write-Info "Plugin: $PluginRoot"
 
 # ---------------------------------------------------------------------------
-# 0. REAPER must be closed before anything writes to reaper.ini, because REAPER
-#    rewrites that file when it exits and would discard everything.
+# 0. Get REAPER and Claude closed first.
+#
+#    Both of them hold their configuration in memory and write it back when they
+#    exit, so anything written underneath a running instance is discarded -
+#    reaper.ini for REAPER, claude_desktop_config.json for Claude. Asking first
+#    and closing second is the only way those writes survive.
+#
+#    Nothing is force-killed. The user is asked to save, and a close request is
+#    the same one the X button sends, so REAPER's save prompt still appears.
 # ---------------------------------------------------------------------------
-if (@(Get-Process -Name 'reaper' -ErrorAction SilentlyContinue).Count -gt 0 -and -not $Force) {
-    Write-Warn2 "REAPER is running."
-    Write-Info  "It rewrites reaper.ini when it exits, which would silently discard"
-    Write-Info  "the connection settings written below."
-    Write-Host  ""
-    Write-Host  "  Close REAPER, then press Enter to continue (or Ctrl+C to stop)." -ForegroundColor Yellow
-    [void](Read-Host)
+Write-Step "Closing REAPER and Claude"
+Write-Host ""
+Write-Host "  Please SAVE ANY OPEN WORK in REAPER and Claude now." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  Both need to be closed while this runs: they rewrite their own" -ForegroundColor Gray
+Write-Host "  settings when they exit, which would undo the setup." -ForegroundColor Gray
+Write-Host ""
+Write-Host "  Press Enter when your work is saved (Ctrl+C to stop)." -ForegroundColor Yellow
+[void](Read-Host)
+
+$reaperClosed = Request-AppClosed -Kind reaper -Label 'REAPER'
+$claudeClosed = Request-AppClosed -Kind claude -Label 'Claude'
+
+if (-not $reaperClosed) {
+    Add-Problem "REAPER stayed open, so its connection settings may not have been saved. Close it and re-run [1]."
 }
 
 # ---------------------------------------------------------------------------
@@ -148,6 +170,12 @@ if ($SkipApps) {
         foreach ($app in $Apps) {
             $installed = (& winget list --id $app.Id --exact --source winget 2>&1 | Out-String) -match [regex]::Escape($app.Id)
 
+            # Remembered so the first-run steps below only fire for applications
+            # this run actually introduced. Opening and closing an app somebody
+            # already uses would be presumptuous, and pointless - it has a
+            # config and a session already.
+            $script:WasPresent[$app.Id] = $installed
+
             if ($installed -and $app.Safe) {
                 Write-Ok "$($app.Name) is already installed - left untouched."
                 continue
@@ -192,6 +220,39 @@ if ($SkipApps) {
         (Join-Path $env:ProgramFiles 'Git\cmd')
     )) {
         if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$p;$env:PATH" }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 3b. First run.
+#
+# A freshly installed REAPER has no reaper.ini - the resource folder appears
+# only after it has run once - and a fresh Claude has no session. The rest of
+# the setup needs both, so rather than ending with "now go launch REAPER
+# yourself", do it here and wait.
+#
+# Only for applications this run installed. Anything that was already here has a
+# config and a session, and opening it uninvited would be presumptuous.
+# ---------------------------------------------------------------------------
+if (-not $SkipApps) {
+    $reaperWasNew = ($script:WasPresent.ContainsKey('Cockos.REAPER') -and -not $script:WasPresent['Cockos.REAPER'])
+    $claudeWasNew = ($script:WasPresent.ContainsKey('Anthropic.Claude') -and -not $script:WasPresent['Anthropic.Claude'])
+
+    if ($reaperWasNew -or $claudeWasNew) {
+        Write-Step "First run"
+
+        if ($reaperWasNew) {
+            $resource = if ($ReaperResourcePath) { $ReaperResourcePath } else { Join-Path $env:APPDATA 'REAPER' }
+            if (-not (Invoke-ReaperFirstRun -ReaperResourcePath $resource)) {
+                Add-Problem "REAPER has not created its configuration yet. Launch REAPER once, close it, then re-run [1]."
+            }
+        }
+
+        if ($claudeWasNew) {
+            if (-not (Invoke-ClaudeFirstRun)) {
+                Add-Problem "Sign in to Claude when convenient - the REAPER tools need a signed-in session."
+            }
+        }
     }
 }
 

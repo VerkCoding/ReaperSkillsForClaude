@@ -86,15 +86,23 @@ echo ===============================================
 echo   Install Everything
 echo ===============================================
 echo.
-echo   Close REAPER before continuing if it is open. REAPER
-echo   rewrites its settings file when it exits, which would
-echo   silently discard the connection setup.
+echo   SAVE YOUR WORK in REAPER and Claude first.
+echo.
+echo   This asks you to close both, then closes them for you
+echo   if they are still open. They rewrite their own settings
+echo   when they exit, so anything written while they run gets
+echo   discarded. Nothing is force-quit - REAPER's "save
+echo   changes?" prompt still appears and waits for you.
 echo.
 echo   This will:
 echo     1. back up your REAPER and Claude configuration
 echo     2. install Python, Git, and - only if missing -
 echo        REAPER and Claude
-echo     3. set up the plugin and run a health check
+echo     3. if it installed REAPER, open it once so it can
+echo        create its settings, then close it for you
+echo     4. if it installed Claude, open it and wait while
+echo        you sign in
+echo     5. set up the plugin and run a health check
 echo.
 echo   Everything comes from each vendor's own installer,
 echo   not the Microsoft Store.

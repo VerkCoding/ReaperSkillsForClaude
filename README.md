@@ -29,8 +29,43 @@ them:
 
 | | |
 | --- | --- |
-| **`[1]` Install Everything** | Snapshot → install missing applications → configure the plugin → health check |
+| **`[1]` Install Everything** | Close apps → snapshot → install what's missing → first run → configure the plugin → health check |
 | **`[2]` Revert Everything** | Restore that snapshot, remove what `[1]` added |
+
+### What `[1]` asks of you
+
+**Save your work first.** `[1]` asks you to close REAPER and Claude, waits, and
+then closes anything still open. Both hold their settings in memory and write
+them back on exit, so anything written underneath a running instance is
+discarded — that is not a precaution, it is the reason the setup would otherwise
+silently fail.
+
+Nothing is force-quit. The close request is the same one the X button sends, so
+REAPER's *"save changes?"* prompt still appears and waits for you. If an app
+does not close, `[1]` asks again rather than escalating.
+
+**If you run this from a terminal inside Claude**, `[1]` detects that Claude is
+its own host and refuses to close it — killing it would kill the installer.
+It says so, continues, and warns that Claude may revert the MCP entry it writes;
+restart Claude at the end if the REAPER tools are missing.
+
+### First run, when `[1]` installed something
+
+A freshly installed REAPER has **no `reaper.ini`** — the resource folder only
+appears after it has run once — and a fresh Claude has no session. Rather than
+finishing with "now go launch REAPER yourself", `[1]` handles both:
+
+- **REAPER** — opens it, waits for the configuration to appear (click through
+  any first-run dialog), then closes it and verifies the file exists.
+- **Claude** — opens it and waits while you sign in, checking every few seconds
+  and continuing on its own once a session exists. It confirms this from
+  Claude's config, not from a window being open, because a window can be open
+  with nobody signed in. Only the *presence* of a session is checked; no token
+  value is ever read.
+
+Both steps run **only for applications this run installed**. Anything already on
+your machine has a config and a session already, and opening it uninvited would
+be presumptuous.
 
 ### What `[1]` installs
 
