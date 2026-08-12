@@ -34,7 +34,12 @@
 #>
 [CmdletBinding()]
 param(
-    [switch]$Force
+    [switch]$Force,
+    # Set by setup-all.ps1. The advice to close the window and start again is
+    # right when this is run on its own from the menu, and wrong mid-install:
+    # the caller re-checks winget itself and carries straight on, so telling the
+    # user to restart makes a working run look like a failed one.
+    [switch]$Embedded
 )
 
 $ErrorActionPreference = 'Stop'
@@ -87,13 +92,20 @@ try {
     Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
     if (Test-Winget) {
         Write-Ok "winget is working: $(& winget --version)"
-        Write-Host ""
-        Write-Host "  Close this window and run RunThisToStart.bat again." -ForegroundColor Gray
+        if (-not $Embedded) {
+            Write-Host ""
+            Write-Host "  Close this window and run RunThisToStart.bat again." -ForegroundColor Gray
+        }
         exit 0
     }
     Write-Info "Registered, but winget still does not respond."
 } catch {
-    Write-Info "Not available to register: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+    # Expected whenever App Installer is genuinely absent rather than merely
+    # unregistered - a fresh Windows Sandbox, for instance, has nothing to
+    # register. 0x80073CF9 is the usual HRESULT here. It reads like a failure
+    # because it is one, but it is the cheap attempt, not the plan.
+    Write-Info "Nothing to register here ($($_.Exception.Message.Split([Environment]::NewLine)[0]))"
+    Write-Info "That is normal when App Installer was never present. Falling back..."
 }
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
@@ -160,9 +172,11 @@ try {
 
 if (Test-Winget) {
     Write-Ok "winget is working: $(& winget --version)"
-    Write-Host ""
-    Write-Host "  Close this window and run RunThisToStart.bat again so it picks" -ForegroundColor Gray
-    Write-Host "  up the new command." -ForegroundColor Gray
+    if (-not $Embedded) {
+        Write-Host ""
+        Write-Host "  Close this window and run RunThisToStart.bat again so it picks" -ForegroundColor Gray
+        Write-Host "  up the new command." -ForegroundColor Gray
+    }
     exit 0
 }
 

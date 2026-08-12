@@ -144,7 +144,7 @@ if ($SkipApps) {
     } else {
         Write-Info "winget is missing; attempting a repair..."
         try {
-            & (Join-Path $Here 'repair-winget.ps1') | Out-Host
+            & (Join-Path $Here 'repair-winget.ps1') -Embedded | Out-Host
         } catch {
             Write-Warn2 "winget repair did not succeed."
         }
