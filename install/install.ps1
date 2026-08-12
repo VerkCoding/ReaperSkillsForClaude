@@ -55,6 +55,30 @@ function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 $script:Problems = @()
 function Add-Problem($m) { $script:Problems += $m }
 
+function Invoke-Native {
+    <#
+      Run a native command without letting its stderr abort the script.
+
+      Windows PowerShell 5.1 wraps every stderr line from a native executable in
+      an ErrorRecord. Under $ErrorActionPreference = 'Stop' that is a TERMINATING
+      error, so a pip progress note or a warning from the claude CLI - output
+      that means nothing is wrong - throws NativeCommandError and takes the rest
+      of the install with it. Observed as:
+
+          [FAIL] Plugin configuration failed: RemoteException
+
+      which stops the REAPER bridge, the distant API and the Claude registration
+      from running at all, while the earlier steps report success.
+
+      Exit codes are what these commands actually communicate, and every caller
+      here already checks $LASTEXITCODE.
+    #>
+    param([scriptblock]$Block)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Block } finally { $ErrorActionPreference = $prev }
+}
+
 $doPython = (-not $Only) -or ($Only -eq 'python')
 $doReaper = (-not $Only) -or ($Only -eq 'reaper')
 $doClaude = (-not $Only) -or ($Only -eq 'claude')
@@ -112,7 +136,7 @@ if ($doPython) {
         # requirements changed, and whether the result actually imports. The
         # installer deliberately does not second-guess it, so there is one
         # implementation of that logic rather than two that can disagree.
-        & python $Bootstrap
+        Invoke-Native { & python $Bootstrap }
         if ($LASTEXITCODE -eq 0) {
             Write-Ok "Dependencies installed."
         } else {
@@ -279,7 +303,7 @@ end
             # Not $args - that is an automatic variable in PowerShell.
             $pyArgs = @($EnableRpy, '--resource-path', $ReaperResourcePath)
             if ($Force) { $pyArgs += '--force' }
-            Invoke-Reapy $pyArgs
+            Invoke-Native { Invoke-Reapy $pyArgs }
             if ($LASTEXITCODE -eq 0) {
                 Write-Ok "Distant API configured."
             } else {
@@ -342,7 +366,7 @@ if ($doClaude) {
         # which is why this clears them rather than printing advice.
         $claude = Get-Command claude -ErrorAction SilentlyContinue
         if ($claude) {
-            $listing = & claude plugin list 2>&1 | Out-String
+            $listing = Invoke-Native { & claude plugin list 2>&1 | Out-String }
             if ($listing -match [regex]::Escape($PluginRef)) {
                 Write-Info "Removing the marketplace install, which would shadow the link."
                 & claude plugin uninstall $PluginRef 2>&1 | ForEach-Object { Write-Info $_ }
@@ -376,10 +400,12 @@ if ($doClaude) {
             # repository or to the machine as a whole. A project-scoped install
             # would work only inside this folder, which is not what anyone wants
             # from an audio toolkit.
-            & claude plugin marketplace add "$PluginRoot" --scope user 2>&1 |
-                ForEach-Object { Write-Info $_ }
-            & claude plugin install $PluginRef --scope user 2>&1 |
-                ForEach-Object { Write-Info $_ }
+            Invoke-Native {
+                & claude plugin marketplace add "$PluginRoot" --scope user 2>&1 |
+                    ForEach-Object { Write-Info $_ }
+                & claude plugin install $PluginRef --scope user 2>&1 |
+                    ForEach-Object { Write-Info $_ }
+            }
             if ($LASTEXITCODE -eq 0) {
                 Write-Ok "Installed $PluginRef"
             } else {

@@ -127,7 +127,7 @@ try {
     # switch, and the call fails with "a positional parameter cannot be found".
     $snapArgs = @{ Backup = $true }
     if ($ReaperResourcePath) { $snapArgs['ReaperResourcePath'] = $ReaperResourcePath }
-    & (Join-Path $Here 'snapshot.ps1') @snapArgs | Out-Host
+    & (Join-Path $Here 'snapshot.ps1') @snapArgs | Out-Host | Out-Null
     Write-Info "Undo this whole setup later with [2] Revert Everything."
 } catch {
     Write-Err "Could not take a snapshot: $_"
@@ -284,13 +284,60 @@ if ($ReaperResourcePath) { $installArgs['ReaperResourcePath'] = $ReaperResourceP
 if ($Force)              { $installArgs['Force'] = $true }
 
 try {
-    & (Join-Path $Here 'install.ps1') @installArgs | Out-Host
+    # Same NativeCommandError hazard as inside install.ps1: pip and the claude
+    # CLI both write to stderr in normal operation, and under EAP 'Stop' that
+    # would abort the configuration this call exists to perform.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & (Join-Path $Here 'install.ps1') @installArgs | Out-Host
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
 } catch {
     Write-Err "Plugin configuration failed: $_"
     Add-Problem "Re-run this option once the error above is resolved."
 }
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# The one check that decides whether any of this worked.
+#
+# Everything above can report success while the server is unable to start - a
+# pip failure scrolls past, the plugin registers fine, the health check runs,
+# and the user is told to restart Claude. They then find "server disconnected"
+# with no idea which step let them down. Ask the launcher directly and say so in
+# terms nobody can scroll past.
+# ---------------------------------------------------------------------------
+$serverOk = $false
+if (Get-Command python -ErrorAction SilentlyContinue) {
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $null = & python (Join-Path $PluginRoot 'scripts\launch_server.py') --self-test 2>&1
+        $serverOk = ($LASTEXITCODE -eq 0)
+    } catch { }
+    $ErrorActionPreference = $prevEAP
+}
+
+if (-not $serverOk) {
+    Write-Host ""
+    Write-Host "===============================================" -ForegroundColor Red
+    Write-Host "  THE REAPER SERVER CANNOT START" -ForegroundColor Red
+    Write-Host "===============================================" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Everything else may have installed, but Claude will show" -ForegroundColor Yellow
+    Write-Host "  'reaper: server disconnected' until this is fixed." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  The dependencies are missing. Build them with:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "      python `"$PluginRoot\scripts\bootstrap.py`"" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  Watch that command for pip errors - if it failed during this" -ForegroundColor Gray
+    Write-Host "  install, the reason scrolled past above." -ForegroundColor Gray
+    Add-Problem "The REAPER server cannot start - run scripts\bootstrap.py and read its output."
+}
+
 Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan
 if ($script:Problems.Count -eq 0) {

@@ -193,15 +193,22 @@ def run_fallback(root: Path, detail: str) -> int:
     connected server carrying one honest diagnostic tool is far more useful:
     Claude can call it, read the fix, and tell the user what to do.
     """
+    # serve() must be inside the try, not after it. fallback.py imports mcp
+    # lazily, inside serve(), so with mcp genuinely absent the ModuleNotFoundError
+    # was raised past this guard and the process died on an unhandled traceback -
+    # burying the explanation this function exists to print under a stack dump.
     try:
         sys.path.insert(0, str(root / "src"))
         from reaper_mcp.fallback import serve  # noqa: PLC0415
+
+        serve(root, detail)
+        return 0
     except Exception as e:  # mcp itself is missing - nothing can be served
         log(f"Cannot start even the diagnostic server: {e}")
-        log(detail)
+        log("")
+        for line in detail.splitlines():
+            log(line)
         return 1
-    serve(root, detail)
-    return 0
 
 
 def self_test(root: Path) -> int:
