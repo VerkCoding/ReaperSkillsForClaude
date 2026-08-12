@@ -47,21 +47,9 @@ function Get-ProcPath {
     try { return $Process.Path } catch { return $null }
 }
 
-function Test-KeyPressed {
-    <#
-      Non-blocking keypress check, so a wait loop can offer "press a key to
-      skip" without giving up its polling. Guarded because [Console]::KeyAvailable
-      throws outright when stdin is redirected, which is exactly what happens if
-      anyone drives this from a script.
-    #>
-    try {
-        if ([Console]::KeyAvailable) {
-            [void][Console]::ReadKey($true)
-            return $true
-        }
-    } catch { }
-    return $false
-}
+# A non-blocking keypress helper lived here, so the sign-in wait could offer
+# "press any key to skip". Signing in is required now and leaving it is a typed
+# SKIP, so nothing used it any more.
 
 function Get-TargetProcesses {
     <#
@@ -104,6 +92,40 @@ function Test-SelfHostedBy {
 # ---------------------------------------------------------------------------
 # Closing
 # ---------------------------------------------------------------------------
+
+function Confirm-AppsClosed {
+    <#
+      Re-check that REAPER and Claude are still closed, and close anything that
+      came back.
+
+      Called after every point where the installer waited on the user. Between
+      the prompt and the answer, anything can have happened: REAPER restarted
+      from a jump list, Claude relaunched from the tray, or the user opened one
+      to check something before pressing Enter. Both applications rewrite their
+      settings from memory when they exit, so a single one that slipped back
+      open silently discards whatever is written next.
+
+      Cheap when there is nothing to do - it just enumerates processes.
+    #>
+    param([string]$Because = "")
+
+    $reopened = @()
+    foreach ($kind in @('reaper', 'claude')) {
+        if (@(Get-TargetProcesses $kind).Count -gt 0 -and -not (Test-SelfHostedBy $kind)) {
+            $reopened += $kind
+        }
+    }
+    if ($reopened.Count -eq 0) { return $true }
+
+    if ($Because) { Write-Info $Because }
+    $allClosed = $true
+    foreach ($kind in $reopened) {
+        $label = if ($kind -eq 'reaper') { 'REAPER' } else { 'Claude' }
+        Write-Warn2 "$label is open again - closing it before continuing."
+        if (-not (Request-AppClosed -Kind $kind -Label $label)) { $allClosed = $false }
+    }
+    return $allClosed
+}
 
 function Request-AppClosed {
     <#
@@ -159,6 +181,9 @@ function Request-AppClosed {
         Write-Info  "It may be showing a 'save changes?' prompt - answer it, then continue."
         Write-Host  "  Press Enter once $Label is closed (or to continue anyway)." -ForegroundColor Yellow
         [void](Read-Host)
+        # The next loop iteration re-enumerates and re-sends the close, so a
+        # window that reappeared while the prompt was waiting is caught here
+        # rather than surviving into the writes that follow.
     }
 
     if (@(Get-TargetProcesses $Kind).Count -eq 0) {
@@ -323,8 +348,11 @@ function Invoke-ReaperFirstRun {
             Start-Sleep -Seconds 3
             Write-Ok "REAPER created its configuration."
             [void](Request-AppClosed -Kind reaper -Label 'REAPER')
-            # REAPER writes reaper.ini again on exit, so re-confirm after closing.
-            Start-Sleep -Seconds 1
+            # REAPER writes reaper.ini again on exit, so give that write time to
+            # land, then make sure it did not come back up - a splash screen or
+            # a queued restart would otherwise still be holding the file.
+            Start-Sleep -Seconds 2
+            [void](Confirm-AppsClosed)
             return (Test-Path $ini)
         }
     }
@@ -333,6 +361,8 @@ function Invoke-ReaperFirstRun {
     Write-Host "  Finish any dialog it is showing, then press Enter." -ForegroundColor Yellow
     [void](Read-Host)
     [void](Request-AppClosed -Kind reaper -Label 'REAPER')
+    Start-Sleep -Seconds 2
+    [void](Confirm-AppsClosed)
     return (Test-Path $ini)
 }
 
@@ -361,9 +391,13 @@ function Invoke-ClaudeFirstRun {
     }
 
     Write-Host ""
-    Write-Host "  Sign in to Claude in the window that opened." -ForegroundColor Yellow
-    Write-Host "  This continues by itself once you are signed in." -ForegroundColor Yellow
-    Write-Host "  Press any key here to skip and carry on without signing in." -ForegroundColor Gray
+    Write-Host "  SIGN IN TO CLAUDE in the window that opened." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  This is required, not optional. Claude was just installed, so it" -ForegroundColor Yellow
+    Write-Host "  has no account attached - and without one it cannot load the" -ForegroundColor Yellow
+    Write-Host "  plugin or reach REAPER, which is the whole point of this setup." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  This continues by itself the moment you are signed in." -ForegroundColor Gray
     Write-Host ""
 
     $deadline   = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -373,9 +407,12 @@ function Invoke-ClaudeFirstRun {
 
     # Reopening extends the deadline, so without a cap the timeout can never be
     # reached and a Claude that fails to stay open - crashing at launch, say -
-    # would prompt forever.
-    $reopens    = 0
-    $maxReopens = 3
+    # would prompt forever. Refusals are counted separately: pressing Enter at
+    # the prompt means "retry", so that too needs a bound.
+    $reopens     = 0
+    $maxReopens  = 3
+    $refusals    = 0
+    $maxRefusals = 6
 
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 1000
@@ -385,17 +422,15 @@ function Invoke-ClaudeFirstRun {
             Write-Host ""
             Write-Ok "Signed in to Claude."
             [void](Request-AppClosed -Kind claude -Label 'Claude')
+            # Signing in often leaves Claude relaunching or restoring a window,
+            # so verify rather than trusting the first close.
+            [void](Confirm-AppsClosed)
             return $true
         }
 
-        # Skipping has to be possible. Without it, someone who decides not to
-        # sign in now has no way out of this loop but Ctrl+C, which would
-        # abandon the install halfway.
-        if (Test-KeyPressed) {
-            Write-Host ""
-            Write-Warn2 "Skipped at your request - no sign-in recorded."
-            return $false
-        }
+        # No keypress escape here, unlike the other waits. Signing in is
+        # required, so leaving it has to be a deliberate act rather than
+        # something a stray keystroke does - see the SKIP prompt below.
 
         # Two ways this stalls, both of which would otherwise burn the whole
         # timeout waiting on a window that is never going to be signed into:
@@ -415,27 +450,53 @@ function Invoke-ClaudeFirstRun {
             Write-Host ""
             Write-Warn2 $stall
 
-            if ($reopens -ge $maxReopens) {
-                Write-Info "Tried $maxReopens times. Carrying on without a session."
+            # Leaving without a session is possible, but only on purpose. A
+            # single keypress must not do it, because the result is a plugin
+            # that installs cleanly and then does nothing - the worst outcome
+            # to debug. Typing the word is the whole point.
+            if ($reopens -lt $maxReopens) {
+                Write-Host "    [Enter] open Claude again and keep waiting" -ForegroundColor Gray
+                Write-Host "    SKIP    continue without signing in (not recommended)" -ForegroundColor Gray
+            } else {
+                Write-Warn2 "Reopened $maxReopens times without a sign-in."
+                Write-Host "    [Enter] try once more" -ForegroundColor Gray
+                Write-Host "    SKIP    continue without signing in (not recommended)" -ForegroundColor Gray
+            }
+
+            # Case-insensitive, but still the whole word: the point is that
+            # leaving takes a deliberate four letters, not that the user has to
+            # guess the capitalisation.
+            $ans = Read-Host "  Type SKIP, or press Enter to retry"
+            if ("$ans".Trim() -eq 'SKIP') {
+                Write-Host ""
+                Write-Warn2 "Continuing WITHOUT a Claude sign-in, at your request."
+                Write-Info  "The plugin will be installed, but Claude cannot use it until"
+                Write-Info  "you sign in. Do that, then restart Claude."
                 return $false
             }
 
-            Write-Host "    [R] open it again and wait" -ForegroundColor Gray
-            Write-Host "    [S] skip - sign in later yourself" -ForegroundColor Gray
-            $ans = Read-Host "  Choose [R/S]"
-            if ($ans -match '^[Rr]') {
-                $reopens++
-                if (Start-ClaudeDesktop) {
-                    $sawRunning = $false
-                    $launchedAt = Get-Date
-                    $deadline   = (Get-Date).AddSeconds($TimeoutSeconds)
-                    Write-Info "Waiting again (attempt $reopens of $maxReopens)..."
-                    continue
-                }
-                Write-Warn2 "Could not reopen Claude."
+            $refusals++
+            if ($refusals -ge $maxRefusals) {
+                # Anything but SKIP means "retry", so an empty pipe or somebody
+                # leaning on Enter would loop here forever. Bounded, loudly.
+                Write-Host ""
+                Write-Warn2 "No sign-in after $maxRefusals attempts. Continuing without one."
+                Write-Info  "Sign in to Claude yourself, then restart it."
+                return $false
             }
-            Write-Info "Carrying on without a Claude session."
-            return $false
+
+            $reopens++
+            if (Start-ClaudeDesktop) {
+                $sawRunning = $false
+                $launchedAt = Get-Date
+                $deadline   = (Get-Date).AddSeconds($TimeoutSeconds)
+                Write-Info "Waiting again..."
+                continue
+            }
+            Write-Warn2 "Could not reopen Claude. Open it yourself and sign in."
+            $sawRunning = $false
+            $launchedAt = Get-Date
+            $deadline   = (Get-Date).AddSeconds($TimeoutSeconds)
         }
 
         if ($ticks % 30 -eq 0) {

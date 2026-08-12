@@ -250,7 +250,7 @@ if (-not $SkipApps) {
 
         if ($claudeWasNew) {
             if (-not (Invoke-ClaudeFirstRun)) {
-                Add-Problem "Sign in to Claude when convenient - the REAPER tools need a signed-in session."
+                Add-Problem "Claude is NOT signed in. The plugin is installed, but Claude cannot use it until you sign in and restart it."
             }
         }
     }
@@ -258,7 +258,15 @@ if (-not $SkipApps) {
 
 # ---------------------------------------------------------------------------
 # 4. The plugin itself. install.ps1 owns this and is unchanged by the wrapper.
+#
+# One last check before it runs. Everything below writes to files that REAPER
+# and Claude rewrite from memory on exit, and by now the user has been through
+# several prompts, an application install and possibly a sign-in - any of which
+# can have left one of them running again. This is the last moment where that is
+# still cheap to fix.
 # ---------------------------------------------------------------------------
+[void](Confirm-AppsClosed -Because "Checking both are still closed before writing any configuration.")
+
 Write-Step "Configuring the plugin"
 # Hashtable, for the same reason as the snapshot call above: an array splat is
 # positional, so '-Force' would bind to install.ps1's first parameter, -Only,

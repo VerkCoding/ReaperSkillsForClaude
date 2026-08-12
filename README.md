@@ -44,6 +44,13 @@ Nothing is force-quit. The close request is the same one the X button sends, so
 REAPER's *"save changes?"* prompt still appears and waits for you. If an app
 does not close, `[1]` asks again rather than escalating.
 
+It also **re-checks after every point where it waited on you** — after the save
+prompt, after REAPER's first run, after the Claude sign-in, and once more
+immediately before it writes any configuration. Between a prompt and your
+answer, an application can easily come back: REAPER from a jump list, Claude
+from the tray. One that slipped open would silently discard everything written
+next, so it is closed again rather than assumed.
+
 **If you run this from a terminal inside Claude**, `[1]` detects that Claude is
 its own host and refuses to close it — killing it would kill the installer.
 It says so, continues, and warns that Claude may revert the MCP entry it writes;
@@ -57,11 +64,18 @@ finishing with "now go launch REAPER yourself", `[1]` handles both:
 
 - **REAPER** — opens it, waits for the configuration to appear (click through
   any first-run dialog), then closes it and verifies the file exists.
-- **Claude** — opens it and waits while you sign in, checking every few seconds
-  and continuing on its own once a session exists. It confirms this from
-  Claude's config, not from a window being open, because a window can be open
-  with nobody signed in. Only the *presence* of a session is checked; no token
-  value is ever read.
+- **Claude** — opens it and waits while you sign in, continuing on its own once
+  a session exists. It confirms this from Claude's config, not from a window
+  being open, because a window can be open with nobody signed in. Only the
+  *presence* of a session is checked; no token value is ever read.
+
+  **Signing in is required here, not optional.** Claude has just been installed,
+  so it has no account attached, and without one it cannot load the plugin or
+  reach REAPER — which is the entire point of the setup. Closing the window or
+  pressing Enter reopens Claude and keeps waiting. Leaving without a session
+  takes typing `SKIP`, deliberately, because the alternative outcome is a plugin
+  that installs perfectly and then does nothing, which is a miserable thing to
+  diagnose.
 
 Both steps run **only for applications this run installed**. Anything already on
 your machine has a config and a session already, and opening it uninvited would
@@ -75,9 +89,9 @@ None of it is mandatory, and none of it hangs:
 | --- | --- |
 | Press Enter **without closing REAPER** | The REAPER connection step is **skipped, not attempted** — writing it under a running REAPER would only be discarded on exit. Reported at the end; close REAPER and re-run `[1]` to finish it. |
 | Press Enter **without closing Claude** | The setup continues and warns that Claude may revert the MCP entry it writes. If the REAPER tools are missing afterwards, close Claude fully and re-run `[1]`. |
-| **Close Claude without signing in** | Detected within seconds. You are offered *reopen* or *skip* — it does not sit there waiting out the timeout. |
-| **Never sign in**, or Claude fails to start | Capped: three reopen attempts, then it carries on without a session and says so. |
-| Decide to skip the sign-in | Press any key during the wait. |
+| **Close Claude without signing in** | Detected within seconds, and it reopens Claude rather than moving on — signing in is required. |
+| **Never sign in**, or Claude fails to start | Bounded: after six attempts it continues without a session and says loudly that the plugin cannot be used until you sign in. |
+| Want to skip the sign-in anyway | Type `SKIP` at the prompt. A keypress will not do it — see below. |
 
 Everything unfinished is listed at the end of `[1]`, and re-running it is safe.
 
