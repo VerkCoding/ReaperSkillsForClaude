@@ -10,9 +10,19 @@
   by executable path, and this script's own ancestry is excluded from anything
   that closes.
 
-  Nothing here is ever force-killed. REAPER prompts to save on a close request,
-  and a forced kill would throw that prompt away along with the user's work.
-  When a graceful close does not take, the answer is to ask the user again.
+  Closing is always polite first. CloseMainWindow is the same request the X
+  button sends, so REAPER's "save changes?" prompt appears and the user keeps
+  control of their work.
+
+  Escalating to a kill is allowed in exactly one situation: the first-run steps,
+  where this script opened the application itself moments earlier. There is no
+  project and no unsaved edit to lose, only a splash screen or a licence dialog
+  in the way, and making the user click through it is the clunky part worth
+  removing.
+
+  The user's own session is never killed. When they are asked to close REAPER at
+  the start, a refusal means asking again - hours of unsaved work is not
+  something to trade for a smoother install.
 #>
 
 # Deliberately no Set-StrictMode here. This file is dot-sourced, so a strict
@@ -106,8 +116,13 @@ function Confirm-AppsClosed {
       open silently discards whatever is written next.
 
       Cheap when there is nothing to do - it just enumerates processes.
+
+      -AllowForce is passed through for the first-run checks, where this script
+      opened the application itself. It is deliberately NOT used for the check
+      before the configuration writes: by then the user has been through several
+      prompts and may have reopened REAPER with a project in it.
     #>
-    param([string]$Because = "")
+    param([string]$Because = "", [switch]$AllowForce)
 
     $reopened = @()
     foreach ($kind in @('reaper', 'claude')) {
@@ -122,27 +137,43 @@ function Confirm-AppsClosed {
     foreach ($kind in $reopened) {
         $label = if ($kind -eq 'reaper') { 'REAPER' } else { 'Claude' }
         Write-Warn2 "$label is open again - closing it before continuing."
-        if (-not (Request-AppClosed -Kind $kind -Label $label)) { $allClosed = $false }
+        if (-not (Request-AppClosed -Kind $kind -Label $label -AllowForce:$AllowForce)) {
+            $allClosed = $false
+        }
     }
     return $allClosed
 }
 
 function Request-AppClosed {
     <#
-      Close an application, politely and repeatedly, never by force.
+      Close an application. Politely first, always.
 
       CloseMainWindow is the same request the X button sends, so REAPER's
       "save changes?" prompt appears and the user stays in control of their
-      work. If it is still running afterwards, that usually means such a prompt
-      is waiting - so ask, wait, and look again rather than escalating.
+      work. Still running afterwards usually means such a prompt is waiting.
 
-      Returns $true if the application is gone, $false if the user chose to
-      continue with it still running.
+      What happens then depends on -AllowForce: without it, ask the user and
+      look again; with it, end the process. See that parameter for why the
+      difference is safe.
+
+      Returns $true if the application is gone.
     #>
     param(
         [ValidateSet('reaper', 'claude')] [string]$Kind,
         [string]$Label,
-        [int]$GraceSeconds = 15
+        [int]$GraceSeconds = 15,
+        # Escalate to a hard kill instead of asking the user again.
+        #
+        # Only ever passed from the first-run steps, and the distinction is the
+        # whole safety argument: there, THIS SCRIPT opened the application
+        # seconds ago, so there is no project, no unsaved edit and no reason to
+        # negotiate. It is a splash screen or a licence dialog holding things
+        # up, and prompting a user to click through it is the clunky part.
+        #
+        # Never passed for the opening "close your apps" step. That one is the
+        # user's own running session, which may have hours of unsaved work in
+        # it, and no amount of convenience justifies taking that away.
+        [switch]$AllowForce
     )
 
     if (Test-SelfHostedBy $Kind) {
@@ -175,6 +206,26 @@ function Request-AppClosed {
                 Write-Ok "$Label closed."
                 return $true
             }
+        }
+
+        if ($AllowForce) {
+            # Stop-Process -Force is taskkill /F, done against the exact process
+            # IDs Get-TargetProcesses returned - which have already had this
+            # script's own ancestry and the Claude Code CLI filtered out of them.
+            # `taskkill /IM claude.exe` would have hit both, and one of those is
+            # frequently the terminal running this.
+            $doomed = @(Get-TargetProcesses $Kind)
+            Write-Warn2 "$Label did not close on request; ending it ($($doomed.Count) process(es))."
+            foreach ($p in $doomed) {
+                try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
+            }
+            Start-Sleep -Seconds 2
+            if (@(Get-TargetProcesses $Kind).Count -eq 0) {
+                Write-Ok "$Label closed."
+                return $true
+            }
+            Write-Warn2 "$Label survived that; continuing anyway."
+            return $false
         }
 
         Write-Warn2 "$Label is still running."
@@ -345,14 +396,17 @@ function Invoke-ReaperFirstRun {
         Start-Sleep -Seconds 1
         if (Test-Path $ini) {
             # Written progressively; let it settle before anything reads it.
+            # This wait matters more now that the close can be forced: REAPER
+            # must have finished writing the file we came here for before it is
+            # allowed to die without a clean exit.
             Start-Sleep -Seconds 3
             Write-Ok "REAPER created its configuration."
-            [void](Request-AppClosed -Kind reaper -Label 'REAPER')
+            [void](Request-AppClosed -Kind reaper -Label 'REAPER' -GraceSeconds 10 -AllowForce)
             # REAPER writes reaper.ini again on exit, so give that write time to
             # land, then make sure it did not come back up - a splash screen or
             # a queued restart would otherwise still be holding the file.
             Start-Sleep -Seconds 2
-            [void](Confirm-AppsClosed)
+            [void](Confirm-AppsClosed -AllowForce)
             return (Test-Path $ini)
         }
     }
@@ -360,9 +414,9 @@ function Invoke-ReaperFirstRun {
     Write-Warn2 "REAPER did not create reaper.ini within $TimeoutSeconds seconds."
     Write-Host "  Finish any dialog it is showing, then press Enter." -ForegroundColor Yellow
     [void](Read-Host)
-    [void](Request-AppClosed -Kind reaper -Label 'REAPER')
+    [void](Request-AppClosed -Kind reaper -Label 'REAPER' -GraceSeconds 10 -AllowForce)
     Start-Sleep -Seconds 2
-    [void](Confirm-AppsClosed)
+    [void](Confirm-AppsClosed -AllowForce)
     return (Test-Path $ini)
 }
 
@@ -421,10 +475,12 @@ function Invoke-ClaudeFirstRun {
         if (Test-ClaudeSignedIn) {
             Write-Host ""
             Write-Ok "Signed in to Claude."
-            [void](Request-AppClosed -Kind claude -Label 'Claude')
+            # The session is already on disk - that is what was just detected -
+            # so there is nothing for a clean shutdown to preserve.
+            [void](Request-AppClosed -Kind claude -Label 'Claude' -GraceSeconds 10 -AllowForce)
             # Signing in often leaves Claude relaunching or restoring a window,
             # so verify rather than trusting the first close.
-            [void](Confirm-AppsClosed)
+            [void](Confirm-AppsClosed -AllowForce)
             return $true
         }
 

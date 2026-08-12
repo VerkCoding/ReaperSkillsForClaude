@@ -40,9 +40,18 @@ them back on exit, so anything written underneath a running instance is
 discarded — that is not a precaution, it is the reason the setup would otherwise
 silently fail.
 
-Nothing is force-quit. The close request is the same one the X button sends, so
-REAPER's *"save changes?"* prompt still appears and waits for you. If an app
-does not close, `[1]` asks again rather than escalating.
+**Your own session is never force-quit.** The close request is the same one the
+X button sends, so REAPER's *"save changes?"* prompt still appears and waits for
+you. If an app does not close, `[1]` asks again rather than escalating — hours of
+unsaved work is not worth trading for a smoother install.
+
+There is one exception, and it is the opposite case: during [first
+run](#first-run-when-1-installed-something), `[1]` opened the application itself
+seconds earlier. There is no project and no unsaved edit — only a splash screen
+or licence dialog in the way — so after ten seconds of asking politely it ends
+the process rather than making you click through. Even then it targets exact
+process IDs with this script's own ancestry and the Claude Code CLI already
+filtered out, so it can never kill the terminal running it.
 
 It also **re-checks after every point where it waited on you** — after the save
 prompt, after REAPER's first run, after the Claude sign-in, and once more
