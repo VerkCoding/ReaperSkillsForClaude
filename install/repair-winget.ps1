@@ -81,14 +81,34 @@ function Get-File {
       which then gets saved under an .appx name and fails to install with an
       error about the package rather than about the network.
     #>
-    param([string]$Url, [string]$Path, [double]$MinMB)
+    param([string]$Url, [string]$Path, [double]$MinMB, [int]$Attempts = 3)
 
-    Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -UserAgent 'Mozilla/5.0'
-    $mb = (Get-Item $Path).Length / 1MB
-    if ($mb -lt $MinMB) {
-        throw ("downloaded only {0:N1} MB from {1} - expected at least {2} MB, so that is not the package" -f $mb, $Url, $MinMB)
+    # Retried, because these are large files over a connection that may not be
+    # good. A 207 MB download dropping at 60% is not a reason to give up and
+    # spend several minutes failing over to a route that works even less often -
+    # it is a reason to ask again.
+    $lastError = $null
+    for ($try = 1; $try -le $Attempts; $try++) {
+        try {
+            if (Test-Path $Path) { Remove-Item $Path -Force -ErrorAction SilentlyContinue }
+            Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -UserAgent 'Mozilla/5.0' -TimeoutSec 600
+            $mb = (Get-Item $Path).Length / 1MB
+            if ($mb -lt $MinMB) {
+                # A proxy or captive portal answers with an HTML login page and
+                # HTTP 200, which would otherwise be saved under an .appx name
+                # and fail later with an error about the package, not the network.
+                throw ("only {0:N1} MB - expected at least {1} MB, so that is not the package" -f $mb, $MinMB)
+            }
+            return $mb
+        } catch {
+            $lastError = $_.Exception.Message.Split([Environment]::NewLine)[0]
+            if ($try -lt $Attempts) {
+                Write-Warn2 ("  attempt {0} failed ({1}); retrying..." -f $try, $lastError)
+                Start-Sleep -Seconds (3 * $try)
+            }
+        }
     }
-    return $mb
+    throw ("could not download after {0} attempts: {1}" -f $Attempts, $lastError)
 }
 
 function Install-WingetDirect {
@@ -123,18 +143,26 @@ function Install-WingetDirect {
             Write-Info ("  {0:N1} MB" -f $mb)
         }
 
-        foreach ($p in $parts) {
-            $dest = Join-Path $tmp $p.File
-            Write-Info ("Installing {0}..." -f $p.Name)
-            try {
-                Add-AppxPackage -Path $dest -ErrorAction Stop
-            } catch {
-                # The dependencies are frequently already present and a newer
-                # version refuses to downgrade. That is not a failure unless the
-                # bundle itself cannot install.
-                if ($p.Name -eq 'winget') { throw }
-                Write-Info ("  already present or newer; continuing")
-            }
+        # One call, with the dependencies passed as dependencies.
+        #
+        # Installing them as three separate Add-AppxPackage calls is what fails
+        # with 0x80073CF3, "package failed updates, dependency or conflict
+        # validation": each call is validated on its own, so the deployment
+        # engine never gets to match the bundle's declared dependencies against
+        # the files provided, and a version or architecture that does not line
+        # up is only discovered at the end. -DependencyPath hands it everything
+        # at once and lets it do that matching itself.
+        $bundle = Join-Path $tmp 'winget.msixbundle'
+        $deps   = @((Join-Path $tmp 'VCLibs.appx'), (Join-Path $tmp 'UIXaml.appx'))
+
+        Write-Info "Installing winget with its dependencies..."
+        try {
+            Add-AppxPackage -Path $bundle -DependencyPath $deps -ErrorAction Stop
+        } catch {
+            # Retry without the dependencies: on a machine that already has them
+            # at a NEWER version, offering older copies is itself a conflict.
+            Write-Info "  retrying using the dependencies already on the machine..."
+            Add-AppxPackage -Path $bundle -ErrorAction Stop
         }
         return $true
     } finally {
@@ -213,8 +241,19 @@ try {
         Write-Info "Installed, but winget does not respond yet."
     }
 } catch {
-    Write-Warn2 "Direct install did not succeed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
-    Write-Info  "Falling back to the PowerShell Gallery route."
+    $msg = $_.Exception.Message.Split([Environment]::NewLine)[0]
+    Write-Warn2 "Direct install did not succeed: $msg"
+
+    # Name the common ones. An HRESULT on its own sends people to a search
+    # engine; the meaning is usually enough to know whether to retry.
+    switch -Regex ($msg) {
+        '0x80073CF3' { Write-Info "  That is a dependency or conflict problem, not a bad download." }
+        '0x80073CF9' { Write-Info "  That is 'install failed' - often a machine with app deployment restricted." }
+        '0x80073D02' { Write-Info "  Another install is in progress. Wait for it to finish and re-run." }
+        '0x80070005' { Write-Info "  Access denied - try running this as administrator." }
+        'connection'  { Write-Info "  That was the network, not the package. Re-running often just works." }
+    }
+    Write-Info "Falling back to the PowerShell Gallery route."
 }
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
@@ -289,7 +328,19 @@ if (Test-Winget) {
     exit 0
 }
 
-Write-Err "winget still does not respond after the repair."
+Write-Host ""
+Write-Err "Could not get winget working on this machine."
+Write-Host ""
+Write-Info "The setup continues without it: Python still installs directly from"
+Write-Info "python.org, which is the only thing it genuinely cannot do without."
+Write-Info "REAPER and Claude will need installing by hand -"
+Write-Info "    REAPER  https://www.reaper.fm/download.php"
+Write-Info "    Claude  https://claude.ai/download"
+Write-Info "then run [1] again; it fills in only what is missing."
+Write-Host ""
+Write-Info "If the failures above mention the connection, this is worth simply"
+Write-Info "retrying - a 207 MB download over a flaky link fails often enough."
+Write-Host ""
 Write-Info "Install 'App Installer' from the Microsoft Store, or install Python"
 Write-Info "by hand from https://www.python.org/downloads/ with 'Add python.exe"
 Write-Info "to PATH' ticked."
