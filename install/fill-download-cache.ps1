@@ -11,7 +11,7 @@
       copy the folder across, and [1] installs from disk.
 
     * The machine gets wiped between runs - Windows Sandbox, a test VM, a lab
-      image. Without a cache every single run re-downloads the same 300 MB
+      image. Without a cache every single run re-downloads the same 252 MB
       winget bundle, and repeating that often enough is how an address gets
       rate-limited and then blocked. Which is not hypothetical; it is why this
       script was written.
@@ -21,13 +21,11 @@
 
   What it fetches
   ---------------
-    the winget client and its three dependencies   (one archive, ~340 MB)
-    Python, Git, REAPER, Claude Desktop            (via `winget download`)
+    winget 1.8.1911 and its two dependencies   (~265 MB, from Microsoft)
+    Python, Git, REAPER, Claude Desktop        (via `winget download`)
 
-  The winget packages come from the offline bundle named in lib-cache.ps1 when
-  they are not already on disk, and from Microsoft's own links file by file when
-  that fails. Only packages are taken out of the archive; the scripts it also
-  contains are never run.
+  The winget packages come from pinned Microsoft URLs. The versions are not
+  incidental - see $RfcBootstrapFiles in lib-cache.ps1.
 
   Anything already in the cache is left alone, so this is safe to re-run and
   cheap when it has nothing to do. Nothing is installed. Nothing on this machine
@@ -111,10 +109,10 @@ function Register-CacheLocation {
       inside the cache.
 
       One place for this, because every kind of file that can already be here
-      has to be accounted for the same way. The App Runtime package was the one
-      that was not, and the consequence was a run that printed CACHE READY over
-      a folder with no runtime in it - which only fails later, on the offline
-      machine, where there is nothing left to fix it with.
+      has to be accounted for the same way. A file left out of it is a file
+      -Consolidate does not copy and the summary does not mention - which is a
+      run that prints CACHE READY over a folder that is missing something, and
+      only fails later on the offline machine where nothing can fix it.
     #>
     param([string]$Path, [string]$Name, [string]$Label)
 
@@ -152,49 +150,20 @@ function Register-CacheLocation {
 Write-Step "winget and its dependencies"
 
 # -Force clears the cache ONCE, here, before anything is fetched.
-#
-# It used to clear each file again inside the loop below, which ran after the
-# archive had been extracted - so -Force downloaded 340 MB and then deleted
-# three of the four packages it had just written and re-fetched them from
-# Microsoft. Only the runtime survived, and only because its check happened to
-# sit above the delete rather than below it.
 if ($Force) {
-    foreach ($n in (@($RfcBootstrapFiles.Name) + $RfcRuntimeMsix.Name)) {
+    foreach ($n in $RfcBootstrapFiles.Name) {
         Remove-Item (Join-Path $dir $n) -Force -ErrorAction SilentlyContinue
     }
 }
 
-# The archive first - one download carrying every package, the same source [1]
-# prefers. Extraction only; nothing in it is run, and every package taken out is
-# checked to be Microsoft-signed. Only asked for what is missing, and only when
-# the 207 MB bundle is among it: 340 MB to obtain a 7 MB VCLibs would be the
-# inversion this whole thing exists to avoid.
 $missing = Get-MissingBootstrap
 if ($missing.Count -eq 0) {
     Write-Ok "Every winget package is already on disk."
-} elseif (Test-MirrorWorthwhile -Missing $missing) {
-    [void](Expand-MirrorBundle -Only $missing)
 } else {
-    Write-Info ("Missing: {0}. Fetching those individually." -f ($missing -join ', '))
+    Write-Info ("Missing: {0}." -f ($missing -join ', '))
 }
 
 foreach ($f in $RfcBootstrapFiles) {
-    # The runtime comes in two forms and only one is needed. Having the 40 MB
-    # package is a reason not to fetch the 102 MB installer that does the same
-    # job, not a reason to have both.
-    if ($f.Name -like 'windowsappruntime.*') {
-        $rt = Get-CachedRuntime
-        if ($rt -and $rt.IsPackage) {
-            # Accounted for through the same path as everything else, because it
-            # is a file the offline machine cannot do without. Reported on its
-            # own, -Consolidate would have claimed a self-contained cache that
-            # had no runtime in it at all.
-            [void](Register-CacheLocation -Path $rt.Path -Name $rt.Spec.Name -Label $rt.Spec.Label)
-            Write-Info "  That is the package form, so Microsoft's 102 MB installer is not needed."
-            continue
-        }
-    }
-
     $have = Get-CachedFile -Name $f.Name -MinMB $f.MinMB -Match $f.Match
     if ($have) {
         [void](Register-CacheLocation -Path $have -Name $f.Name -Label $f.Label)

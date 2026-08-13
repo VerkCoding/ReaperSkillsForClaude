@@ -287,10 +287,10 @@ rather than working around it:
 1. **Register an App Installer that is already provisioned** — instant, offline,
    and the usual fix when winget is present but not registered for your user.
 2. **Deploy the packages directly** — the `Microsoft.DesktopAppInstaller`
-   bundle with VCLibs, UI.Xaml and the Windows App Runtime passed as one
-   `-DependencyPath` set. Needs nothing but HTTPS: no Gallery, no NuGet
-   provider, no Store. Nothing at all once cached. Where the files come from is
-   [below](#where-the-winget-packages-come-from).
+   bundle with VCLibs and UI.Xaml passed as one `-DependencyPath` set. Needs
+   nothing but HTTPS: no Gallery, no NuGet provider, no Store. Nothing at all
+   once cached. Three files, ~265 MB, all from Microsoft — see
+   [the pinned versions](#the-pinned-versions).
 3. **Microsoft's PowerShell Gallery bootstrap**, as the fallback —
    `Install-PackageProvider NuGet` → `Install-Module Microsoft.WinGet.Client` →
    `Repair-WinGetPackageManager`. What to try when step 2 is refused outright by
@@ -299,48 +299,57 @@ rather than working around it:
    `Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'`
    before doing anything.
 
-**Why step 2 is not last.** It used to be, costing over 300 MB where the Gallery
-route costs a few. That accounting was wrong: `Repair-WinGetPackageManager`
-downloads the *same* 207 MB bundle from the *same* host, and the few MB is only
-the module that then goes and fetches it. The real difference is 102 MB of
-Windows App Runtime — and what it buys. Step 2 leaves all four files on disk;
-the Gallery downloads into somewhere private and deletes it afterwards. On a
-machine wiped between runs that is the difference between paying 207 MB once and
-paying it every time.
+**Why step 2 is not last.** It used to be, on the grounds that it costs hundreds
+of MB where the Gallery route costs a few. That accounting was wrong:
+`Repair-WinGetPackageManager` downloads a winget bundle of its own from the same
+host, and the few MB is only the module that then goes and fetches it. Step 2
+leaves its files in `downloadCache`; the Gallery downloads into somewhere private
+and deletes it afterwards. On a machine wiped between runs that is the difference
+between paying once and paying every time.
 
 Each download is size-checked, so a proxy or captive portal answering with an
 HTML login page is rejected rather than saved under an `.appx` name and failing
 later with an error about the package.
 
-#### Where the winget packages come from
+#### The pinned versions
 
-1. **`downloadCache`, if they are already there** — nothing is downloaded. The
-   bundle is recognised under our name or its own, in `downloadCache\`, beside
-   `RunThisToStart.bat`, or in the folder above.
-2. **[EXLOUD/winget-installer](https://github.com/EXLOUD/winget-installer)** —
-   one ~340 MB archive carrying all four packages for every architecture. Only
-   the ones actually missing are extracted, and only **when the 207 MB bundle is
-   among them**: fetching 340 MB to obtain a 7 MB VCLibs would be the exact
-   inversion this exists to avoid. The archive itself is thrown away. It also
-   ships the App Runtime as a 40 MB framework `.msix` rather than Microsoft's
-   102 MB setup executable.
-3. **Microsoft's own links, file by file** — for anything still missing.
+| | |
+| --- | --- |
+| **winget** | `v1.8.1911` — `microsoft/winget-cli` releases, 252 MB |
+| **UI.Xaml** | `v2.8.6` — `microsoft/microsoft-ui-xaml` releases, 5 MB |
+| **VCLibs** | `14.00 Desktop` — `aka.ms/Microsoft.VCLibs.<arch>.14.00.Desktop.appx`, 7 MB |
 
-**Only packages are taken out of that archive. The `Install-Winget.ps1` and
-`Launcher.bat` it also contains are never run.** Running a stranger's script
-with administrator rights on every machine this plugin is installed on is not a
-trade worth making for a faster download.
+**These versions are load-bearing. Do not move them to `aka.ms/getwinget`.**
 
-What makes taking the *packages* defensible is that they are checked, twice.
-Each one is verified to carry a valid Microsoft Authenticode signature before it
-is allowed to stay in `downloadCache`, and `Add-AppxPackage` validates the same
-chain again at deployment. Anything that fails either is discarded and fetched
-from Microsoft instead.
+The current winget release declares a dependency 1.8 does not. Read straight off
+an installed client:
 
-That is a stronger guarantee than pinning a hash of the archive would be — a
-hash goes stale the moment upstream cuts a release, and GitHub allows a release
-asset to be replaced under the same tag, whereas a signature is a property of
-the packages themselves.
+```
+Microsoft.DesktopAppInstaller 1.29.279.0
+   dep: Microsoft.WindowsAppRuntime.1.8
+   dep: Microsoft.VCLibs.140.00
+   dep: Microsoft.VCLibs.140.00.UWPDesktop
+```
+
+That first line is the whole problem. Satisfying it means either a 102 MB setup
+executable that has to be run as a separate process, or a 40 MB framework
+package Microsoft does not publish standalone — and getting it wrong is the
+`0x80073CF3` "framework could not be found" that reads like a corrupt download
+and is not one.
+
+**1.8.1911 predates that dependency entirely.** Bundle plus two appx files, one
+`Add-AppxPackage` call, no separate installer process, no runtime to source. It
+is 252 MB against the newer bundle's 207 MB: 45 MB more to delete a whole class
+of failure.
+
+**On the second VCLibs.** The bundle also declares `Microsoft.VCLibs.140.00` —
+the plain UWP one, a *different* package from `.UWPDesktop` with a different
+family name. Microsoft has retired its standalone link:
+`aka.ms/Microsoft.VCLibs.x64.14.00.appx` now answers `200` with a **Bing search
+page**, so anything downloading it saves 66 KB of HTML under an `.appx` name. It
+is deliberately not fetched. In practice it is already present — any machine with
+a Store app has it — and where it is not, `Add-AppxPackage` names it, which beats
+silently installing a web page.
 
 Packages are also named and matched per architecture (`VCLibs.x64.appx`,
 `VCLibs.arm64.appx`). A cache filled on one machine and copied to a different

@@ -14,9 +14,9 @@
        no network, and fixes the common case where the package is provisioned
        but not registered for this user.
 
-    2. Deploy the packages directly - the bundle plus its Windows App Runtime,
-       VCLibs and UI.Xaml. Needs nothing but HTTPS: no Gallery, no NuGet
-       provider, no Store. Nothing at all when the files are cached.
+    2. Deploy the packages directly - the winget bundle plus VCLibs and
+       UI.Xaml. Needs nothing but HTTPS: no Gallery, no NuGet provider, no
+       Store. Nothing at all when the files are cached.
 
     3. Microsoft's documented PSGallery bootstrap, as the fallback:
 
@@ -27,12 +27,9 @@
   Where route 2's packages come from
   ----------------------------------
     a. downloadCache, if they are there. Nothing is downloaded.
-    b. $RfcMirrorBundle in lib-cache.ps1 - a third party's archive holding all
-       four - but only when the 207 MB bundle itself is among what is missing,
-       since it is 340 MB and everything else in it is available for less.
-       Extraction only; nothing in it is run, and every package taken out is
-       checked to be Microsoft-signed before it is kept.
-    c. Microsoft's own links, file by file, for whatever is still missing.
+    b. Microsoft's own links otherwise, file by file, each pinned to a specific
+       version. See $RfcBootstrapFiles in lib-cache.ps1 for why the versions
+       matter and are not free to move.
 
   Why route 2 is not last any more
   --------------------------------
@@ -135,17 +132,14 @@ function Install-WingetDirect {
       Where the files come from, in order:
 
         1. downloadCache, if they are already there. Nothing is downloaded.
-        2. The offline bundle - one archive with all of them. Extraction only;
-           nothing in it is executed. See $RfcMirrorBundle.
-        3. Microsoft's own links, file by file, for whatever is still missing.
+        2. Microsoft's own links, file by file, for whatever is still missing.
 
-      Four files, not three. winget also declares Microsoft.WindowsAppRuntime.1.8,
-      and without it the bundle fails with 0x80073CF3 naming a "framework that
-      could not be found", which reads like a corrupt download. It comes in two
-      forms: a 40 MB framework .msix, which is simply another dependency, or
-      Microsoft's 102 MB setup executable, which has to be run. The package is
-      preferred when there is one - smaller, and it makes the whole install a
-      single Add-AppxPackage call.
+      Three files, and that is the point of pinning winget to 1.8.1911. The
+      current release also declares Microsoft.WindowsAppRuntime.1.8, and without
+      it the bundle fails with 0x80073CF3 naming a "framework that could not be
+      found" - which reads like a corrupt download and is not one. 1.8 predates
+      that dependency, so the whole install is one Add-AppxPackage call with two
+      ordinary appx dependencies and no separate installer process.
     #>
     $tmp = Join-Path $env:TEMP ("winget-setup-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -154,76 +148,20 @@ function Install-WingetDirect {
     foreach ($f in $RfcBootstrapFiles) { $spec[$f.Name] = $f }
 
     try {
-        # The archive is one download instead of four, so it is preferred - but
-        # only for what is actually missing, and only when the 207 MB bundle is
-        # among it. Fetching 340 MB to obtain a 7 MB VCLibs would be the exact
-        # inversion this exists to avoid.
+        # Fetch whatever is not on disk. Three files, each from its own pinned
+        # URL - see $RfcBootstrapFiles in lib-cache.ps1 for why the versions are
+        # not free to move.
         $missing = Get-MissingBootstrap
         if ($missing.Count -eq 0) {
             Write-Info "Every package is already on disk. Nothing to download."
-        } elseif (Test-MirrorWorthwhile -Missing $missing) {
-            [void](Expand-MirrorBundle -Only $missing)
         } else {
-            Write-Info ("Missing: {0}. Small enough to fetch individually." -f ($missing -join ', '))
+            Write-Info ("Missing: {0}." -f ($missing -join ', '))
         }
 
         foreach ($name in @("VCLibs.$RfcArch.appx", "UIXaml.$RfcArch.appx", 'winget.msixbundle')) {
             [void](Get-BootstrapFile -File $spec[$name] -Path (Join-Path $tmp $name))
         }
         $deps = @((Join-Path $tmp "VCLibs.$RfcArch.appx"), (Join-Path $tmp "UIXaml.$RfcArch.appx"))
-
-        # The runtime, in whichever form is on disk - and INSTALLED, not merely
-        # offered.
-        #
-        # It has to actually be on the machine before the bundle goes in,
-        # because the retry below deliberately drops the dependency list. Handing
-        # the runtime over only as a -DependencyPath entry meant that when the
-        # first call failed for any reason, the retry ran against a machine with
-        # no runtime at all and failed with 0x80073CF3 - the very error the
-        # runtime is there to prevent. The executable form was always installed
-        # first for this reason; the package form must be too.
-        $runtime = Get-CachedRuntime
-        if (-not $runtime) {
-            # Nothing cached in either form: fetch Microsoft's installer.
-            #
-            # Taken from where it just landed rather than by asking the cache
-            # again. Get-BootstrapFile keeps a copy through Save-ToCache, which
-            # is best effort by design - a read-only or full downloadCache is an
-            # ordinary state - and re-deriving the path through Get-CachedRuntime
-            # would then find nothing and skip installing a 102 MB file sitting
-            # in $tmp, leaving the bundle to fail with the 0x80073CF3 this is
-            # here to prevent.
-            $exeSpec = $spec["windowsappruntime.$RfcArch.exe"]
-            $fetched = Join-Path $tmp $exeSpec.Name
-            [void](Get-BootstrapFile -File $exeSpec -Path $fetched)
-            $runtime = [pscustomobject]@{ Path = $fetched; Spec = $exeSpec; IsPackage = $false }
-        }
-
-        if ($runtime -and $runtime.IsPackage) {
-            $local = Join-Path $tmp $runtime.Spec.Name
-            if ($runtime.Path -ne $local) { Copy-Item -LiteralPath $runtime.Path -Destination $local -Force }
-            Write-Info ("Installing Windows App Runtime ({0:N1} MB package)..." -f ((Get-Item $local).Length / 1MB))
-            try {
-                Add-AppxPackage -Path $local -ErrorAction Stop
-            } catch {
-                # A newer runtime already present is the usual cause, and is
-                # fine. Passing it below as a dependency covers the rest.
-                Write-Info "  $($_.Exception.Message.Split([Environment]::NewLine)[0])"
-            }
-            $deps += $local
-        } elseif ($runtime) {
-            # Microsoft's form: an installer, not a package, so it cannot go
-            # through Add-AppxPackage with the others and has to run first.
-            $local = Join-Path $tmp $runtime.Spec.Name
-            if ($runtime.Path -ne $local) { Copy-Item -LiteralPath $runtime.Path -Destination $local -Force }
-            Write-Info "Installing Windows App Runtime..."
-            $proc = Start-Process -FilePath $local -ArgumentList '--quiet' -Wait -PassThru
-            if ($proc.ExitCode -ne 0) {
-                Write-Warn2 ("  runtime installer exited {0}; continuing anyway" -f $proc.ExitCode)
-            }
-        } else {
-            Write-Warn2 "No Windows App Runtime in either form; the bundle may refuse to install."
-        }
 
         # One call, with the dependencies passed as dependencies.
         #
@@ -241,24 +179,19 @@ function Install-WingetDirect {
         $bundle = Join-Path $tmp 'winget.msixbundle'
 
         # Offering a dependency the machine already has at a NEWER version is
-        # itself a conflict, so a failure is retried with fewer of them - but in
-        # steps, rather than dropping straight to none.
-        #
-        # The runtime goes first because it is the one most likely to collide: it
-        # has just been installed on its own above, so the copy offered here is
-        # redundant by the time this runs. Dropping all three in one go would
-        # also give up VCLibs and UI.Xaml, which on a stripped image are not
-        # present at any version and cannot be given up at all.
+        # itself a conflict, so a failure is retried without them. Handing them
+        # over is the right first move on a stripped image, where they are not
+        # present at any version; falling back is the right second one on a
+        # machine that already has newer copies registered.
         $attempts = @(
-            @{ Deps = $deps;         How = 'with its dependencies' }
-            @{ Deps = $deps[0..1];   How = 'without the runtime, which is installed already' }
-            @{ Deps = @();           How = 'using only what is already on the machine' }
+            @{ Deps = $deps; How = 'with its dependencies' }
+            @{ Deps = @();   How = 'using only what is already on the machine' }
         )
 
         for ($i = 0; $i -lt $attempts.Count; $i++) {
             $a = $attempts[$i]
-            # Skip a step that is identical to the previous one - there is no
-            # third entry to drop when the runtime never made it into $deps.
+            # Skip a step identical to the previous one, which happens when
+            # there was nothing left to drop.
             if ($i -gt 0 -and (@($a.Deps) -join '|') -eq (@($attempts[$i - 1].Deps) -join '|')) { continue }
 
             Write-Info "Installing winget $($a.How)..."
@@ -372,24 +305,14 @@ if (-not $isAdmin) {
 # So this goes second, cached or not, and the Gallery becomes the fallback for
 # the machines where app deployment is restricted and this cannot work at all.
 # ---------------------------------------------------------------------------
-# Said plainly, because the whole argument for using a third-party mirror is
-# that it is disclosed. A line claiming this comes from Microsoft while it
-# fetches a stranger's archive would give that away for nothing.
 $missingNow = Get-MissingBootstrap
 if ($missingNow.Count -eq 0) {
     Write-Info "Every winget package is already on disk. Installing from them."
-} elseif (Test-MirrorWorthwhile -Missing $missingNow) {
-    Write-Info "Installing winget. Missing: $($missingNow -join ', ')"
-    Write-Info "Source: $($RfcMirrorBundle.About)"
-    Write-Info "  $($RfcMirrorBundle.Url)"
-    Write-Info "That is a third party's copy of Microsoft's own packages, used because"
-    Write-Info "it is one download rather than four. Only the packages are taken from"
-    Write-Info "it, each checked to be Microsoft-signed; nothing in it is run. If any"
-    Write-Info "of that fails, Microsoft's own links are used instead."
 } else {
-    Write-Info "Installing winget from Microsoft. Missing: $($missingNow -join ', ')"
+    Write-Info "Installing $((Get-BootstrapSpec 'winget.msixbundle').Label) from Microsoft."
+    Write-Info "  Missing: $($missingNow -join ', ')"
+    Write-Info "Whatever is downloaded is kept in downloadCache, so this happens once."
 }
-Write-Info "Whatever is downloaded is kept in downloadCache, so this happens once."
 if (Invoke-DirectRoute) { Exit-Working }
 
 # ---------------------------------------------------------------------------
