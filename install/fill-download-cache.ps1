@@ -1,0 +1,233 @@
+<#
+.SYNOPSIS
+  Download everything the setup needs, now, into downloadCache.
+
+.DESCRIPTION
+  [1] Install Everything downloads as it goes. That is right for one machine on
+  a normal connection, and wrong in three situations this exists for:
+
+    * The machine that has to be set up cannot reach the internet, or is behind
+      something that blocks the vendors. Fill the cache on a machine that can,
+      copy the folder across, and [1] installs from disk.
+
+    * The machine gets wiped between runs - Windows Sandbox, a test VM, a lab
+      image. Without a cache every single run re-downloads the same 300 MB
+      winget bundle, and repeating that often enough is how an address gets
+      rate-limited and then blocked. Which is not hypothetical; it is why this
+      script was written.
+
+    * Several machines are being set up and downloading once is simply kinder
+      than downloading five times.
+
+  What it fetches
+  ---------------
+    the winget client and its three dependencies   (~310 MB)
+    Python, Git, REAPER, Claude Desktop            (via `winget download`)
+
+  Anything already in the cache is left alone, so this is safe to re-run and
+  cheap when it has nothing to do. Nothing is installed. Nothing on this machine
+  is changed outside the downloadCache folder.
+
+  What it will not fetch
+  ----------------------
+  Packages winget extracts rather than installs - Claude Code is one - are
+  downloaded, found to be unusable from disk, and deleted again with a note.
+  Installing those means reproducing winget's own bookkeeping (its Packages
+  directory, its Links folder, its PATH entry, its tracking file), and a
+  half-right version of that leaves a `claude` that winget cannot repair. Those
+  still need a real winget on the target machine.
+
+.PARAMETER Force
+  Re-download files that are already cached.
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File fill-download-cache.ps1
+#>
+[CmdletBinding()]
+param([switch]$Force)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'   # PS 5.1 progress bars make downloads several times slower
+
+function Write-Step($m) { Write-Host "`n=== $m" -ForegroundColor Cyan }
+function Write-Ok($m)   { Write-Host "  [ok]   $m" -ForegroundColor Green }
+function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
+function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
+function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
+
+. (Join-Path $PSScriptRoot 'lib-apps.ps1')
+. (Join-Path $PSScriptRoot 'lib-cache.ps1')
+
+Write-Host ""
+Write-Host "===============================================" -ForegroundColor Cyan
+Write-Host "  REAPER for Claude - prepare offline files" -ForegroundColor Cyan
+Write-Host "===============================================" -ForegroundColor Cyan
+
+$dir = Get-CacheDir -Create
+if (-not $dir) {
+    Write-Err "Could not create $RfcCacheDir"
+    Write-Info "This needs somewhere to put the files. Check the folder is writable."
+    exit 1
+}
+Write-Info "Into: $dir"
+Write-Info "Nothing is installed and nothing outside that folder is touched."
+
+try {
+    # Old Windows PowerShell still negotiates TLS 1.0, which these hosts refuse.
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {
+    Write-Warn2 "Could not force TLS 1.2; continuing."
+}
+
+$failed = @()
+
+# ---------------------------------------------------------------------------
+# 1. The winget client. The big one, and the one that matters most: it is what
+#    a wiped machine needs before it can fetch anything else at all.
+# ---------------------------------------------------------------------------
+Write-Step "winget and its dependencies"
+
+foreach ($f in $RfcBootstrapFiles) {
+    if ($Force) { Remove-Item (Join-Path $dir $f.Name) -Force -ErrorAction SilentlyContinue }
+
+    $have = Get-CachedFile -Name $f.Name -MinMB $f.MinMB
+    if ($have) {
+        Write-Ok ("{0}: already cached ({1:N1} MB)." -f $f.Label, ((Get-Item $have).Length / 1MB))
+        continue
+    }
+
+    # Downloaded to TEMP and copied in by Get-BootstrapFile, so a download that
+    # dies halfway cannot leave a truncated file in the cache under a name every
+    # later run will trust.
+    $tmp = Join-Path $env:TEMP ("rfc-fill-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+    try {
+        [void](Get-BootstrapFile -File $f -Path $tmp)
+        Write-Ok "$($f.Label) cached."
+    } catch {
+        Write-Err "$($f.Label): $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+        $failed += $f.Label
+    } finally {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 2. The applications, through winget itself.
+#
+#    `winget download` writes the installer and a merged manifest beside it,
+#    and that manifest is the point: it carries the silent switches and success
+#    codes for the file next to it. It is what lets setup-all install REAPER
+#    from disk without anybody having to know that REAPER's installer takes /S.
+# ---------------------------------------------------------------------------
+Write-Step "Applications"
+
+$wingetOk = $false
+if (Get-Command winget -ErrorAction SilentlyContinue) {
+    try { $null = & winget --version 2>&1; $wingetOk = ($LASTEXITCODE -eq 0) } catch { }
+}
+
+if (-not $wingetOk) {
+    Write-Warn2 "winget does not work on THIS machine, so the applications cannot be"
+    Write-Warn2 "downloaded here. The winget files above are cached either way, which"
+    Write-Warn2 "is the part a machine without winget cannot get for itself."
+} else {
+    foreach ($app in (Get-AppList)) {
+        $existing = Find-CachedPackage -Id $app.Id
+        if ($existing -and -not $Force) {
+            Write-Ok "$($app.Name) $($existing.Version): already cached."
+            continue
+        }
+        if ($existing -and $Force) {
+            Remove-Item $existing.Manifest, $existing.Installer -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Info "Downloading $($app.Name)..."
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            & winget download -e --id $app.Id --source winget -d $dir `
+                --accept-package-agreements --accept-source-agreements
+            $code = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prevEAP
+        }
+
+        if ($code -ne 0) {
+            Write-Warn2 "$($app.Name): winget download exited $code."
+            $failed += $app.Name
+            continue
+        }
+
+        # Downloaded is not the same as usable. A portable package has no
+        # installer to run, and leaving it here would be a hundred megabytes
+        # that every later run politely ignores.
+        $got = Find-CachedPackage -Id $app.Id
+        if (-not $got) {
+            Write-Warn2 "$($app.Name): downloaded, but no manifest turned up for it."
+            $failed += $app.Name
+            continue
+        }
+        if (-not (Test-CachedPackageUsable -Package $got)) {
+            Remove-Item $got.Manifest, $got.Installer -Force -ErrorAction SilentlyContinue
+            Write-Warn2 "$($app.Name) is a '$($got.Type)' package - winget extracts those"
+            Write-Warn2 "  rather than installing them, so a cached copy is no use. Removed."
+            Write-Info  "  That one still needs a working winget on the target machine."
+            continue
+        }
+        Write-Ok "$($app.Name) $($got.Version) cached."
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 3. Say what is there, in the folder itself as well as on screen. Somebody
+#    finding a 400 MB directory in six months deserves to know what it is.
+# ---------------------------------------------------------------------------
+$files = @(Get-ChildItem $dir -File -ErrorAction SilentlyContinue)
+$total = ($files | Measure-Object -Property Length -Sum).Sum / 1MB
+
+$readme = @"
+REAPER for Claude - downloadCache
+=================================
+
+Installer files, kept so a re-run does not download them again.
+
+Made by install\fill-download-cache.ps1. Used automatically by
+RunThisToStart.bat [1] Install Everything: anything in here is installed from
+disk instead of being fetched.
+
+Safe to delete. Deleting it only means the next install downloads again.
+
+To set up a machine that cannot reach the internet, copy this whole folder to
+the same place beside RunThisToStart.bat on that machine.
+
+Last filled: $((Get-Date).ToString('yyyy-MM-dd HH:mm'))
+"@
+try {
+    [System.IO.File]::WriteAllText((Join-Path $dir 'README.txt'), $readme,
+        (New-Object System.Text.UTF8Encoding $false))
+} catch { }
+
+Write-Host ""
+Write-Host "===============================================" -ForegroundColor Cyan
+if ($failed.Count -eq 0) {
+    Write-Host "  CACHE READY" -ForegroundColor Green
+} else {
+    Write-Host "  CACHE PARTLY FILLED" -ForegroundColor Yellow
+}
+Write-Host "===============================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Info ("{0} file(s), {1:N0} MB in {2}" -f $files.Count, $total, $dir)
+
+if ($failed.Count -gt 0) {
+    Write-Host ""
+    Write-Warn2 "These could not be downloaded: $($failed -join ', ')"
+    Write-Info  "Run this again later - whatever did work is kept and skipped."
+}
+
+Write-Host ""
+Write-Info "Run [1] Install Everything on this machine, or copy the downloadCache"
+Write-Info "folder beside RunThisToStart.bat on the machine you are setting up."
+Write-Host ""
+
+exit $(if ($failed.Count -eq 0) { 0 } else { 1 })

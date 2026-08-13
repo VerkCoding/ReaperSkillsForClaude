@@ -27,6 +27,19 @@
        but it costs over 300 MB once the Windows App Runtime the bundle depends
        on is counted. Hence last.
 
+  Except when the files are already here
+  --------------------------------------
+  "Cheapest first" is about bandwidth, and route 3 is only expensive because of
+  the download. If downloadCache already holds winget.msixbundle, that cost is
+  gone, so route 3 is promoted to the front: it is then the most reliable route
+  AND the cheapest, and it needs no network at all when the dependencies are
+  cached too.
+
+  Anything this does download is kept in downloadCache on the way past, so the
+  second run on a machine that gets wiped between runs - a Sandbox, a test VM -
+  costs nothing. See lib-cache.ps1 for why that matters: repeating a 200 MB
+  fetch often enough is what got the source blocked in the first place.
+
   Two adjustments to route 2, both about privilege:
 
     * -AllUsers requires an elevated session and fails without one. It is passed
@@ -35,8 +48,8 @@
     * Install-Module defaults to an AllUsers scope, which also needs elevation.
       The scope is chosen to match.
 
-  Everything past route 1 needs a working internet connection, and the whole
-  thing takes a minute or two.
+  Everything past route 1 needs a working internet connection, unless the cache
+  has been filled, and the whole thing takes a minute or two.
 
 .PARAMETER Force
   Run even when winget already works.
@@ -62,6 +75,9 @@ function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
 function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
 function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 
+# Dot-sourced after the Write-* helpers, which it uses to report cache hits.
+. (Join-Path $PSScriptRoot 'lib-cache.ps1')
+
 function Test-Winget {
     $cmd = Get-Command winget -ErrorAction SilentlyContinue
     if (-not $cmd) { return $false }
@@ -75,6 +91,17 @@ function Test-Winget {
     }
 }
 
+function Exit-Working {
+    <# The one success ending, said the same way wherever it is reached. #>
+    Write-Ok "winget is working: $(& winget --version)"
+    if (-not $Embedded) {
+        Write-Host ""
+        Write-Host "  Close this window and run RunThisToStart.bat again so it picks" -ForegroundColor Gray
+        Write-Host "  up the new command." -ForegroundColor Gray
+    }
+    exit 0
+}
+
 Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host "  winget - install or repair" -ForegroundColor Cyan
@@ -85,90 +112,41 @@ if ((Test-Winget) -and -not $Force) {
     exit 0
 }
 
-function Get-File {
-    <#
-      Download to a path, and refuse anything implausibly small.
-
-      A proxy or captive portal answers with an HTML login page and HTTP 200,
-      which then gets saved under an .appx name and fails to install with an
-      error about the package rather than about the network.
-    #>
-    param([string]$Url, [string]$Path, [double]$MinMB, [int]$Attempts = 3)
-
-    # Retried, because these are large files over a connection that may not be
-    # good. A 207 MB download dropping at 60% is not a reason to give up and
-    # spend several minutes failing over to a route that works even less often -
-    # it is a reason to ask again.
-    $lastError = $null
-    for ($try = 1; $try -le $Attempts; $try++) {
-        try {
-            if (Test-Path $Path) { Remove-Item $Path -Force -ErrorAction SilentlyContinue }
-            Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -UserAgent 'Mozilla/5.0' -TimeoutSec 600
-            $mb = (Get-Item $Path).Length / 1MB
-            if ($mb -lt $MinMB) {
-                # A proxy or captive portal answers with an HTML login page and
-                # HTTP 200, which would otherwise be saved under an .appx name
-                # and fail later with an error about the package, not the network.
-                throw ("only {0:N1} MB - expected at least {1} MB, so that is not the package" -f $mb, $MinMB)
-            }
-            return $mb
-        } catch {
-            $lastError = $_.Exception.Message.Split([Environment]::NewLine)[0]
-            if ($try -lt $Attempts) {
-                Write-Warn2 ("  attempt {0} failed ({1}); retrying..." -f $try, $lastError)
-                Start-Sleep -Seconds (3 * $try)
-            }
-        }
-    }
-    throw ("could not download after {0} attempts: {1}" -f $Attempts, $lastError)
-}
-
 function Install-WingetDirect {
     <#
       Install winget from Microsoft's own release, with its dependencies.
 
       This is the route that actually works where winget is genuinely absent -
       Windows Sandbox, Windows Server, a stripped image. It needs nothing but
-      HTTPS: no PowerShell Gallery, no NuGet provider, no Store.
+      HTTPS: no PowerShell Gallery, no NuGet provider, no Store. With a filled
+      downloadCache it needs not even that.
 
-      Three dependencies, not two. winget 1.29 also declares
+      Four files, not three. winget 1.29 also declares
       Microsoft.WindowsAppRuntime.1.8, which is not an appx but a 102 MB
       installer - and without it the bundle fails with 0x80073CF3 naming a
       "framework that could not be found", which reads like a corrupt download.
-      That is why this route is the last one tried: over 300 MB to achieve what
-      the Gallery route does with a few.
+      That is why this route is skipped when nothing is cached: over 300 MB to
+      achieve what the Gallery route does with a few.
     #>
     $tmp = Join-Path $env:TEMP ("winget-setup-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
-    $parts = @(
-        @{ Name = 'VCLibs';  Min = 3;   File = 'VCLibs.appx'
-           Url  = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx' }
-        @{ Name = 'UI.Xaml'; Min = 2;   File = 'UIXaml.appx'
-           Url  = 'https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx' }
-        @{ Name = 'winget';  Min = 100; File = 'winget.msixbundle'
-           Url  = 'https://aka.ms/getwinget' }
-    )
+    $spec = @{}
+    foreach ($f in $RfcBootstrapFiles) { $spec[$f.Name] = $f }
 
     try {
         # The Windows App Runtime first: it is a normal installer, not a package,
         # so it cannot be passed to Add-AppxPackage with the others.
         $runtime = Join-Path $tmp 'windowsappruntime.exe'
-        Write-Info "Downloading Windows App Runtime..."
-        $mb = Get-File -Url 'https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe' `
-                       -Path $runtime -MinMB 40
-        Write-Info ("  {0:N1} MB" -f $mb)
+        [void](Get-BootstrapFile -File $spec['windowsappruntime.exe'] -Path $runtime)
         Write-Info "Installing Windows App Runtime..."
         $proc = Start-Process -FilePath $runtime -ArgumentList '--quiet' -Wait -PassThru
         if ($proc.ExitCode -ne 0) {
             Write-Warn2 ("  runtime installer exited {0}; continuing anyway" -f $proc.ExitCode)
         }
 
-        foreach ($p in $parts) {
-            $dest = Join-Path $tmp $p.File
-            Write-Info ("Downloading {0}..." -f $p.Name)
-            $mb = Get-File -Url $p.Url -Path $dest -MinMB $p.Min
-            Write-Info ("  {0:N1} MB" -f $mb)
+        foreach ($name in @('VCLibs.appx', 'UIXaml.appx', 'winget.msixbundle')) {
+            [void](Get-BootstrapFile -File $spec[$name] -Path (Join-Path $tmp $name))
         }
 
         # One call, with the dependencies passed as dependencies.
@@ -198,6 +176,30 @@ function Install-WingetDirect {
     }
 }
 
+function Invoke-DirectRoute {
+    <#
+      Route 3, with its error reporting. Returns $true only if winget answers
+      afterwards, so the caller can carry on to the next route if it does not.
+    #>
+    try {
+        if (Install-WingetDirect) {
+            if (Test-Winget) { return $true }
+            Write-Info "Installed, but winget does not respond yet."
+        }
+    } catch {
+        $msg = $_.Exception.Message.Split([Environment]::NewLine)[0]
+        Write-Warn2 "Direct install did not succeed: $msg"
+        switch -Regex ($msg) {
+            '0x80073CF3' { Write-Info "  A dependency is missing or conflicts - not a bad download." }
+            '0x80073CF9' { Write-Info "  'Install failed' - often a machine with app deployment restricted." }
+            '0x80073D02' { Write-Info "  Another install is in progress. Wait for it, then re-run." }
+            '0x80070005' { Write-Info "  Access denied - try running this as administrator." }
+            'connection' { Write-Info "  That was the network, not the package. Re-running often just works." }
+        }
+    }
+    return $false
+}
+
 Write-Info "winget is the backbone of the install, so this tries hard to get it."
 Write-Host ""
 
@@ -213,14 +215,7 @@ Write-Host ""
 Write-Info "Trying to register the App Installer package already on this machine..."
 try {
     Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
-    if (Test-Winget) {
-        Write-Ok "winget is working: $(& winget --version)"
-        if (-not $Embedded) {
-            Write-Host ""
-            Write-Host "  Close this window and run RunThisToStart.bat again." -ForegroundColor Gray
-        }
-        exit 0
-    }
+    if (Test-Winget) { Exit-Working }
     Write-Info "Registered, but winget still does not respond."
 } catch {
     # Expected whenever App Installer is genuinely absent rather than merely
@@ -250,6 +245,23 @@ Write-Info ("Running " + $(if ($isAdmin) { "elevated" } else { "as a normal user
 if (-not $isAdmin) {
     Write-Info "A per-user repair will be attempted. If it fails, re-run this"
     Write-Info "as administrator for a machine-wide one."
+}
+
+# ---------------------------------------------------------------------------
+# The cache changes the order.
+#
+# Route 3 is normally last only because of its 300 MB. When the bundle is
+# already in downloadCache that objection disappears, and what is left is the
+# route with the fewest moving parts: no Gallery, no provider, no Store, no
+# round trip. So it goes first, and the Gallery bootstrap becomes the fallback
+# rather than the other way round.
+# ---------------------------------------------------------------------------
+$triedDirect = $false
+if (Get-CachedFile -Name 'winget.msixbundle' -MinMB 100) {
+    Write-Info "downloadCache already has the winget package - installing from it."
+    $triedDirect = $true
+    if (Invoke-DirectRoute) { Exit-Working }
+    Write-Info "The cached package did not take. Trying the other routes..."
 }
 
 # ---------------------------------------------------------------------------
@@ -294,8 +306,16 @@ if ($galleryOk) {
     # hiccup - seen on a Sandbox run that then had no package manager at all,
     # and so installed neither REAPER nor Claude. That is a dropped connection,
     # not a machine that cannot run winget, and asking again usually settles it.
+    #
+    # How many times depends on what is left to fall back to. A retry is the
+    # right answer to a dropped connection and the wrong answer to a host that
+    # has stopped replying on purpose - there, asking again is the thing that
+    # got the address blocked. So when the direct route is still ahead of us,
+    # stop at two and go spend the time on it; when it has already been tried
+    # and failed, there is nothing better to spend the time on, so try harder.
+    $attempts = if ($triedDirect) { 3 } else { 2 }
     $repaired = $false
-    for ($try = 1; $try -le 3; $try++) {
+    for ($try = 1; $try -le $attempts; $try++) {
         try {
             Write-Info "Repairing the winget client. This can take a couple of minutes..."
             if ($isAdmin) { Repair-WinGetPackageManager -AllUsers }
@@ -304,7 +324,7 @@ if ($galleryOk) {
             break
         } catch {
             $msg = $_.Exception.Message.Split([Environment]::NewLine)[0]
-            if ($try -lt 3) {
+            if ($try -lt $attempts) {
                 Write-Warn2 "  attempt $try failed ($msg); retrying..."
                 Start-Sleep -Seconds (5 * $try)
             } else {
@@ -316,15 +336,7 @@ if ($galleryOk) {
     if (-not $repaired) { $galleryOk = $false }
 }
 
-if (Test-Winget) {
-    Write-Ok "winget is working: $(& winget --version)"
-    if (-not $Embedded) {
-        Write-Host ""
-        Write-Host "  Close this window and run RunThisToStart.bat again so it picks" -ForegroundColor Gray
-        Write-Host "  up the new command." -ForegroundColor Gray
-    }
-    exit 0
-}
+if (Test-Winget) { Exit-Working }
 
 # ---------------------------------------------------------------------------
 # Last resort: install it straight from Microsoft's release.
@@ -335,30 +347,13 @@ if (Test-Winget) {
 # the Gallery route does with a few. It only earns its place when the Gallery
 # route cannot reach PowerShell Gallery at all, which is exactly the case it was
 # added for.
+#
+# Skipped when the cache already sent us down it at the top - the files would be
+# the same files and the failure the same failure.
 # ---------------------------------------------------------------------------
-Write-Info "Trying a direct download from Microsoft (over 300 MB)..."
-try {
-    if (Install-WingetDirect) {
-        if (Test-Winget) {
-            Write-Ok "winget is working: $(& winget --version)"
-            if (-not $Embedded) {
-                Write-Host ""
-                Write-Host "  Close this window and run RunThisToStart.bat again." -ForegroundColor Gray
-            }
-            exit 0
-        }
-        Write-Info "Installed, but winget does not respond yet."
-    }
-} catch {
-    $msg = $_.Exception.Message.Split([Environment]::NewLine)[0]
-    Write-Warn2 "Direct install did not succeed: $msg"
-    switch -Regex ($msg) {
-        '0x80073CF3' { Write-Info "  A dependency is missing or conflicts - not a bad download." }
-        '0x80073CF9' { Write-Info "  'Install failed' - often a machine with app deployment restricted." }
-        '0x80073D02' { Write-Info "  Another install is in progress. Wait for it, then re-run." }
-        '0x80070005' { Write-Info "  Access denied - try running this as administrator." }
-        'connection' { Write-Info "  That was the network, not the package. Re-running often just works." }
-    }
+if (-not $triedDirect) {
+    Write-Info "Trying a direct download from Microsoft (over 300 MB)..."
+    if (Invoke-DirectRoute) { Exit-Working }
 }
 
 Write-Host ""
@@ -373,6 +368,9 @@ Write-Info "then run [1] again; it fills in only what is missing."
 Write-Host ""
 Write-Info "If the failures above mention the connection, this is worth simply"
 Write-Info "retrying - a 300 MB download over a flaky link fails often enough."
+Write-Info "If they mention being blocked or refused, run [3] Prepare Offline"
+Write-Info "Files on a machine that can reach the internet and copy the"
+Write-Info "downloadCache folder across."
 Write-Host ""
 Write-Info "Install 'App Installer' from the Microsoft Store, or install Python"
 Write-Info "by hand from https://www.python.org/downloads/ with 'Add python.exe"

@@ -27,6 +27,18 @@
   vendor's real installer - reaper.fm, claude.ai, git-scm - rather than a
   Microsoft Store package.
 
+  downloadCache
+  -------------
+  If the folder of that name exists beside RunThisToStart.bat and holds the
+  installer for something that is missing, it is installed from there and
+  nothing is downloaded for it. That is the only difference it makes: an empty,
+  absent or unreadable cache changes nothing about what happens below.
+
+  It is filled by [3] Prepare Offline Files, and it exists for machines that
+  cannot reach the vendors - no internet, a corporate block, or an address that
+  has been rate-limited by being wiped and re-run too many times. See
+  lib-cache.ps1.
+
 .PARAMETER SkipApps
   Configure the plugin only; install no applications.
 
@@ -65,8 +77,9 @@ $script:WasPresent = @{}
 $Here       = $PSScriptRoot
 $PluginRoot = Split-Path -Parent $Here
 
-# Dot-sourced so its helpers share these Write-* functions and $script: scope.
+# Dot-sourced so their helpers share these Write-* functions and $script: scope.
 . (Join-Path $Here 'lib-apps.ps1')
+. (Join-Path $Here 'lib-cache.ps1')
 
 # ---------------------------------------------------------------------------
 # Whether installing Python may touch PATH.
@@ -111,16 +124,9 @@ $pythonCustom = if ($pathPythonUsable) {
     'PrependPath=1 InstallAllUsers=0 Include_test=0'
 }
 
-# Applications, in dependency order. `Safe` means "leave it alone if present",
-# which is the whole of the promise not to touch user data.
-$Apps = @(
-    [pscustomobject]@{ Id = 'Python.Python.3.12'; Name = 'Python 3.12'; Safe = $false
-                       Custom = $pythonCustom }
-    [pscustomobject]@{ Id = 'Git.Git';            Name = 'Git';          Safe = $false; Custom = $null }
-    [pscustomobject]@{ Id = 'Cockos.REAPER';      Name = 'REAPER';       Safe = $true;  Custom = $null }
-    [pscustomobject]@{ Id = 'Anthropic.Claude';   Name = 'Claude Desktop'; Safe = $true; Custom = $null }
-    [pscustomobject]@{ Id = 'Anthropic.ClaudeCode'; Name = 'Claude Code'; Safe = $true; Custom = $null }
-)
+# Applications, in dependency order. Defined in lib-apps.ps1 so
+# fill-download-cache.ps1 works from the same list.
+$Apps = Get-AppList -PythonCustom $pythonCustom
 
 # ---------------------------------------------------------------------------
 # Record the whole run to a file.
@@ -255,40 +261,42 @@ if ($SkipApps) {
     }
 
     Write-Step "Applications"
+
+    # downloadCache, if it has been filled, comes before every download below.
+    # See lib-cache.ps1 for the whole argument; the short version is that a
+    # machine wiped between runs pays the same 300 MB every time, and repeating
+    # that often enough is what gets an address blocked.
+    if (Get-CacheDir) {
+        Write-Info "downloadCache is here - anything in it is installed from disk."
+    }
     if (-not $haveWinget) {
-        # Python from python.org, which needs nothing but a network connection.
-        # Everything else in the plugin depends on it; REAPER and Claude do not
-        # have an equally stable direct URL, so those are named for the user
-        # rather than guessed at.
-        Write-Info "Installing Python directly from python.org..."
+        Write-Warn2 "winget is unavailable, so only downloadCache and python.org are left."
+    }
+
+    # Applications that ended up missing with no way to fetch them. Reported
+    # once, at the end, rather than five times in the middle.
+    $manual = @()
+
+    foreach ($app in $Apps) {
+        # Each application is isolated.
+        #
+        # This loop previously ran bare under $ErrorActionPreference =
+        # 'Stop', so anything winget did that PowerShell treats as a
+        # terminating error - and merging a native command's stderr is
+        # enough - aborted the WHOLE run at that application. REAPER and
+        # Claude sit at the end of the list, so a hiccup on Python or Git
+        # took them with it, along with the plugin configuration below, and
+        # the output stopped mid-step with no line naming the cause.
+        #
+        # One application failing is now one application failing.
         try {
-            & (Join-Path $Here 'install-python.ps1') -Version '3.12.10' | Out-Host
-        } catch {
-            Write-Err "Python could not be installed: $_"
-            Add-Problem "Install Python from https://www.python.org/downloads/ with 'Add python.exe to PATH' ticked."
-        }
-        Write-Host ""
-        Write-Info "REAPER and Claude cannot be fetched without winget. If you do"
-        Write-Info "not already have them:"
-        Write-Info "    REAPER  https://www.reaper.fm/download.php"
-        Write-Info "    Claude  https://claude.ai/download"
-        Write-Info "Install them, then run [1] again - everything else will be"
-        Write-Info "left as it is and only the missing pieces filled in."
-        Add-Problem "Install REAPER and Claude by hand (winget was unavailable), then re-run [1]."
-    } else {
-        foreach ($app in $Apps) {
-            # Each application is isolated.
+            # ---- is it already here? -------------------------------------
             #
-            # This loop previously ran bare under $ErrorActionPreference =
-            # 'Stop', so anything winget did that PowerShell treats as a
-            # terminating error - and merging a native command's stderr is
-            # enough - aborted the WHOLE run at that application. REAPER and
-            # Claude sit at the end of the list, so a hiccup on Python or Git
-            # took them with it, along with the plugin configuration below, and
-            # the output stopped mid-step with no line naming the cause.
-            #
-            # One application failing is now one application failing.
-            try {
+            # winget list is the better answer where there is a winget. Where
+            # there is not, the question still has to be answered, because a
+            # cached installer can now put REAPER on a machine that never had a
+            # package manager - and `Safe` has to keep meaning what it says.
+            if ($haveWinget) {
                 $prevEAP = $ErrorActionPreference
                 $ErrorActionPreference = 'Continue'
                 try {
@@ -297,67 +305,139 @@ if ($SkipApps) {
                     $ErrorActionPreference = $prevEAP
                 }
                 $installed = $listing -match [regex]::Escape($app.Id)
+            } else {
+                $installed = Test-AppPresent -Id $app.Id
+            }
 
-                # Remembered so the first-run steps below only fire for
-                # applications this run actually introduced. Opening and closing
-                # an app somebody already uses would be presumptuous, and
-                # pointless - it has a config and a session already.
-                $script:WasPresent[$app.Id] = $installed
+            # Remembered so the first-run steps below only fire for
+            # applications this run actually introduced. Opening and closing
+            # an app somebody already uses would be presumptuous, and
+            # pointless - it has a config and a session already.
+            $script:WasPresent[$app.Id] = $installed
 
-                if ($installed -and $app.Safe) {
-                    Write-Ok "$($app.Name) is already installed - left untouched."
+            if ($installed -and $app.Safe) {
+                Write-Ok "$($app.Name) is already installed - left untouched."
+                continue
+            }
+
+            if ($installed) {
+                if (-not $haveWinget) {
+                    # Nothing to upgrade with. A cached installer is no help
+                    # here either: it is a fixed version from whenever the cache
+                    # was filled, and reinstalling it over a working copy could
+                    # just as easily be a downgrade.
+                    Write-Ok "$($app.Name) is already installed."
                     continue
                 }
-                if ($installed) {
-                    Write-Info "$($app.Name) is already installed; checking for an upgrade."
-                } else {
-                    Write-Info "Installing $($app.Name)..."
-                }
+                Write-Info "$($app.Name) is already installed; checking for an upgrade."
+            } else {
+                Write-Info "Installing $($app.Name)..."
 
-                # -e for an exact ID match: "REAPER" alone also matches an
-                # unrelated ScytheLabs.Reaper, and Python.Python.3 can resolve to
-                # Python 3.0. --source winget for the vendor's own installer
-                # rather than a Store package.
-                $wargs = @(
-                    'install', '-e', '--id', $app.Id, '--source', 'winget',
-                    '--accept-package-agreements', '--accept-source-agreements'
-                )
-                if ($app.Custom) { $wargs += @('--custom', $app.Custom) }
-
-                # Retried, because winget's download step fails on a flaky
-                # connection with things like "InternetOpenUrl() failed,
-                # 0x80072f78" - a transient network error, not a package that
-                # cannot be installed. One retry turns most of those into a
-                # success rather than a line in the summary.
-                $prevEAP = $ErrorActionPreference
-                $ErrorActionPreference = 'Continue'
-                try {
-                    for ($attempt = 1; $attempt -le 2; $attempt++) {
-                        & winget @wargs
-                        $code = $LASTEXITCODE
-                        if ($code -eq 0 -or $code -eq -1978335189) { break }
-                        if ($attempt -eq 1) {
-                            Write-Warn2 ("  {0} failed (exit {1}); retrying once..." -f $app.Name, $code)
-                            Start-Sleep -Seconds 5
-                        }
+                # ---- the cache, but only for something genuinely missing ----
+                $cached = Find-CachedPackage -Id $app.Id
+                if ($cached) {
+                    Write-Info ("  downloadCache has {0} {1} - installing from disk." -f $app.Name, $cached.Version)
+                    # $app.Custom is appended after the manifest's own silent
+                    # switches, which is exactly what winget's --custom does.
+                    if (Install-CachedPackage -Package $cached -ExtraArgs $app.Custom) {
+                        Write-Ok "$($app.Name) ready (from downloadCache - nothing downloaded)."
+                        continue
                     }
-                } finally {
-                    $ErrorActionPreference = $prevEAP
+                    Write-Warn2 "  the cached copy did not install; falling back to a download."
                 }
-
-                # 0x8A15002B / -1978335189: "no applicable upgrade found", i.e.
-                # it is already current. Not a failure.
-                if ($code -eq 0 -or $code -eq -1978335189) {
-                    Write-Ok "$($app.Name) ready."
-                } else {
-                    Write-Err "$($app.Name): winget exited $code."
-                    Add-Problem "$($app.Name) did not install (winget exit $code). Install it by hand, then re-run [1]."
-                }
-            } catch {
-                Write-Err "$($app.Name): $($_.Exception.Message)"
-                Add-Problem "$($app.Name) could not be installed - see the error above. The rest of the setup continued."
             }
+
+            # ---- no winget, and the cache could not help ------------------
+            if (-not $haveWinget) {
+                if ($app.Id -like 'Python.Python.*') {
+                    # Python from python.org, which needs nothing but a network
+                    # connection. Everything else in the plugin depends on it,
+                    # so it is worth a route of its own; REAPER and Claude have
+                    # no equally stable direct URL, so those are named for the
+                    # user rather than guessed at.
+                    Write-Info "Installing Python directly from python.org..."
+                    # Its exit code, not just its exceptions. install-python.ps1
+                    # reports a failed download or a non-zero installer by
+                    # exiting 1, which throws nothing at all - so catching only
+                    # exceptions here would print "Python ready" over the top of
+                    # its own error message.
+                    $pyOk = $false
+                    try {
+                        & (Join-Path $Here 'install-python.ps1') -Version '3.12.10' | Out-Host
+                        $pyOk = ($LASTEXITCODE -eq 0)
+                    } catch {
+                        Write-Err "Python could not be installed: $_"
+                    }
+                    if ($pyOk) {
+                        Write-Ok "$($app.Name) ready."
+                    } else {
+                        Write-Err "$($app.Name) did not install."
+                        Add-Problem "Install Python from https://www.python.org/downloads/ with 'Add python.exe to PATH' ticked."
+                    }
+                } else {
+                    Write-Warn2 "$($app.Name) cannot be fetched without winget."
+                    $manual += $app.Name
+                }
+                continue
+            }
+
+            # ---- winget --------------------------------------------------
+            #
+            # -e for an exact ID match: "REAPER" alone also matches an
+            # unrelated ScytheLabs.Reaper, and Python.Python.3 can resolve to
+            # Python 3.0. --source winget for the vendor's own installer
+            # rather than a Store package.
+            $wargs = @(
+                'install', '-e', '--id', $app.Id, '--source', 'winget',
+                '--accept-package-agreements', '--accept-source-agreements'
+            )
+            if ($app.Custom) { $wargs += @('--custom', $app.Custom) }
+
+            # Retried, because winget's download step fails on a flaky
+            # connection with things like "InternetOpenUrl() failed,
+            # 0x80072f78" - a transient network error, not a package that
+            # cannot be installed. One retry turns most of those into a
+            # success rather than a line in the summary.
+            $prevEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                for ($attempt = 1; $attempt -le 2; $attempt++) {
+                    & winget @wargs
+                    $code = $LASTEXITCODE
+                    if ($code -eq 0 -or $code -eq -1978335189) { break }
+                    if ($attempt -eq 1) {
+                        Write-Warn2 ("  {0} failed (exit {1}); retrying once..." -f $app.Name, $code)
+                        Start-Sleep -Seconds 5
+                    }
+                }
+            } finally {
+                $ErrorActionPreference = $prevEAP
+            }
+
+            # 0x8A15002B / -1978335189: "no applicable upgrade found", i.e.
+            # it is already current. Not a failure.
+            if ($code -eq 0 -or $code -eq -1978335189) {
+                Write-Ok "$($app.Name) ready."
+            } else {
+                Write-Err "$($app.Name): winget exited $code."
+                Add-Problem "$($app.Name) did not install (winget exit $code). Install it by hand, then re-run [1]."
+            }
+        } catch {
+            Write-Err "$($app.Name): $($_.Exception.Message)"
+            Add-Problem "$($app.Name) could not be installed - see the error above. The rest of the setup continued."
         }
+    }
+
+    if ($manual.Count -gt 0) {
+        Write-Host ""
+        Write-Info "Without winget these have to come from somewhere else:"
+        Write-Info "    REAPER  https://www.reaper.fm/download.php"
+        Write-Info "    Claude  https://claude.ai/download"
+        Write-Info "Or, on a machine that can reach the internet, run [3] Prepare"
+        Write-Info "Offline Files and copy the downloadCache folder onto this one."
+        Write-Info "Either way, run [1] again afterwards - everything already done"
+        Write-Info "is left alone and only the missing pieces filled in."
+        Add-Problem ("Install {0} by hand (winget was unavailable), then re-run [1]." -f ($manual -join ' and '))
     }
 
     # A process reads PATH once at startup, so anything installed above is

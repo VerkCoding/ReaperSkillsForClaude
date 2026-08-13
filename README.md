@@ -24,13 +24,20 @@ That is the whole thing. It backs up your current configuration, installs
 anything missing, sets up the plugin, and runs a health check. Then start
 REAPER, restart Claude, and ask *"Check the current REAPER project info."*
 
-There are two options, because everything the setup does belongs to one of
-them:
+There are two options for the setup itself, because everything it does belongs
+to one of them:
 
 | | |
 | --- | --- |
 | **`[1]` Install Everything** | Close apps → snapshot → install what's missing → first run → configure the plugin → health check |
 | **`[2]` Revert Everything** | Restore that snapshot, remove what `[1]` added |
+| **`[3]` Prepare Offline Files** | Download what `[1]` needs into `downloadCache\` and install nothing |
+
+`[3]` is not a third way to install. It is for the machine that is not the one
+being set up: fill the cache somewhere with a working connection, copy the
+`downloadCache` folder next to `RunThisToStart.bat` on the target, and `[1]`
+installs from disk without downloading anything. See
+[Installing without internet](#installing-without-internet).
 
 ### What `[1]` asks of you
 
@@ -223,6 +230,7 @@ own, and `[1]` is just the two of them in order:
 | `doctor.ps1` | Health check. Changes nothing. Run it any time. |
 | `install-python.ps1` | Python only, winget or direct download. |
 | `repair-winget.ps1` | Install or repair winget itself. |
+| `fill-download-cache.ps1` | Everything `[3]` does. `-Force` re-fetches what is already cached. |
 
 The health check is worth knowing about by name — `[1]` runs it at the end, but
 it is the thing to reach for whenever something stops working:
@@ -274,24 +282,63 @@ wheels for a brand-new Python. And more seriously:
 
 **No winget?** It ships with App Installer, absent on a fresh Windows Server, on
 images built without the Store, and inside Windows Sandbox. `[1]` installs it
-rather than working around it, in this order:
+rather than working around it, cheapest route first:
 
 1. **Register an App Installer that is already provisioned** — instant, offline,
    and the usual fix when winget is present but not registered for your user.
-2. **Download it from Microsoft's release** — VCLibs, UI.Xaml and the
-   ~207 MB `Microsoft.DesktopAppInstaller` bundle, installed in that order
-   because the bundle declares the other two as dependencies. Needs nothing but
-   HTTPS, which is why it is the route that works on the machines that lack
-   winget.
-3. **Microsoft's PowerShell Gallery bootstrap** — last, because it fails on
-   precisely those machines: the inbox `PackageManagement` module cannot fetch
-   its provider list and reports
+2. **Microsoft's PowerShell Gallery bootstrap** — `Install-PackageProvider
+   NuGet` → `Install-Module Microsoft.WinGet.Client` → `Repair-WinGetPackageManager`.
+   A few MB, and the route that succeeds most often. It fails on machines that
+   cannot reach PowerShell Gallery, where the inbox `PackageManagement` module
+   reports
    `Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'`
    before doing anything.
+3. **Download it from Microsoft's release** — the Windows App Runtime, VCLibs,
+   UI.Xaml and the ~207 MB `Microsoft.DesktopAppInstaller` bundle, installed
+   with the last three passed as one `-DependencyPath` set. Needs nothing but
+   HTTPS, so it works where step 2 cannot — but over 300 MB, hence last.
+
+**Unless the files are already here.** If `downloadCache\winget.msixbundle`
+exists, step 3 costs nothing and goes *first* — it is then both the cheapest
+route and the one with the fewest moving parts. Anything downloaded along the
+way is kept in `downloadCache` for next time.
 
 Each download is size-checked, so a proxy or captive portal answering with an
 HTML login page is rejected rather than saved under an `.appx` name and failing
 later with an error about the package.
+
+### Installing without internet
+
+`[3] Prepare Offline Files` downloads everything `[1]` would download — the
+winget client and its dependencies, plus Python, Git, REAPER and Claude Desktop
+— into a `downloadCache\` folder beside `RunThisToStart.bat`, and installs
+nothing. Copy that folder to the same place on the target machine and `[1]`
+installs from disk.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install\fill-download-cache.ps1
+```
+
+- **Nothing is guessed.** The applications are fetched with `winget download`,
+  which writes a manifest beside each installer. That manifest carries the
+  silent switches and success codes, so `[1]` runs REAPER's installer with
+  exactly the arguments winget would have used.
+- **The cache is only ever an optimisation.** Absent, empty, unreadable or
+  half-filled, `[1]` behaves exactly as it does today and downloads what it
+  needs.
+- **Only for things that are missing.** An application already on the machine is
+  never replaced by a cached copy — it would be a fixed version from whenever
+  the cache was filled, and that is as likely to be a downgrade as an upgrade.
+- **Claude Code is the exception.** winget extracts it rather than running an
+  installer, and reproducing that bookkeeping — its `Packages` directory,
+  `Links` folder, PATH entry and tracking file — to save one download is a bad
+  trade. It still needs a working winget.
+- **`downloadCache` is gitignored** and safe to delete at any time.
+
+This also matters for machines that are *wiped* rather than offline — a Windows
+Sandbox, a test VM, a lab image. Without a cache every run re-downloads the same
+300 MB, and repeating that often enough is how an address gets rate-limited and
+then blocked outright.
 
 
 ## What runs where
@@ -438,8 +485,12 @@ ReaperSkillsForClaude/              # marketplace root AND plugin root
 └── install/                        # Windows setup, PowerShell
     ├── setup-all.ps1  revert-all.ps1  snapshot.ps1
     ├── install.ps1    doctor.ps1      lib-apps.ps1
-    └── install-python.ps1  repair-winget.ps1
+    ├── install-python.ps1  repair-winget.ps1
+    └── fill-download-cache.ps1  lib-cache.ps1
 ```
+
+`downloadCache/` appears beside `RunThisToStart.bat` once `[3]` has run. It is
+gitignored, holds only vendor installers, and is safe to delete.
 
 Three rules keep this navigable:
 

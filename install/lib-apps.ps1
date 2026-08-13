@@ -382,6 +382,74 @@ function Start-ClaudeDesktop {
     return $false
 }
 
+function Get-AppList {
+    <#
+      The applications, in dependency order. `Safe` means "leave it alone if
+      present", which is the whole of the promise not to touch user data.
+
+      Lives here rather than in setup-all.ps1 because two scripts need the same
+      list and neither owns it: setup-all installs them, and
+      fill-download-cache.ps1 downloads them ahead of time. A list kept in two
+      files is a list that will disagree with itself.
+
+      -PythonCustom is setup-all's decision about whether Python may take over
+      PATH, which is not a decision this list should be making. Empty is fine
+      for any caller that is only naming the packages.
+    #>
+    param([string]$PythonCustom)
+
+    @(
+        [pscustomobject]@{ Id = 'Python.Python.3.12';   Name = 'Python 3.12';     Safe = $false; Custom = $PythonCustom }
+        [pscustomobject]@{ Id = 'Git.Git';              Name = 'Git';             Safe = $false; Custom = $null }
+        [pscustomobject]@{ Id = 'Cockos.REAPER';        Name = 'REAPER';          Safe = $true;  Custom = $null }
+        [pscustomobject]@{ Id = 'Anthropic.Claude';     Name = 'Claude Desktop';  Safe = $true;  Custom = $null }
+        [pscustomobject]@{ Id = 'Anthropic.ClaudeCode'; Name = 'Claude Code';     Safe = $true;  Custom = $null }
+    )
+}
+
+function Test-AppPresent {
+    <#
+      Is this application already on the machine? Asked WITHOUT winget.
+
+      The install loop normally answers this with `winget list`, which is the
+      better answer - it knows about versions and about packages this setup did
+      not install. But the whole point of downloadCache is that applications can
+      now be installed on a machine where winget never appeared, and there the
+      question still has to be answered: `Safe = $true` means "leave REAPER
+      alone if it is already here", and the first-run steps must only fire for
+      what this run actually introduced.
+
+      Deliberately loose. A false "already here" would skip an install; a false
+      "missing" only re-runs an installer over itself, which every one of these
+      handles. So each check errs towards missing.
+    #>
+    param([string]$Id)
+
+    switch ($Id) {
+        'Cockos.REAPER'  { return [bool](Get-ReaperExe) }
+        'Git.Git'        { return [bool](Get-Command git -ErrorAction SilentlyContinue) }
+        'Python.Python.3.12' {
+            # Any Python 3 counts, for the same reason setup-all does not force
+            # 3.12 onto PATH: the virtualenv is what actually matters.
+            return [bool](Get-Command python -ErrorAction SilentlyContinue)
+        }
+        'Anthropic.ClaudeCode' { return [bool](Get-Command claude -ErrorAction SilentlyContinue) }
+        'Anthropic.Claude' {
+            if (Get-UninstallEntry -Pattern 'Claude' -ExcludePattern 'Claude Code') { return $true }
+            foreach ($p in @(
+                "$env:LOCALAPPDATA\AnthropicClaude\Claude.exe",
+                "$env:LOCALAPPDATA\Programs\Claude\Claude.exe",
+                "$env:ProgramFiles\Claude\Claude.exe"
+            )) { if (Test-Path $p) { return $true } }
+            try {
+                if (Get-AppxPackage -Name 'Claude*' -ErrorAction SilentlyContinue) { return $true }
+            } catch { }
+            return $false
+        }
+    }
+    return $false
+}
+
 # ---------------------------------------------------------------------------
 # Login detection
 # ---------------------------------------------------------------------------

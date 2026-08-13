@@ -17,6 +17,11 @@ venv/
 # ship. Install routes are documented in README.md instead.
 .claude/
 
+# Installer downloads, kept so a re-run does not fetch 300 MB again.
+# Hundreds of megabytes of vendor binaries - never ours to commit, and the
+# whole point is that it is machine-local. install\lib-cache.ps1 owns it.
+downloadCache/
+
 # OS
 .DS_Store
 Thumbs.db

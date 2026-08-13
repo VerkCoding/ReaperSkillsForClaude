@@ -6,13 +6,18 @@ title REAPER for Claude
 rem ===========================================================================
 rem  REAPER for Claude - setup
 rem
-rem  Two options on purpose. Everything the setup can do belongs to one of them:
-rem  put it all in place, or take it all back out. The individual steps still
-rem  exist as scripts in install\ and are runnable on their own, but nobody
-rem  should have to choose between them to get started.
+rem  Two options for the setup itself, on purpose. Everything it can do belongs
+rem  to one of them: put it all in place, or take it all back out. The individual
+rem  steps still exist as scripts in install\ and are runnable on their own, but
+rem  nobody should have to choose between them to get started.
 rem
-rem      [1] -> install\setup-all.ps1    backup, apps, plugin, health check
-rem      [2] -> install\revert-all.ps1   restore that backup, remove our files
+rem  [3] is not a third way to install. It downloads what [1] would download and
+rem  then stops, which is the only useful thing to do from a machine that is not
+rem  the one being set up - no internet there, or wiped after every run.
+rem
+rem      [1] -> install\setup-all.ps1           backup, apps, plugin, health check
+rem      [2] -> install\revert-all.ps1          restore that backup, remove our files
+rem      [3] -> install\fill-download-cache.ps1 fetch the installers, install nothing
 rem ===========================================================================
 
 rem %~dp0 is this file's own folder with a trailing backslash, so the menu works
@@ -49,6 +54,13 @@ echo       Restores the settings backed up by [1] and removes
 echo       what it added. Does not uninstall REAPER, Claude,
 echo       Python or Git - it only undoes the setup.
 echo.
+echo   [3] Prepare Offline Files
+echo.
+echo       Downloads what [1] needs into downloadCache\ and
+echo       installs nothing. For a machine with no internet, or
+echo       one you wipe often - fill it here, copy that folder
+echo       over there, and [1] installs from disk.
+echo.
 echo   [0] Exit
 echo.
 
@@ -70,6 +82,7 @@ set "CHOICE=%CHOICE:~0,1%"
 
 if "%CHOICE%"=="1" goto install
 if "%CHOICE%"=="2" goto revert
+if "%CHOICE%"=="3" goto cache
 if "%CHOICE%"=="0" goto quit
 goto menu
 
@@ -157,6 +170,24 @@ goto menu
 :revert
 cls
 %PS% "%PLUGIN%install\revert-all.ps1"
+echo.
+pause
+goto menu
+
+:cache
+cls
+echo ===============================================
+echo   Prepare Offline Files
+echo ===============================================
+echo.
+echo   Downloads the winget installer, Python, Git, REAPER and
+echo   Claude into the downloadCache folder beside this file.
+echo.
+echo   Nothing is installed and nothing outside that folder is
+echo   touched. Around 500 MB. Anything already there is left
+echo   alone, so running this twice is cheap.
+echo.
+%PS% "%PLUGIN%install\fill-download-cache.ps1"
 echo.
 pause
 goto menu
