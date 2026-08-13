@@ -104,69 +104,100 @@ try {
 $failed  = @()
 $outside = @()   # found, but not inside downloadCache
 
+function Register-CacheLocation {
+    <#
+      Note where a file that already exists actually lives, and copy it into
+      downloadCache if -Consolidate says to. Returns $true when it ends up
+      inside the cache.
+
+      One place for this, because every kind of file that can already be here
+      has to be accounted for the same way. The App Runtime package was the one
+      that was not, and the consequence was a run that printed CACHE READY over
+      a folder with no runtime in it - which only fails later, on the offline
+      machine, where there is nothing left to fix it with.
+    #>
+    param([string]$Path, [string]$Name, [string]$Label)
+
+    $mb = (Get-Item -LiteralPath $Path).Length / 1MB
+    if ((Split-Path -Parent $Path) -ieq $dir) {
+        Write-Ok ("{0}: already here ({1:N1} MB)." -f $Label, $mb)
+        return $true
+    }
+
+    # Found, but not in downloadCache - downloaded by hand, or left beside the
+    # repository rather than inside it. Not downloaded again either way.
+    Write-Ok ("{0}: already on disk ({1:N1} MB), not downloaded." -f $Label, $mb)
+    Write-Info "  $Path"
+    if (-not $Consolidate) {
+        # Deliberately not copied by default. Duplicating 207 MB to tidy it is a
+        # poor trade when the file is already somewhere the setup looks, and the
+        # folder it is in is usually the one being shared.
+        Write-Info "  Outside downloadCache, so it travels only if that folder does."
+        Write-Info "  Re-run with -Consolidate to copy it in."
+        $script:outside += $Label
+        return $false
+    }
+    if (Save-ToCache -Path $Path -Name $Name) {
+        Write-Ok ("{0}: copied into downloadCache." -f $Label)
+        return $true
+    }
+    Write-Warn2 ("{0}: could not be copied in; leaving it where it is." -f $Label)
+    return $false
+}
+
 # ---------------------------------------------------------------------------
 # 1. The winget client. The big one, and the one that matters most: it is what
 #    a wiped machine needs before it can fetch anything else at all.
 # ---------------------------------------------------------------------------
 Write-Step "winget and its dependencies"
 
-# The offline bundle first - one archive carrying every package, which is the
-# same source [1] prefers. Extraction only; nothing in it is run. Skipped
-# entirely when the files are already here, because having them is cheaper than
-# any download and no ordering is worth giving that up for.
+# -Force clears the cache ONCE, here, before anything is fetched.
+#
+# It used to clear each file again inside the loop below, which ran after the
+# archive had been extracted - so -Force downloaded 340 MB and then deleted
+# three of the four packages it had just written and re-fetched them from
+# Microsoft. Only the runtime survived, and only because its check happened to
+# sit above the delete rather than below it.
 if ($Force) {
     foreach ($n in (@($RfcBootstrapFiles.Name) + $RfcRuntimeMsix.Name)) {
         Remove-Item (Join-Path $dir $n) -Force -ErrorAction SilentlyContinue
     }
 }
-if (-not (Test-BootstrapComplete)) {
-    [void](Expand-MirrorBundle)
-} else {
+
+# The archive first - one download carrying every package, the same source [1]
+# prefers. Extraction only; nothing in it is run, and every package taken out is
+# checked to be Microsoft-signed. Only asked for what is missing, and only when
+# the 207 MB bundle is among it: 340 MB to obtain a 7 MB VCLibs would be the
+# inversion this whole thing exists to avoid.
+$missing = Get-MissingBootstrap
+if ($missing.Count -eq 0) {
     Write-Ok "Every winget package is already on disk."
+} elseif (Test-MirrorWorthwhile -Missing $missing) {
+    [void](Expand-MirrorBundle -Only $missing)
+} else {
+    Write-Info ("Missing: {0}. Fetching those individually." -f ($missing -join ', '))
 }
 
 foreach ($f in $RfcBootstrapFiles) {
     # The runtime comes in two forms and only one is needed. Having the 40 MB
     # package is a reason not to fetch the 102 MB installer that does the same
     # job, not a reason to have both.
-    if ($f.Name -eq 'windowsappruntime.exe' -and
-        (Get-CachedFile -Name $RfcRuntimeMsix.Name -MinMB $RfcRuntimeMsix.MinMB -Match $RfcRuntimeMsix.Match)) {
-        Write-Ok "Windows App Runtime: have the package; not fetching the 102 MB installer too."
-        continue
+    if ($f.Name -like 'windowsappruntime.*') {
+        $rt = Get-CachedRuntime
+        if ($rt -and $rt.IsPackage) {
+            # Accounted for through the same path as everything else, because it
+            # is a file the offline machine cannot do without. Reported on its
+            # own, -Consolidate would have claimed a self-contained cache that
+            # had no runtime in it at all.
+            [void](Register-CacheLocation -Path $rt.Path -Name $rt.Spec.Name -Label $rt.Spec.Label)
+            Write-Info "  That is the package form, so Microsoft's 102 MB installer is not needed."
+            continue
+        }
     }
 
-    $have = $null
-    if ($Force) {
-        Remove-Item (Join-Path $dir $f.Name) -Force -ErrorAction SilentlyContinue
-    } else {
-        $have = Get-CachedFile -Name $f.Name -MinMB $f.MinMB -Match $f.Match
-    }
-
+    $have = Get-CachedFile -Name $f.Name -MinMB $f.MinMB -Match $f.Match
     if ($have) {
-        $mb = (Get-Item -LiteralPath $have).Length / 1MB
-        if ((Split-Path -Parent $have) -ieq $dir) {
-            Write-Ok ("{0}: already here ({1:N1} MB)." -f $f.Label, $mb)
-            continue
-        }
-
-        # Found, but not in downloadCache - downloaded by hand, or left beside
-        # the repository rather than inside it. Not downloaded again either way.
-        Write-Ok ("{0}: already on disk ({1:N1} MB), not downloaded." -f $f.Label, $mb)
-        Write-Info "  $have"
-        if (-not $Consolidate) {
-            # Deliberately not copied by default. Duplicating 207 MB to tidy it
-            # is a poor trade when the file is already somewhere the setup
-            # looks, and the folder it is in is usually the one being shared.
-            Write-Info "  Outside downloadCache, so it travels only if that folder does."
-            Write-Info "  Re-run with -Consolidate to copy it in."
-            $outside += $f.Label
-            continue
-        }
-        if (Save-ToCache -Path $have -Name $f.Name) {
-            Write-Ok ("{0}: copied into downloadCache." -f $f.Label)
-        } else {
-            Write-Warn2 ("{0}: could not be copied in; leaving it where it is." -f $f.Label)
-        }
+        [void](Register-CacheLocation -Path $have -Name $f.Name -Label $f.Label)
         continue
     }
 

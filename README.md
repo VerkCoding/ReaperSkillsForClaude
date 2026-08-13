@@ -318,11 +318,12 @@ later with an error about the package.
    bundle is recognised under our name or its own, in `downloadCache\`, beside
    `RunThisToStart.bat`, or in the folder above.
 2. **[EXLOUD/winget-installer](https://github.com/EXLOUD/winget-installer)** —
-   one ~340 MB archive carrying all four packages for every architecture. The
-   four for this machine are extracted into `downloadCache` and the archive is
-   thrown away. It also ships the App Runtime as a 40 MB framework `.msix`
-   rather than Microsoft's 102 MB setup executable, which makes the whole
-   install a single `Add-AppxPackage` call.
+   one ~340 MB archive carrying all four packages for every architecture. Only
+   the ones actually missing are extracted, and only **when the 207 MB bundle is
+   among them**: fetching 340 MB to obtain a 7 MB VCLibs would be the exact
+   inversion this exists to avoid. The archive itself is thrown away. It also
+   ships the App Runtime as a 40 MB framework `.msix` rather than Microsoft's
+   102 MB setup executable.
 3. **Microsoft's own links, file by file** — for anything still missing.
 
 **Only packages are taken out of that archive. The `Install-Winget.ps1` and
@@ -330,10 +331,20 @@ later with an error about the package.
 with administrator rights on every machine this plugin is installed on is not a
 trade worth making for a faster download.
 
-What makes taking the *packages* defensible is that Windows checks them:
-`Add-AppxPackage` validates the MSIX signature chain at deployment, so anything
-that is not the package Microsoft signed fails to install and step 3 runs
-instead.
+What makes taking the *packages* defensible is that they are checked, twice.
+Each one is verified to carry a valid Microsoft Authenticode signature before it
+is allowed to stay in `downloadCache`, and `Add-AppxPackage` validates the same
+chain again at deployment. Anything that fails either is discarded and fetched
+from Microsoft instead.
+
+That is a stronger guarantee than pinning a hash of the archive would be — a
+hash goes stale the moment upstream cuts a release, and GitHub allows a release
+asset to be replaced under the same tag, whereas a signature is a property of
+the packages themselves.
+
+Packages are also named and matched per architecture (`VCLibs.x64.appx`,
+`VCLibs.arm64.appx`). A cache filled on one machine and copied to a different
+architecture therefore reads as empty rather than as complete-but-undeployable.
 
 Worth being clear about what this does **not** fix: that archive is a GitHub
 release asset, served from the same host as Microsoft's own release. If GitHub

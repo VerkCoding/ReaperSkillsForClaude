@@ -239,10 +239,12 @@ if ($SkipApps) {
         # through it, so getting it installed is worth doing properly rather
         # than working around.
         #
-        # repair-winget.ps1 now downloads it from Microsoft's release directly,
-        # which needs nothing but HTTPS - no PowerShell Gallery, no NuGet
-        # provider, no Store - and is the route that works on the machines that
-        # lack it. The Gallery bootstrap is still there behind it.
+        # repair-winget.ps1 deploys the packages directly, which needs nothing
+        # but HTTPS - no PowerShell Gallery, no NuGet provider, no Store - and
+        # is the route that works on the machines that lack winget. It reads
+        # them from downloadCache when they are there and downloads them when
+        # they are not; see that file for which source it asks first. The
+        # Gallery bootstrap is still there behind it.
         Write-Warn2 "winget is not available - installing it."
         try {
             & (Join-Path $Here 'repair-winget.ps1') -Embedded | Out-Host

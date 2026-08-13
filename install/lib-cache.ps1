@@ -63,6 +63,30 @@
 $RfcPluginRoot = Split-Path -Parent $PSScriptRoot
 $RfcCacheDir   = Join-Path $RfcPluginRoot 'downloadCache'
 
+# This machine's architecture, decided once.
+#
+# It is in the filenames as well as the URLs, and that is deliberate. VCLibs,
+# UI.Xaml and the App Runtime are per-architecture packages, so a cache filled
+# on an x64 machine and copied to an ARM64 one - which the README tells people
+# to do - would otherwise look complete while holding three packages that cannot
+# deploy there. Offering Add-AppxPackage a mixed-architecture dependency set
+# fails with 0x80073CF3, the same HRESULT this code elsewhere tells the user is
+# "not a bad download". Naming them apart means a wrong-architecture cache reads
+# as an empty one, which is recoverable.
+#
+# The winget bundle itself is architecture-neutral - a .msixbundle carries every
+# architecture - so it keeps its plain name and is shared across both.
+#
+# PROCESSOR_ARCHITECTURE describes the CURRENT PROCESS, not the machine: a
+# 32-bit or emulated PowerShell on ARM64 reports x86 or AMD64, and only
+# PROCESSOR_ARCHITEW6432 carries the real one. Reading just the first would put
+# x64 packages on an ARM64 machine and call the cache complete.
+$RfcArch = if (($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE) -contains 'ARM64') {
+    'arm64'
+} else {
+    'x64'
+}
+
 # The four files winget cannot be installed without, in the order they are
 # needed. One list, so repair-winget.ps1 and fill-download-cache.ps1 cannot
 # drift apart about what "cached" means.
@@ -76,26 +100,32 @@ $RfcCacheDir   = Join-Path $RfcPluginRoot 'downloadCache'
 # Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle and that is what they
 # keep. A cache that only recognises our own naming would sit next to a 207 MB
 # file it needed and download it again, which is precisely the failure this
-# whole thing exists to prevent. Patterns are specific enough not to grab an
-# unrelated package, and the size floor still applies to whatever they match.
+# whole thing exists to prevent.
+#
+# Every pattern for a per-architecture package carries $RfcArch, which is what
+# keeps an arm64 VCLibs from being picked up on an x64 machine. The two vendors
+# put the architecture in different places - Microsoft.VCLibs.x64.14.00.Desktop.appx
+# from aka.ms, Microsoft.VCLibs.14.00_14.0.33728_x64.Appx from the archive - so
+# the patterns look for it anywhere in the name. 'x64' is not a substring of
+# 'arm64', so neither can match the other.
 $RfcBootstrapFiles = @(
     [pscustomobject]@{
-        Name  = 'windowsappruntime.exe'; MinMB = 40
+        Name  = "windowsappruntime.$RfcArch.exe"; MinMB = 40
         Label = 'Windows App Runtime'
-        Match = @('WindowsAppRuntimeInstall*.exe', '*windowsappruntime*.exe')
-        Url   = 'https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe'
+        Match = @("*WindowsAppRuntimeInstall*$RfcArch*.exe", "*windowsappruntime*$RfcArch*.exe")
+        Url   = "https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-$RfcArch.exe"
     }
     [pscustomobject]@{
-        Name  = 'VCLibs.appx'; MinMB = 3
+        Name  = "VCLibs.$RfcArch.appx"; MinMB = 3
         Label = 'VCLibs'
-        Match = @('Microsoft.VCLibs*.appx', '*VCLibs*.appx')
-        Url   = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx'
+        Match = @("*VCLibs*$RfcArch*.appx")
+        Url   = "https://aka.ms/Microsoft.VCLibs.$RfcArch.14.00.Desktop.appx"
     }
     [pscustomobject]@{
-        Name  = 'UIXaml.appx'; MinMB = 2
+        Name  = "UIXaml.$RfcArch.appx"; MinMB = 2
         Label = 'UI.Xaml'
-        Match = @('Microsoft.UI.Xaml*.appx', '*UI.Xaml*.appx', '*UIXaml*.appx')
-        Url   = 'https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx'
+        Match = @("*UI.Xaml*$RfcArch*.appx", "*UIXaml*$RfcArch*.appx")
+        Url   = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.$RfcArch.appx"
     }
     [pscustomobject]@{
         Name  = 'winget.msixbundle'; MinMB = 100
@@ -108,14 +138,21 @@ $RfcBootstrapFiles = @(
 # The App Runtime as a package rather than an installer.
 #
 # Microsoft's own link for it is a 102 MB setup executable that has to be run;
-# the mirror below carries the 40 MB framework .msix instead, which can simply
-# be handed to Add-AppxPackage as one more dependency. Preferred when present,
-# which is why it is a separate entry rather than a fifth downloadable one -
-# there is no URL to fetch it from on its own.
+# the archive below carries the 40 MB framework .msix instead. Either satisfies
+# winget's dependency, so this is a separate entry rather than a fifth
+# downloadable one - there is no URL to fetch it from on its own.
+#
+# No Match aliases, deliberately. Inside the archive it is called
+# Microsoft.WindowsAppRuntime.1.8.msix in every architecture's folder, with the
+# architecture only in the directory - so a pattern matching that name cannot
+# tell an arm64 copy from an x64 one, and a loose 'Microsoft.WindowsAppRuntime.*'
+# would also match the Main, Singleton and DDLM packages, none of which is the
+# framework winget depends on. Only the name written by Expand-MirrorBundle,
+# which knows which folder it took the file from, is trusted.
 $RfcRuntimeMsix = [pscustomobject]@{
-    Name  = 'windowsappruntime.msix'; MinMB = 15
+    Name  = "windowsappruntime.$RfcArch.msix"; MinMB = 15
     Label = 'Windows App Runtime (package)'
-    Match = @('Microsoft.WindowsAppRuntime.1.8.msix', 'Microsoft.WindowsAppRuntime.*.msix')
+    Match = @()
     Url   = $null
 }
 
@@ -128,11 +165,17 @@ $RfcRuntimeMsix = [pscustomobject]@{
 # every machine this plugin is installed on is not a trade worth making for a
 # faster download.
 #
-# What makes taking the packages defensible is that Windows checks them.
-# Add-AppxPackage validates the MSIX signature chain at deployment, so a bundle
-# that is not the one Microsoft signed does not install - it fails, and the
-# Microsoft download below runs instead. That is the whole safety argument, and
-# it is why extraction is the only thing done here.
+# Every package extracted from it is checked before it is kept: signed, valid,
+# and signed by Microsoft. See Test-MicrosoftPackage. That is a stronger claim
+# than pinning a hash of the archive would be - a hash goes stale the moment the
+# upstream cuts a release, whereas the signature is a property of the packages
+# themselves and cannot be forged into the cache. It also covers the case a
+# hash would not: GitHub allows a release asset to be replaced under the same
+# tag, so this URL is not immutable.
+#
+# Add-AppxPackage validates the same signature again at deployment. The check
+# here is about what gets written into downloadCache under a trusted name and
+# then, per the README, copied on to other machines.
 #
 # It is worth being clear about what this does NOT fix: the archive is a GitHub
 # release asset, served from the same host as Microsoft's own release. If GitHub
@@ -147,23 +190,29 @@ $RfcMirrorBundle = [pscustomobject]@{
 
 function Get-MirrorContents {
     <#
-      Which entries of the mirror archive are wanted, and what to call them
-      once extracted.
+      Which entries of the archive are wanted, and what to call them once
+      extracted.
 
-      Matched by wildcard rather than by exact path so a version bump inside the
-      archive does not silently stop finding anything - the names carry versions
-      (Microsoft.VCLibs.14.00_14.0.33728_x64.Appx) and those will move.
+      The version numbers are pinned, not wildcarded, and that is a decision
+      rather than an oversight: 'Microsoft.WindowsAppRuntime.*.msix' would also
+      match the Main, Singleton and DDLM packages sitting beside the framework,
+      and a wildcard on UI.Xaml's version would happily pick up a 2.9 that
+      winget 1.12 does not declare a dependency on.
+
+      The cost is that these move with $RfcMirrorBundle.Url. Change one, check
+      the other - a miss here is not silent (Expand-MirrorBundle warns per
+      entry) but it is easy to scroll past, and it falls back to Microsoft's
+      links, which are pinned to the same versions for the same reason.
     #>
-    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
     @(
         [pscustomobject]@{ As = 'winget.msixbundle'
                            Pattern = '*Microsoft.DesktopAppInstaller_*.msixbundle' }
-        [pscustomobject]@{ As = 'VCLibs.appx'
-                           Pattern = "*Microsoft.VCLibs.14.00_*_$arch.appx" }
-        [pscustomobject]@{ As = 'UIXaml.appx'
-                           Pattern = "*Microsoft.UI.Xaml.2.8_*_$arch.appx" }
-        [pscustomobject]@{ As = 'windowsappruntime.msix'
-                           Pattern = "*win10-$arch/Microsoft.WindowsAppRuntime.1.8.msix" }
+        [pscustomobject]@{ As = "VCLibs.$RfcArch.appx"
+                           Pattern = "*Microsoft.VCLibs.14.00_*_$RfcArch.appx" }
+        [pscustomobject]@{ As = "UIXaml.$RfcArch.appx"
+                           Pattern = "*Microsoft.UI.Xaml.2.8_*_$RfcArch.appx" }
+        [pscustomobject]@{ As = "windowsappruntime.$RfcArch.msix"
+                           Pattern = "*win10-$RfcArch/Microsoft.WindowsAppRuntime.1.8.msix" }
     )
 }
 
@@ -300,14 +349,20 @@ function Get-RemoteFile {
       good. A 207 MB download dropping at 60% is not a reason to give up and
       spend several minutes failing over to a route that works even less often -
       it is a reason to ask again.
+
+      -TimeoutSec is a parameter rather than a constant because the payloads
+      here differ by a factor of fifty. A fixed 600 seconds is generous for a
+      5 MB appx and a 4.6 Mbit/s speed limit on a 340 MB archive, and the retry
+      loop restarts from zero, so getting it wrong costs three full timeouts
+      before anything else is tried.
     #>
-    param([string]$Url, [string]$Path, [double]$MinMB, [int]$Attempts = 3)
+    param([string]$Url, [string]$Path, [double]$MinMB, [int]$Attempts = 3, [int]$TimeoutSec = 600)
 
     $lastError = $null
     for ($try = 1; $try -le $Attempts; $try++) {
         try {
             if (Test-Path $Path) { Remove-Item $Path -Force -ErrorAction SilentlyContinue }
-            Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -UserAgent 'Mozilla/5.0' -TimeoutSec 600
+            Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -UserAgent 'Mozilla/5.0' -TimeoutSec $TimeoutSec
             $mb = (Get-Item $Path).Length / 1MB
             if ($mb -lt $MinMB) {
                 throw ("only {0:N1} MB - expected at least {1} MB, so that is not the package" -f $mb, $MinMB)
@@ -354,36 +409,116 @@ function Get-BootstrapFile {
     return $mb
 }
 
-function Test-BootstrapComplete {
-    <# Is every file needed to install winget offline already on disk? #>
+function Get-CachedRuntime {
+    <#
+      The Windows App Runtime, in whichever of its two forms is on disk, or
+      $null. Returns the spec as well as the path, so callers know which they
+      got without inspecting the filename.
+
+      One helper rather than the predicate written out at each call site. The
+      two forms are interchangeable - either satisfies winget's dependency, and
+      having one is a reason not to fetch the other - and every place that asks
+      had been re-deriving that with a string comparison against
+      'windowsappruntime.exe'. Three copies disagreed about ordering, and one of
+      those disagreements deleted a freshly extracted package and re-downloaded
+      207 MB to replace it.
+    #>
+    $msix = Get-CachedFile -Name $RfcRuntimeMsix.Name -MinMB $RfcRuntimeMsix.MinMB -Match $RfcRuntimeMsix.Match
+    if ($msix) { return [pscustomobject]@{ Path = $msix; Spec = $RfcRuntimeMsix; IsPackage = $true } }
+
+    $exe = Get-BootstrapSpec "windowsappruntime.$RfcArch.exe"
+    $hit = Get-CachedFile -Name $exe.Name -MinMB $exe.MinMB -Match $exe.Match
+    if ($hit) { return [pscustomobject]@{ Path = $hit; Spec = $exe; IsPackage = $false } }
+
+    return $null
+}
+
+function Get-MissingBootstrap {
+    <#
+      Which of the winget packages are not on disk, by name. Empty means an
+      offline install is possible right now.
+
+      The runtime counts as present in either form, which is why this cannot
+      simply loop $RfcBootstrapFiles.
+    #>
+    $missing = @()
     foreach ($f in $RfcBootstrapFiles) {
-        if ($f.Name -eq 'windowsappruntime.exe') { continue }   # handled below
-        if (-not (Get-CachedFile -Name $f.Name -MinMB $f.MinMB -Match $f.Match)) { return $false }
+        if ($f.Name -like 'windowsappruntime.*') { continue }
+        if (-not (Get-CachedFile -Name $f.Name -MinMB $f.MinMB -Match $f.Match)) { $missing += $f.Name }
     }
-    # Either form of the runtime will do.
-    if (Get-CachedFile -Name $RfcRuntimeMsix.Name -MinMB $RfcRuntimeMsix.MinMB -Match $RfcRuntimeMsix.Match) { return $true }
-    $exe = Get-BootstrapSpec 'windowsappruntime.exe'
-    return [bool](Get-CachedFile -Name $exe.Name -MinMB $exe.MinMB -Match $exe.Match)
+    if (-not (Get-CachedRuntime)) { $missing += $RfcRuntimeMsix.Name }
+    return $missing
+}
+
+function Test-MirrorWorthwhile {
+    <#
+      Is the 340 MB archive the cheaper way to fill the gaps, or should the
+      missing files just be fetched individually?
+
+      Only the winget bundle makes it worthwhile. That one file is 207 MB and
+      the archive is the source we prefer for it; everything else in there is
+      between 5 and 40 MB and available on its own. Downloading 340 MB to obtain
+      a 7 MB VCLibs - or a 40 MB runtime whose Microsoft equivalent is 102 MB -
+      is the opposite of the reason any of this exists.
+    #>
+    param([string[]]$Missing)
+    return ($Missing -contains 'winget.msixbundle')
+}
+
+function Test-MicrosoftPackage {
+    <#
+      Is this file a package Microsoft signed?
+
+      Applied to everything taken out of the third-party archive before it is
+      allowed to stay in downloadCache. Add-AppxPackage performs the same check
+      at deployment, so this is not what stops a bad package installing - it is
+      what stops a bad package being WRITTEN, under a name every later run
+      trusts, into a folder the README tells people to copy to other machines.
+
+      Anything that is not signed, or is signed by somebody else, is discarded
+      and fetched from Microsoft instead.
+    #>
+    param([string]$Path)
+
+    try {
+        $sig = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
+    } catch {
+        return $false
+    }
+    if ($sig.Status -ne 'Valid') { return $false }
+    $subject = "$($sig.SignerCertificate.Subject)"
+    return ($subject -match 'CN=Microsoft (Corporation|Windows)')
 }
 
 function Expand-MirrorBundle {
     <#
-      Fetch the mirror archive and take the packages out of it. Returns how
-      many were extracted; 0 means the caller should fall back to Microsoft.
+      Fetch the archive and take the packages out of it. Returns how many were
+      extracted, so the caller can tell "got everything" from "downloaded 340 MB
+      and got nothing".
 
       Extraction only. Nothing from the archive is ever executed - see
-      $RfcMirrorBundle for why that line matters and why Add-AppxPackage's
-      signature check is what makes taking the packages safe.
+      $RfcMirrorBundle for why that line matters.
+
+      -Only limits it to the packages actually wanted. Files already on disk are
+      never overwritten: somebody may have fetched the bundle from Microsoft by
+      hand, and replacing that with a third party's older copy because one
+      unrelated dependency was missing would break the promise the rest of this
+      makes.
 
       The archive itself is not kept. It carries all three architectures, so
-      most of its 340 MB is for machines this is not, and the four files pulled
-      out of it are the thing worth keeping.
+      most of its 340 MB is for machines this is not.
     #>
+    param([string[]]$Only)
+
     $dir = Get-CacheDir -Create
     if (-not $dir) {
         Write-Info "Nowhere to extract to; skipping the offline bundle."
         return 0
     }
+
+    $wanted = Get-MirrorContents
+    if ($Only) { $wanted = @($wanted | Where-Object { $Only -contains $_.As }) }
+    if ($wanted.Count -eq 0) { return 0 }
 
     $tmp = Join-Path $env:TEMP ("rfc-mirror-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -393,12 +528,18 @@ function Expand-MirrorBundle {
     try {
         Write-Info ("Downloading the {0} (about 340 MB)..." -f $RfcMirrorBundle.Label)
         Write-Info ("  {0}" -f $RfcMirrorBundle.About)
-        [void](Get-RemoteFile -Url $RfcMirrorBundle.Url -Path $zip -MinMB $RfcMirrorBundle.MinMB)
+        # Longer than the per-file default and tried fewer times. This is the
+        # largest single download here by half again, so the fixed 600 seconds
+        # that suited a 207 MB file puts a 4.6 Mbit/s floor under it - and there
+        # is a complete fallback waiting, so burning three timeouts before
+        # reaching it is worse than reaching it sooner.
+        [void](Get-RemoteFile -Url $RfcMirrorBundle.Url -Path $zip -MinMB $RfcMirrorBundle.MinMB `
+                              -TimeoutSec 2400 -Attempts 2)
 
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
         $archive = [IO.Compression.ZipFile]::OpenRead($zip)
         try {
-            foreach ($want in (Get-MirrorContents)) {
+            foreach ($want in $wanted) {
                 # Separators normalised before matching. The zip format says
                 # entry names use '/', and this archive does - but plenty of
                 # tools write '\' instead, and the only pattern here with a
@@ -412,8 +553,27 @@ function Expand-MirrorBundle {
                     Write-Warn2 "  $($want.As): nothing matching in the archive."
                     continue
                 }
-                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $dir $want.As), $true)
-                Write-Info ("  {0}  <-  {1} ({2:N1} MB)" -f $want.As, $entry.FullName, ($entry.Length / 1MB))
+
+                # Extracted beside its destination, then moved into place. The
+                # cache is a folder whose filenames are trusted on sight by
+                # every later run, and a write interrupted halfway - Ctrl-C, a
+                # closed Sandbox, a full disk - would otherwise leave a
+                # truncated package under one of those names. A 150 MB fragment
+                # of a 205 MB bundle clears the size floor and fails at deploy
+                # time with an error that reads like a bad mirror.
+                $staged = Join-Path $tmp $want.As
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $staged, $true)
+
+                if (-not (Test-MicrosoftPackage -Path $staged)) {
+                    Write-Warn2 "  $($want.As): not signed by Microsoft - discarded."
+                    Write-Info  "    It will be fetched from Microsoft instead."
+                    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+                    continue
+                }
+
+                Move-Item -LiteralPath $staged -Destination (Join-Path $dir $want.As) -Force
+                Write-Info ("  {0}  <-  {1} ({2:N1} MB, Microsoft-signed)" -f `
+                            $want.As, $entry.FullName, ($entry.Length / 1MB))
                 $taken++
             }
         } finally {
@@ -423,6 +583,10 @@ function Expand-MirrorBundle {
         if ($taken -gt 0) {
             Write-Ok "$taken package(s) extracted into downloadCache."
             Write-Info "Kept there, so this download happens once and not again."
+        }
+        if ($taken -lt $wanted.Count) {
+            Write-Warn2 "$($wanted.Count - $taken) package(s) did not come from the archive."
+            Write-Info  "Those are fetched from Microsoft below."
         }
     } catch {
         Write-Warn2 "  offline bundle failed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
