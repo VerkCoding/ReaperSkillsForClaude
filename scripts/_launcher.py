@@ -160,7 +160,20 @@ def as_argv(candidate) -> list:
     return text.split(" ") if text.startswith("py -") else [text]
 
 
-def probe(candidate, root: Path) -> list | None:
+def probe(candidate, root: Path) -> str:
+    """Can this interpreter import what the server needs?
+
+    Returns "ok", "failed", or "timeout", and the last two are not the same
+    answer. `subprocess.TimeoutExpired` is a `SubprocessError`, so catching both
+    together made "too slow" and "genuinely broken" indistinguishable - and the
+    caller then reported the one message it had: that no interpreter on the
+    machine could import the dependencies. Which was false, and read as a
+    broken install.
+
+    An interpreter that lacks a module says so in milliseconds. One that takes
+    longer than the timeout is one that is *finding* the modules, on a cold
+    file cache, slowly. Those deserve opposite treatment.
+    """
     argv = as_argv(candidate)
     code = "import " + ", ".join(REQUIRED)
     try:
@@ -171,9 +184,46 @@ def probe(candidate, root: Path) -> list | None:
             stderr=subprocess.PIPE,
             timeout=PROBE_TIMEOUT,
         )
+    except subprocess.TimeoutExpired:
+        return "timeout"
     except (OSError, subprocess.SubprocessError):
-        return None
-    return argv if proc.returncode == 0 else None
+        return "failed"
+    return "ok" if proc.returncode == 0 else "failed"
+
+
+def resolve(root: Path) -> list | None:
+    """The interpreter to run the server under, or None.
+
+    Shared by main() and self_test() so the health check cannot disagree with
+    what actually happens - which is the whole reason self_test runs the real
+    search instead of a cheaper proxy for it.
+
+    The managed venv is kept when its probe times out. That environment is the
+    one bootstrap.py built and verified, so "slow" is the only thing a timeout
+    can mean there; a genuinely broken venv still fails fast, with an
+    ImportError, and is still skipped. Everything after it is a guess about the
+    machine, and a guess that cannot answer in time is no use.
+
+    This is not hypothetical. On a first run in a fresh Windows Sandbox the
+    cold import of numpy, mcp and reapy took longer than the timeout, the venv
+    was silently discarded, every remaining candidate was a system Python
+    without the dependencies, and the user was told to rebuild an environment
+    that was already correct. The same command a minute later worked, because
+    by then the files were in the OS cache.
+    """
+    venv = venv_python()
+    for candidate in candidates(root):
+        status = probe(candidate, root)
+        if status == "ok":
+            return as_argv(candidate)
+        if status == "timeout":
+            argv = as_argv(candidate)
+            log(f"Import check for {' '.join(argv)} timed out after {PROBE_TIMEOUT}s.")
+            if venv is not None and str(candidate) == str(venv):
+                log("Using it anyway: this is the environment bootstrap.py built,")
+                log("and a slow first import is not a broken one.")
+                return argv
+    return None
 
 
 def run_server_here(root: Path) -> int:
@@ -222,11 +272,10 @@ def self_test(root: Path) -> int:
     Prints to stdout, unlike the rest of this file: nothing is speaking the MCP
     protocol here, and the caller wants the answer.
     """
-    for candidate in candidates(root):
-        argv = probe(candidate, root)
-        if argv:
-            print(" ".join(argv))
-            return 0
+    argv = resolve(root)
+    if argv:
+        print(" ".join(argv))
+        return 0
     print(
         "no interpreter can import " + ", ".join(REQUIRED),
         file=sys.stderr,
@@ -248,11 +297,8 @@ def main() -> int:
         except Exception as e:
             return run_fallback(root, f"Imports failed under {sys.executable}: {e}")
 
-    for candidate in candidates(root):
-        argv = probe(candidate, root)
-        if not argv:
-            continue
-
+    argv = resolve(root)
+    if argv:
         same = len(argv) == 1 and Path(argv[0]).resolve() == Path(sys.executable).resolve()
         if same:
             return run_server_here(root)
