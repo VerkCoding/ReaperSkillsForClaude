@@ -70,6 +70,7 @@ function Update-SessionPath {
     return $false
 }
 
+[void](Start-RunLog 'install-python')
 Write-Banner "Python - install"
 
 $existing = Test-Python

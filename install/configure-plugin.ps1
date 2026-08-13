@@ -114,7 +114,7 @@ $MarketplaceName = 'reaper-skills-for-claude'
 $PluginName      = 'reaper-for-claude'
 $PluginRef       = "$PluginName@$MarketplaceName"
 
-if (-not $ProblemsOut) { [void](Start-RunLog 'configure') }
+[void](Start-RunLog 'configure-plugin')
 Write-Banner "REAPER for Claude - configure the plugin"
 Write-Info "plugin  $PluginRoot"
 

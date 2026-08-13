@@ -109,6 +109,22 @@ function Start-RunLog {
     #>
     param([string]$Name)
 
+    # A child script joins the log its parent already opened rather than opening
+    # a second one, or none.
+    #
+    # install-everything.ps1 calls configure-plugin.ps1, install-winget.ps1 and
+    # install-python.ps1 as separate scripts. Each is its own PowerShell scope,
+    # so each had its own idea of whether a log was open - and the answer was
+    # "no". That left a hole in the log exactly where the interesting part
+    # happens: a real run showed "Configuring the plugin" followed by ninety
+    # seconds of silence and then DONE, while the transcript beside it held
+    # three hundred lines of detail. The one file people are told to read first
+    # was blank precisely where they needed it.
+    if ($env:RFC_LOG_PATH) {
+        $script:RfcLogPath = $env:RFC_LOG_PATH
+        return $script:RfcLogPath
+    }
+
     try {
         $dir = Join-Path $env:USERPROFILE '.reaper-for-claude\logs'
         New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null

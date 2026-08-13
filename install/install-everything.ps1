@@ -173,6 +173,10 @@ try {
 [void](Disable-ConsoleQuickEdit)
 
 $stepLog = Start-RunLog 'setup'
+# Published so configure-plugin.ps1, install-winget.ps1 and install-python.ps1 -
+# each a separate PowerShell scope - append to this run's log instead of opening
+# their own or, as they did, none at all.
+if ($stepLog) { $env:RFC_LOG_PATH = $stepLog }
 Write-Banner "REAPER for Claude - install everything"
 Write-Info "plugin      $PluginRoot"
 if ($stepLog)      { Write-Info "log         $stepLog" }

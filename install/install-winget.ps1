@@ -109,7 +109,7 @@ function Exit-Working {
     exit 0
 }
 
-if (-not $Embedded) { [void](Start-RunLog 'winget') }
+[void](Start-RunLog 'install-winget')
 Write-Banner "winget - install or repair"
 
 if ((Test-Winget) -and -not $Force) {
