@@ -8,37 +8,39 @@
   built without the Store, and not always after an in-place upgrade. When it is
   missing, the Python install step has nothing to run.
 
-  Three routes, cheapest first, each falling through to the next:
+  Three routes, each falling through to the next:
 
     1. Register the App Installer package already on the machine. Instant, needs
        no network, and fixes the common case where the package is provisioned
        but not registered for this user.
 
-    2. Microsoft's documented PSGallery bootstrap:
+    2. Install Microsoft's release directly - the bundle plus its Windows App
+       Runtime, VCLibs and UI.Xaml. Needs nothing but HTTPS: no Gallery, no
+       NuGet provider, no Store. Nothing at all when the files are cached.
+
+    3. Microsoft's documented PSGallery bootstrap, as the fallback:
 
            Install-PackageProvider -Name NuGet -Force
            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
            Repair-WinGetPackageManager
 
-       A few MB, and the route that succeeds most often in practice.
+  Why route 2 is not last any more
+  --------------------------------
+  It used to be, on the grounds that it costs over 300 MB where the Gallery
+  bootstrap costs a few. That accounting was wrong: Repair-WinGetPackageManager
+  downloads the same 207 MB bundle from the same host, and the few MB is only
+  the module that then goes and fetches it. The genuine difference is 102 MB of
+  Windows App Runtime - and what it buys.
 
-    3. Download the release from Microsoft directly. This works with nothing but
-       HTTPS - no Gallery, no NuGet provider, no Store - which is why it is kept,
-       but it costs over 300 MB once the Windows App Runtime the bundle depends
-       on is counted. Hence last.
+  Route 2 leaves all four files in downloadCache. The Gallery downloads into
+  somewhere private and deletes it afterwards. On a machine that is wiped
+  between runs that is the difference between paying 207 MB once and paying it
+  every single time, which is how an address gets rate-limited and then blocked
+  outright. Which is not hypothetical - it is what happened here.
 
-  Except when the files are already here
-  --------------------------------------
-  "Cheapest first" is about bandwidth, and route 3 is only expensive because of
-  the download. If downloadCache already holds winget.msixbundle, that cost is
-  gone, so route 3 is promoted to the front: it is then the most reliable route
-  AND the cheapest, and it needs no network at all when the dependencies are
-  cached too.
-
-  Anything this does download is kept in downloadCache on the way past, so the
-  second run on a machine that gets wiped between runs - a Sandbox, a test VM -
-  costs nothing. See lib-cache.ps1 for why that matters: repeating a 200 MB
-  fetch often enough is what got the source blocked in the first place.
+  So route 2 goes second whether or not anything is cached, and the Gallery is
+  what to try when deployment is refused outright by policy and route 2 cannot
+  work at all.
 
   Two adjustments to route 2, both about privilege:
 
@@ -248,33 +250,43 @@ if (-not $isAdmin) {
 }
 
 # ---------------------------------------------------------------------------
-# The cache changes the order.
+# Then the direct download from Microsoft.
 #
-# Route 3 is normally last only because of its 300 MB. When the bundle is
-# already in downloadCache that objection disappears, and what is left is the
-# route with the fewest moving parts: no Gallery, no provider, no Store, no
-# round trip. So it goes first, and the Gallery bootstrap becomes the fallback
-# rather than the other way round.
+# This used to be last, on the grounds that it costs over 300 MB where the
+# Gallery bootstrap costs a few. That accounting was wrong. Repair-WinGetPackage-
+# Manager downloads the very same 207 MB bundle from the very same host - the
+# few MB is only the PowerShell module that then goes and fetches it. The real
+# difference is 102 MB of Windows App Runtime, and what you get for it:
+#
+#   this route     leaves all four files on disk, so the next run costs nothing
+#   the Gallery    downloads into somewhere private and deletes it afterwards
+#
+# On a machine that is wiped between runs that is not a small distinction. It is
+# the difference between paying 207 MB once and paying it every time, which is
+# how an address gets rate-limited and then blocked - which is not hypothetical,
+# it is what happened.
+#
+# So this goes second, cached or not, and the Gallery becomes the fallback for
+# the machines where app deployment is restricted and this cannot work at all.
 # ---------------------------------------------------------------------------
-$triedDirect = $false
-$wingetSpec  = Get-BootstrapSpec 'winget.msixbundle'
-$haveBundle  = Get-CachedFile -Name $wingetSpec.Name -MinMB $wingetSpec.MinMB -Match $wingetSpec.Match
+$wingetSpec = Get-BootstrapSpec 'winget.msixbundle'
+$haveBundle = Get-CachedFile -Name $wingetSpec.Name -MinMB $wingetSpec.MinMB -Match $wingetSpec.Match
 if ($haveBundle) {
     Write-Info "The winget package is already on disk:"
     Write-Info "  $haveBundle"
     Write-Info "Installing from it rather than downloading it again."
-    $triedDirect = $true
-    if (Invoke-DirectRoute) { Exit-Working }
-    Write-Info "That did not take. Trying the other routes..."
+} else {
+    Write-Info "Installing winget from Microsoft directly (about 310 MB)."
+    Write-Info "It is kept in downloadCache, so this happens once and not again."
 }
+if (Invoke-DirectRoute) { Exit-Working }
 
 # ---------------------------------------------------------------------------
 # Then PowerShell Gallery - Microsoft's own documented bootstrap.
 #
-# Small, quick, and the route that actually worked where the direct download did
-# not. Everything here is best-effort: each failure falls through to the direct
-# download below rather than ending the script, because "PSGallery is
-# unreachable" is precisely the situation the direct route exists for.
+# The fallback now, not the main route: it is what to try when the deployment
+# above is refused outright, which is a real state on machines with app
+# installation restricted by policy. Everything here is best-effort.
 # ---------------------------------------------------------------------------
 $galleryOk = $true
 
@@ -311,13 +323,9 @@ if ($galleryOk) {
     # and so installed neither REAPER nor Claude. That is a dropped connection,
     # not a machine that cannot run winget, and asking again usually settles it.
     #
-    # How many times depends on what is left to fall back to. A retry is the
-    # right answer to a dropped connection and the wrong answer to a host that
-    # has stopped replying on purpose - there, asking again is the thing that
-    # got the address blocked. So when the direct route is still ahead of us,
-    # stop at two and go spend the time on it; when it has already been tried
-    # and failed, there is nothing better to spend the time on, so try harder.
-    $attempts = if ($triedDirect) { 3 } else { 2 }
+    # Three attempts, because by here there is nothing better to spend the time
+    # on: the direct download has already been tried and failed.
+    $attempts = 3
     $repaired = $false
     for ($try = 1; $try -le $attempts; $try++) {
         try {
@@ -341,24 +349,6 @@ if ($galleryOk) {
 }
 
 if (Test-Winget) { Exit-Working }
-
-# ---------------------------------------------------------------------------
-# Last resort: install it straight from Microsoft's release.
-#
-# This is last because it is by far the most expensive. winget 1.29 declares
-# Microsoft.WindowsAppRuntime.1.8 as well as VCLibs and UI.Xaml, and that runtime
-# is a 102 MB installer on top of the 207 MB bundle - well over 300 MB to do what
-# the Gallery route does with a few. It only earns its place when the Gallery
-# route cannot reach PowerShell Gallery at all, which is exactly the case it was
-# added for.
-#
-# Skipped when the cache already sent us down it at the top - the files would be
-# the same files and the failure the same failure.
-# ---------------------------------------------------------------------------
-if (-not $triedDirect) {
-    Write-Info "Trying a direct download from Microsoft (over 300 MB)..."
-    if (Invoke-DirectRoute) { Exit-Working }
-}
 
 Write-Host ""
 Write-Err "Could not get winget working on this machine."

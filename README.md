@@ -33,11 +33,11 @@ to one of them:
 | **`[2]` Revert Everything** | Restore that snapshot, remove what `[1]` added |
 | **`[3]` Prepare Offline Files** | Download what `[1]` needs into `downloadCache\` and install nothing |
 
-`[3]` is not a third way to install. It is for the machine that is not the one
-being set up: fill the cache somewhere with a working connection, copy the
-`downloadCache` folder next to `RunThisToStart.bat` on the target, and `[1]`
-installs from disk without downloading anything. See
-[Installing without internet](#installing-without-internet).
+`[1]` fills `downloadCache\` as it goes, so a second run on the same folder
+downloads nothing. `[3]` is not a third way to install — it does that fetching
+*without* installing, for a machine that is not the one being set up: fill the
+cache somewhere with a working connection, copy the folder across, and `[1]`
+runs from disk. See [The download cache](#the-download-cache).
 
 ### What `[1]` asks of you
 
@@ -282,44 +282,55 @@ wheels for a brand-new Python. And more seriously:
 
 **No winget?** It ships with App Installer, absent on a fresh Windows Server, on
 images built without the Store, and inside Windows Sandbox. `[1]` installs it
-rather than working around it, cheapest route first:
+rather than working around it:
 
 1. **Register an App Installer that is already provisioned** — instant, offline,
    and the usual fix when winget is present but not registered for your user.
-2. **Microsoft's PowerShell Gallery bootstrap** — `Install-PackageProvider
-   NuGet` → `Install-Module Microsoft.WinGet.Client` → `Repair-WinGetPackageManager`.
-   A few MB, and the route that succeeds most often. It fails on machines that
-   cannot reach PowerShell Gallery, where the inbox `PackageManagement` module
-   reports
+2. **Install Microsoft's release directly** — the Windows App Runtime, VCLibs,
+   UI.Xaml and the ~207 MB `Microsoft.DesktopAppInstaller` bundle, the last
+   three passed as one `-DependencyPath` set. Needs nothing but HTTPS: no
+   Gallery, no NuGet provider, no Store. Nothing at all once cached.
+3. **Microsoft's PowerShell Gallery bootstrap**, as the fallback —
+   `Install-PackageProvider NuGet` → `Install-Module Microsoft.WinGet.Client` →
+   `Repair-WinGetPackageManager`. What to try when step 2 is refused outright by
+   policy. It fails on machines that cannot reach PowerShell Gallery, where the
+   inbox `PackageManagement` module reports
    `Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'`
    before doing anything.
-3. **Download it from Microsoft's release** — the Windows App Runtime, VCLibs,
-   UI.Xaml and the ~207 MB `Microsoft.DesktopAppInstaller` bundle, installed
-   with the last three passed as one `-DependencyPath` set. Needs nothing but
-   HTTPS, so it works where step 2 cannot — but over 300 MB, hence last.
 
-**Unless the bundle is already on disk.** If it is — under our name or its own,
-in `downloadCache\`, beside `RunThisToStart.bat`, or in the folder above — step
-3 costs nothing and goes *first*. It is then both the cheapest route and the one
-with the fewest moving parts, and with the dependencies cached too it needs no
-network at all. Anything downloaded along the way is kept for next time.
+**Why step 2 is not last.** It used to be, costing over 300 MB where the Gallery
+route costs a few. That accounting was wrong: `Repair-WinGetPackageManager`
+downloads the *same* 207 MB bundle from the *same* host, and the few MB is only
+the module that then goes and fetches it. The real difference is 102 MB of
+Windows App Runtime — and what it buys. Step 2 leaves all four files on disk;
+the Gallery downloads into somewhere private and deletes it afterwards. On a
+machine wiped between runs that is the difference between paying 207 MB once and
+paying it every time.
 
-That matters more than it sounds: step 2's `Repair-WinGetPackageManager` also
-pulls the client from GitHub, so on a machine that is wiped and re-run, *every*
-route was fetching the same 207 MB from the same host. With the bundle on disk,
-none of them do.
+The bundle is found under our name or its own, in `downloadCache\`, beside
+`RunThisToStart.bat`, or in the folder above.
 
 Each download is size-checked, so a proxy or captive portal answering with an
 HTML login page is rejected rather than saved under an `.appx` name and failing
 later with an error about the package.
 
-### Installing without internet
+### The download cache
 
-`[3] Prepare Offline Files` downloads everything `[1]` would download — the
-winget client and its dependencies, plus Python, Git, REAPER and Claude Desktop
-— into a `downloadCache\` folder beside `RunThisToStart.bat`, and installs
-nothing. Copy that folder to the same place on the target machine and `[1]`
-installs from disk.
+**`[1]` installs through `downloadCache\` and fills it as it goes.** Not "use it
+if it happens to have something" — every install goes through it. Already there
+means install from disk; not there means fetch it *into* the cache and install
+from disk anyway. The second run costs nothing.
+
+That is the whole point, and it is why `winget install` is no longer what runs:
+it downloads into its own temp directory and deletes it afterwards, so a machine
+that gets wiped and re-run — a Sandbox, a test VM, a lab image — downloaded Git,
+Python, REAPER and Claude again *every single time* while `downloadCache` sat
+there empty. `winget download` is the same fetch from the same source, put
+somewhere it survives, with the manifest beside it.
+
+**`[3] Prepare Offline Files`** does the same fetching without installing
+anything, for a machine that is not the one being set up. Copy the folder across
+and `[1]` runs from disk.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install\fill-download-cache.ps1
@@ -347,13 +358,14 @@ powershell -ExecutionPolicy Bypass -File install\fill-download-cache.ps1
 - **Claude Code is the exception.** winget extracts it rather than running an
   installer, and reproducing that bookkeeping — its `Packages` directory,
   `Links` folder, PATH entry and tracking file — to save one download is a bad
-  trade. It still needs a working winget.
+  trade. It is downloaded once, found to be unusable from disk, and its manifest
+  is kept as a note so later runs skip it instead of re-learning the same thing.
+  It still needs a working winget.
 - **`downloadCache` is gitignored** and safe to delete at any time.
 
-This also matters for machines that are *wiped* rather than offline — a Windows
-Sandbox, a test VM, a lab image. Without a cache every run re-downloads the same
-300 MB, and repeating that often enough is how an address gets rate-limited and
-then blocked outright.
+Repeating a 200 MB fetch from the same host often enough is how an address gets
+rate-limited and then blocked outright. That is not hypothetical — it is what
+this exists to stop.
 
 
 ## What runs where

@@ -29,15 +29,21 @@
 
   downloadCache
   -------------
-  If the folder of that name exists beside RunThisToStart.bat and holds the
-  installer for something that is missing, it is installed from there and
-  nothing is downloaded for it. That is the only difference it makes: an empty,
-  absent or unreadable cache changes nothing about what happens below.
+  Every application install goes through it. Already there means install from
+  disk and download nothing; not there means fetch it INTO the cache with
+  `winget download` and install from disk anyway. So the first run downloads
+  once and the runs after it download nothing.
 
-  It is filled by [3] Prepare Offline Files, and it exists for machines that
-  cannot reach the vendors - no internet, a corporate block, or an address that
-  has been rate-limited by being wiped and re-run too many times. See
-  lib-cache.ps1.
+  That last part is the whole point. `winget install` fetches into its own temp
+  directory and deletes it afterwards, so a machine that gets wiped between runs
+  - a Sandbox, a test VM, a lab image - re-downloaded Git, Python, REAPER and
+  Claude every single time while downloadCache sat there empty. Repeating that
+  often enough is how an address gets rate-limited and then blocked.
+
+  It is still only ever an optimisation: an absent, empty or unwritable cache
+  falls straight back to `winget install` and behaves as it always did. [3]
+  Prepare Offline Files does the same fetching without installing, for setting
+  up a machine that cannot reach the vendors at all. See lib-cache.ps1.
 
 .PARAMETER SkipApps
   Configure the plugin only; install no applications.
@@ -333,17 +339,49 @@ if ($SkipApps) {
             } else {
                 Write-Info "Installing $($app.Name)..."
 
-                # ---- the cache, but only for something genuinely missing ----
-                $cached = Find-CachedPackage -Id $app.Id
-                if ($cached) {
-                    Write-Info ("  downloadCache has {0} {1} - installing from disk." -f $app.Name, $cached.Version)
+                # ---- through the cache, always ---------------------------
+                #
+                # Not "use the cache if it happens to have this". Every install
+                # goes through downloadCache: already there means install from
+                # disk, not there means fetch it INTO the cache and install
+                # from disk anyway.
+                #
+                # The difference matters because `winget install` downloads
+                # into its own temp directory and deletes it afterwards. So a
+                # machine that is wiped and re-run - a Sandbox, a test VM -
+                # downloaded Git, Python, REAPER and Claude again every single
+                # time while downloadCache sat there empty, which is the exact
+                # thing this was built to stop.
+                #
+                # `winget download` is the same fetch from the same source, put
+                # somewhere it survives, with the manifest beside it. One
+                # download, then never again.
+                $pkg       = Find-CachedPackage -Id $app.Id
+                $fromCache = $false
+
+                if ($pkg -and $pkg.Installer) {
+                    Write-Info ("  downloadCache has {0} {1} - installing from disk." -f $app.Name, $pkg.Version)
                     # $app.Custom is appended after the manifest's own silent
                     # switches, which is exactly what winget's --custom does.
-                    if (Install-CachedPackage -Package $cached -ExtraArgs $app.Custom) {
-                        Write-Ok "$($app.Name) ready (from downloadCache - nothing downloaded)."
-                        continue
+                    $fromCache = Install-CachedPackage -Package $pkg -ExtraArgs $app.Custom
+                    if (-not $fromCache) { Write-Warn2 "  the cached copy did not install; falling back." }
+                } elseif ($pkg) {
+                    # Manifest but no installer: a previous run already found
+                    # out this one cannot be run from disk. Do not spend the
+                    # download finding out again.
+                    Write-Info "  not installable from disk (noted on an earlier run); using winget."
+                } elseif ($haveWinget) {
+                    Write-Info "  fetching it into downloadCache..."
+                    $pkg = Get-PackageToCache -Id $app.Id
+                    if ($pkg) {
+                        $fromCache = Install-CachedPackage -Package $pkg -ExtraArgs $app.Custom
+                        if (-not $fromCache) { Write-Warn2 "  it did not install; falling back to winget." }
                     }
-                    Write-Warn2 "  the cached copy did not install; falling back to a download."
+                }
+
+                if ($fromCache) {
+                    Write-Ok "$($app.Name) ready (installed from downloadCache)."
+                    continue
                 }
             }
 

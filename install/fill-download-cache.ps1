@@ -179,47 +179,39 @@ if (-not $wingetOk) {
     foreach ($app in (Get-AppList)) {
         $existing = Find-CachedPackage -Id $app.Id
         if ($existing -and -not $Force) {
-            Write-Ok "$($app.Name) $($existing.Version): already cached."
+            if ($existing.Installer) {
+                Write-Ok "$($app.Name) $($existing.Version): already cached."
+            } else {
+                # Manifest kept, payload dropped: an earlier run established
+                # this one cannot be installed from disk. Downloading it again
+                # would only re-establish that.
+                Write-Info "$($app.Name): not installable from disk - noted, skipping."
+            }
             continue
         }
         if ($existing -and $Force) {
-            Remove-Item $existing.Manifest, $existing.Installer -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $existing.Manifest -Force -ErrorAction SilentlyContinue
+            if ($existing.Installer) {
+                Remove-Item -LiteralPath $existing.Installer -Force -ErrorAction SilentlyContinue
+            }
         }
 
         Write-Info "Downloading $($app.Name)..."
-        $prevEAP = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        try {
-            & winget download -e --id $app.Id --source winget -d $dir `
-                --accept-package-agreements --accept-source-agreements
-            $code = $LASTEXITCODE
-        } finally {
-            $ErrorActionPreference = $prevEAP
-        }
-
-        if ($code -ne 0) {
-            Write-Warn2 "$($app.Name): winget download exited $code."
-            $failed += $app.Name
+        $got = Get-PackageToCache -Id $app.Id
+        if ($got) {
+            Write-Ok "$($app.Name) $($got.Version) cached."
             continue
         }
 
-        # Downloaded is not the same as usable. A portable package has no
-        # installer to run, and leaving it here would be a hundred megabytes
-        # that every later run politely ignores.
-        $got = Find-CachedPackage -Id $app.Id
-        if (-not $got) {
-            Write-Warn2 "$($app.Name): downloaded, but no manifest turned up for it."
+        # $null covers two different things, and they are not both failures.
+        # A package winget extracts rather than installs leaves its manifest
+        # behind as a note; anything else genuinely did not download.
+        $after = Find-CachedPackage -Id $app.Id
+        if ($after -and -not $after.Installer) {
+            Write-Info "  That one still needs a working winget on the target machine."
+        } else {
             $failed += $app.Name
-            continue
         }
-        if (-not (Test-CachedPackageUsable -Package $got)) {
-            Remove-Item $got.Manifest, $got.Installer -Force -ErrorAction SilentlyContinue
-            Write-Warn2 "$($app.Name) is a '$($got.Type)' package - winget extracts those"
-            Write-Warn2 "  rather than installing them, so a cached copy is no use. Removed."
-            Write-Info  "  That one still needs a working winget on the target machine."
-            continue
-        }
-        Write-Ok "$($app.Name) $($got.Version) cached."
     }
 }
 

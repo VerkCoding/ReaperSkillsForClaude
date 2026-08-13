@@ -308,6 +308,13 @@ function Find-CachedPackage {
       Returns everything needed to run the installer: the file, its type, the
       silent switches the manifest declares, and the exit codes it counts as
       success.
+
+      A manifest with no installer beside it is returned too, with Installer
+      set to $null. That is not damage - it is a note. Some packages cannot be
+      installed from disk at all (winget extracts them rather than running an
+      installer), and the way that is recorded is to keep the 2 KB manifest and
+      drop the payload. Without it, every run would download a hundred megabytes
+      to rediscover the same thing and throw it away again.
     #>
     param([string]$Id)
 
@@ -330,10 +337,6 @@ function Find-CachedPackage {
         $base = [System.IO.Path]::GetFileNameWithoutExtension($yaml.Name)
         $installer = Get-ChildItem -LiteralPath $yaml.DirectoryName -File -Filter "$base.*" -ErrorAction SilentlyContinue |
                      Where-Object { $_.Extension -ne '.yaml' } | Select-Object -First 1
-        if (-not $installer) {
-            Write-Warn2 "$($yaml.FullName) has no installer beside it - ignoring it."
-            continue
-        }
 
         $silent = ([regex]::Match($text, '(?m)^\s*Silent:\s*(.+?)\s*$')).Groups[1].Value
         if (-not $silent) {
@@ -353,7 +356,7 @@ function Find-CachedPackage {
             Id           = $pkgId
             Version      = ([regex]::Match($text, '(?m)^PackageVersion:\s*(\S+)\s*$')).Groups[1].Value
             Manifest     = $yaml.FullName
-            Installer    = $installer.FullName
+            Installer    = if ($installer) { $installer.FullName } else { $null }
             Type         = ([regex]::Match($text, '(?m)^\s*InstallerType:\s*(\S+)\s*$')).Groups[1].Value.ToLower()
             Nested       = ([regex]::Match($text, '(?m)^\s*NestedInstallerType:\s*(\S+)\s*$')).Groups[1].Value.ToLower()
             Silent       = $silent
@@ -361,6 +364,69 @@ function Find-CachedPackage {
         }
     }
     return $null
+}
+
+function Get-PackageToCache {
+    <#
+      Fetch a winget package INTO the cache, and hand back what was fetched.
+      $null if it could not be, for any reason.
+
+      This is the difference between a cache that fills itself and one that
+      never does. `winget install` downloads into winget's own temp directory
+      and deletes it afterwards, so a hundred runs install a hundred fresh
+      downloads and downloadCache stays empty - which is exactly what happened.
+      `winget download` puts the installer somewhere we choose and writes the
+      manifest beside it, and that manifest is what makes the file installable
+      later without anybody guessing at silent switches.
+
+      So: one download, into the cache, and the install runs from there. The
+      run after this one costs nothing.
+
+      Packages winget extracts rather than installs cannot be used from disk.
+      Those keep their manifest and lose their payload - see Find-CachedPackage
+      for why that is a note rather than damage.
+    #>
+    param([string]$Id)
+
+    $dir = Get-CacheDir -Create
+    if (-not $dir) { return $null }
+
+    # winget writes progress to stderr in normal operation, and merging a native
+    # command's stderr under EAP 'Stop' is itself a terminating error.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & winget download -e --id $Id --source winget -d $dir `
+            --accept-package-agreements --accept-source-agreements
+        $code = $LASTEXITCODE
+    } catch {
+        Write-Warn2 "  could not download it: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+        return $null
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+
+    if ($code -ne 0) {
+        Write-Warn2 "  winget download exited $code."
+        return $null
+    }
+
+    $pkg = Find-CachedPackage -Id $Id
+    if (-not $pkg -or -not $pkg.Installer) {
+        Write-Warn2 "  downloaded, but no installer and manifest pair turned up."
+        return $null
+    }
+
+    if (-not (Test-CachedPackageUsable -Package $pkg)) {
+        Remove-Item -LiteralPath $pkg.Installer -Force -ErrorAction SilentlyContinue
+        Write-Info "  that is a '$($pkg.Type)' package - winget extracts those rather than"
+        Write-Info "  installing them, so it cannot be run from disk. Keeping the manifest"
+        Write-Info "  as a note, so later runs do not download it again to find that out."
+        return $null
+    }
+
+    Write-Info "  kept in downloadCache - the next run will not download it again."
+    return $pkg
 }
 
 function Test-CachedPackageUsable {
@@ -381,6 +447,7 @@ function Test-CachedPackageUsable {
     #>
     param([pscustomobject]$Package)
 
+    if (-not $Package -or -not $Package.Installer) { return $false }
     if ($Package.Nested) { return $false }
     return ($Package.Type -notin @('zip', 'archive', 'portable', 'msstore'))
 }
