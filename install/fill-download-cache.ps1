@@ -37,14 +37,30 @@
   half-right version of that leaves a `claude` that winget cannot repair. Those
   still need a real winget on the target machine.
 
+  Files you already have
+  ----------------------
+  Anything already on disk is used where it lies and not downloaded again -
+  including files downloaded by hand under their own names, and files sitting
+  beside this repository rather than inside it. That last one matters: the
+  folder shared into a Sandbox is normally the one CONTAINING the clone, so
+  that is where installers actually accumulate.
+
+  Those are left where they are rather than copied, because duplicating 207 MB
+  to tidy it up is a poor trade. Pass -Consolidate when the point is to carry
+  one self-contained folder to another machine.
+
 .PARAMETER Force
   Re-download files that are already cached.
+
+.PARAMETER Consolidate
+  Copy files found outside downloadCache into it, so the folder can be carried
+  to another machine on its own.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File fill-download-cache.ps1
 #>
 [CmdletBinding()]
-param([switch]$Force)
+param([switch]$Force, [switch]$Consolidate)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # PS 5.1 progress bars make downloads several times slower
@@ -80,7 +96,8 @@ try {
     Write-Warn2 "Could not force TLS 1.2; continuing."
 }
 
-$failed = @()
+$failed  = @()
+$outside = @()   # found, but not inside downloadCache
 
 # ---------------------------------------------------------------------------
 # 1. The winget client. The big one, and the one that matters most: it is what
@@ -89,11 +106,38 @@ $failed = @()
 Write-Step "winget and its dependencies"
 
 foreach ($f in $RfcBootstrapFiles) {
-    if ($Force) { Remove-Item (Join-Path $dir $f.Name) -Force -ErrorAction SilentlyContinue }
+    $have = $null
+    if ($Force) {
+        Remove-Item (Join-Path $dir $f.Name) -Force -ErrorAction SilentlyContinue
+    } else {
+        $have = Get-CachedFile -Name $f.Name -MinMB $f.MinMB -Match $f.Match
+    }
 
-    $have = Get-CachedFile -Name $f.Name -MinMB $f.MinMB
     if ($have) {
-        Write-Ok ("{0}: already cached ({1:N1} MB)." -f $f.Label, ((Get-Item $have).Length / 1MB))
+        $mb = (Get-Item -LiteralPath $have).Length / 1MB
+        if ((Split-Path -Parent $have) -ieq $dir) {
+            Write-Ok ("{0}: already here ({1:N1} MB)." -f $f.Label, $mb)
+            continue
+        }
+
+        # Found, but not in downloadCache - downloaded by hand, or left beside
+        # the repository rather than inside it. Not downloaded again either way.
+        Write-Ok ("{0}: already on disk ({1:N1} MB), not downloaded." -f $f.Label, $mb)
+        Write-Info "  $have"
+        if (-not $Consolidate) {
+            # Deliberately not copied by default. Duplicating 207 MB to tidy it
+            # is a poor trade when the file is already somewhere the setup
+            # looks, and the folder it is in is usually the one being shared.
+            Write-Info "  Outside downloadCache, so it travels only if that folder does."
+            Write-Info "  Re-run with -Consolidate to copy it in."
+            $outside += $f.Label
+            continue
+        }
+        if (Save-ToCache -Path $have -Name $f.Name) {
+            Write-Ok ("{0}: copied into downloadCache." -f $f.Label)
+        } else {
+            Write-Warn2 ("{0}: could not be copied in; leaving it where it is." -f $f.Label)
+        }
         continue
     }
 
@@ -218,6 +262,13 @@ if ($failed.Count -eq 0) {
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Info ("{0} file(s), {1:N0} MB in {2}" -f $files.Count, $total, $dir)
+
+if ($outside.Count -gt 0) {
+    Write-Host ""
+    Write-Info "Already on disk, outside downloadCache: $($outside -join ', ')"
+    Write-Info "The setup finds them there, so nothing needs doing. To make"
+    Write-Info "downloadCache carry everything on its own, re-run with -Consolidate."
+}
 
 if ($failed.Count -gt 0) {
     Write-Host ""

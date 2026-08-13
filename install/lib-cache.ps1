@@ -21,10 +21,28 @@
 
   The rule, in one line
   ---------------------
-  If downloadCache has the file, use it. If not, download it, and put it there.
+  If the file is already here, use it. If not, download it, and keep it.
 
   Nothing here is ever required. An empty, unwritable or missing downloadCache
   changes nothing about how the setup behaves; it just downloads, as before.
+
+  "Already here" is deliberately generous
+  ---------------------------------------
+  Two ways, both because the alternative is re-downloading 207 MB while the
+  file sits a few inches away.
+
+  By name: nobody renames the winget bundle. It arrives as
+  Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle and stays that way, so
+  each entry below carries the patterns it plausibly arrived under as well as
+  the name we would have given it.
+
+  By place: the folder shared into a Sandbox is normally the one CONTAINING
+  this repository - installers get dropped beside the clone, not inside it. So
+  four directories are searched, nearest first: downloadCache, the plugin root,
+  its parent, and a downloadCache in that parent. Read-only, all of them;
+  anything downloaded is still written to downloadCache and nowhere else. The
+  search stops there on purpose - a cache that installs something it found
+  lying around in Downloads would be worse than no cache.
 
   Two kinds of thing live in it
   -----------------------------
@@ -41,8 +59,9 @@
 #>
 
 # Resolved at dot-source time, when $PSScriptRoot is unambiguously this file's
-# folder. Every caller lives in install\, so the cache is one level up.
-$RfcCacheDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'downloadCache'
+# folder. Every caller lives in install\, so the plugin root is one level up.
+$RfcPluginRoot = Split-Path -Parent $PSScriptRoot
+$RfcCacheDir   = Join-Path $RfcPluginRoot 'downloadCache'
 
 # The four files winget cannot be installed without, in the order they are
 # needed. One list, so repair-winget.ps1 and fill-download-cache.ps1 cannot
@@ -51,36 +70,50 @@ $RfcCacheDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'downloadCache'
 # MinMB is a floor, not a size: a proxy or captive portal answers with an HTML
 # login page and HTTP 200, which would otherwise be saved under an .appx name
 # and fail later with an error about the package rather than about the network.
+#
+# Match is the reason this works on a folder somebody filled by hand. Nobody who
+# downloads the winget bundle renames it to winget.msixbundle - it arrives as
+# Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle and that is what they
+# keep. A cache that only recognises our own naming would sit next to a 207 MB
+# file it needed and download it again, which is precisely the failure this
+# whole thing exists to prevent. Patterns are specific enough not to grab an
+# unrelated package, and the size floor still applies to whatever they match.
 $RfcBootstrapFiles = @(
     [pscustomobject]@{
         Name  = 'windowsappruntime.exe'; MinMB = 40
         Label = 'Windows App Runtime'
+        Match = @('WindowsAppRuntimeInstall*.exe', '*windowsappruntime*.exe')
         Url   = 'https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe'
     }
     [pscustomobject]@{
         Name  = 'VCLibs.appx'; MinMB = 3
         Label = 'VCLibs'
+        Match = @('Microsoft.VCLibs*.appx', '*VCLibs*.appx')
         Url   = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx'
     }
     [pscustomobject]@{
         Name  = 'UIXaml.appx'; MinMB = 2
         Label = 'UI.Xaml'
+        Match = @('Microsoft.UI.Xaml*.appx', '*UI.Xaml*.appx', '*UIXaml*.appx')
         Url   = 'https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx'
     }
     [pscustomobject]@{
         Name  = 'winget.msixbundle'; MinMB = 100
         Label = 'winget'
+        Match = @('*DesktopAppInstaller*.msixbundle', 'winget*.msixbundle')
         Url   = 'https://aka.ms/getwinget'
     }
 )
 
 # ---------------------------------------------------------------------------
-# The directory
+# The directories
 # ---------------------------------------------------------------------------
 
 function Get-CacheDir {
     <#
-      The cache directory, or $null if there is none and one could not be made.
+      Where cached files are WRITTEN, or $null if it does not exist and could
+      not be made. Only ever downloadCache itself - the extra places searched
+      below are somebody else's folders and not ours to put things in.
 
       Never throws. A read-only shared folder, a locked-down profile or a full
       disk all mean "no cache", which is a perfectly ordinary state - not a
@@ -98,30 +131,65 @@ function Get-CacheDir {
     }
 }
 
+function Get-CacheSearchDir {
+    <#
+      Where cached files are LOOKED FOR, nearest first.
+
+      Wider than where they are written, because the folder somebody shares into
+      a Sandbox is usually the one CONTAINING this repository, not this
+      repository itself - the installers get dropped beside the clone, not
+      inside it. Insisting they live in exactly one subdirectory would mean
+      re-downloading a file already sitting one level up.
+
+      Only these four, and only ever read from. This does not go hunting through
+      Downloads or the rest of the disk: a cache that quietly installs something
+      it found lying around is worse than no cache.
+    #>
+    $dirs = @(
+        $RfcCacheDir
+        $RfcPluginRoot
+        (Split-Path -Parent $RfcPluginRoot)
+        (Join-Path (Split-Path -Parent $RfcPluginRoot) 'downloadCache')
+    )
+    $seen = New-Object System.Collections.Generic.HashSet[string] ([StringComparer]::OrdinalIgnoreCase)
+    $out  = @()
+    foreach ($d in $dirs) {
+        if ($d -and (Test-Path $d -PathType Container) -and $seen.Add($d)) { $out += $d }
+    }
+    return $out
+}
+
 function Get-CachedFile {
     <#
-      A cached file by name, or $null.
+      A cached file, by our name for it or by any name it plausibly arrived
+      under. $null if there is not one.
 
       The size floor is checked on the way OUT as well as in. A cache is a
       directory anyone can drop a file into, and half a download left behind by
       a crashed run looks exactly like a real one until it is installed.
     #>
-    param([string]$Name, [double]$MinMB = 0)
+    param([string]$Name, [double]$MinMB = 0, [string[]]$Match)
 
-    $dir = Get-CacheDir
-    if (-not $dir) { return $null }
+    foreach ($dir in (Get-CacheSearchDir)) {
+        # Our own name first, everywhere, before any pattern anywhere: an exact
+        # match is never the wrong file, and a pattern occasionally is.
+        $candidates = @()
+        $exact = Join-Path $dir $Name
+        if (Test-Path $exact -PathType Leaf) { $candidates += (Get-Item -LiteralPath $exact) }
+        foreach ($pattern in @($Match)) {
+            if (-not $pattern) { continue }
+            $candidates += @(Get-ChildItem -LiteralPath $dir -File -Filter $pattern -ErrorAction SilentlyContinue)
+        }
 
-    $path = Join-Path $dir $Name
-    if (-not (Test-Path $path -PathType Leaf)) { return $null }
-
-    if ($MinMB -gt 0) {
-        $mb = (Get-Item $path).Length / 1MB
-        if ($mb -lt $MinMB) {
-            Write-Warn2 ("downloadCache\{0} is only {1:N1} MB - too small to be the real file, ignoring it." -f $Name, $mb)
-            return $null
+        foreach ($f in $candidates) {
+            if ($MinMB -gt 0 -and ($f.Length / 1MB) -lt $MinMB) {
+                Write-Warn2 ("{0} is only {1:N1} MB - too small to be the real file, ignoring it." -f $f.Name, ($f.Length / 1MB))
+                continue
+            }
+            return $f.FullName
         }
     }
-    return $path
+    return $null
 }
 
 function Save-ToCache {
@@ -139,8 +207,10 @@ function Save-ToCache {
         return $false
     }
     try {
-        Copy-Item -LiteralPath $Path -Destination (Join-Path $dir $Name) -Force -ErrorAction Stop
-        Write-Info "Kept as downloadCache\$Name - the next run will not download it again."
+        $kept = Join-Path $dir $Name
+        Copy-Item -LiteralPath $Path -Destination $kept -Force -ErrorAction Stop
+        Write-Info "Kept as $kept"
+        Write-Info "  - the next run will not download it again."
         return $true
     } catch {
         Write-Info "Could not keep a copy in downloadCache: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
@@ -151,6 +221,13 @@ function Save-ToCache {
 # ---------------------------------------------------------------------------
 # Downloading
 # ---------------------------------------------------------------------------
+
+function Get-BootstrapSpec {
+    <# One entry of $RfcBootstrapFiles by name, so callers can ask about a
+       single file without repeating its patterns and size floor. #>
+    param([string]$Name)
+    $RfcBootstrapFiles | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
+}
 
 function Get-RemoteFile {
     <#
@@ -198,11 +275,13 @@ function Get-BootstrapFile {
     #>
     param([pscustomobject]$File, [string]$Path)
 
-    $hit = Get-CachedFile -Name $File.Name -MinMB $File.MinMB
+    $hit = Get-CachedFile -Name $File.Name -MinMB $File.MinMB -Match $File.Match
     if ($hit) {
         Copy-Item -LiteralPath $hit -Destination $Path -Force
         $mb = (Get-Item $Path).Length / 1MB
-        Write-Info ("{0}: using downloadCache\{1} ({2:N1} MB, no download)." -f $File.Label, $File.Name, $mb)
+        # Named in full, because "using the cached copy" is not a claim anyone
+        # should have to take on trust when the alternative is 207 MB.
+        Write-Info ("{0}: using {1} ({2:N1} MB, no download)." -f $File.Label, $hit, $mb)
         return $mb
     }
 
@@ -232,10 +311,12 @@ function Find-CachedPackage {
     #>
     param([string]$Id)
 
-    $dir = Get-CacheDir
-    if (-not $dir) { return $null }
+    $yamls = @()
+    foreach ($dir in (Get-CacheSearchDir)) {
+        $yamls += @(Get-ChildItem -LiteralPath $dir -Filter '*.yaml' -File -ErrorAction SilentlyContinue)
+    }
 
-    foreach ($yaml in @(Get-ChildItem $dir -Filter '*.yaml' -File -ErrorAction SilentlyContinue)) {
+    foreach ($yaml in $yamls) {
         $text = try { Get-Content -LiteralPath $yaml.FullName -Raw -ErrorAction Stop } catch { $null }
         if (-not $text) { continue }
 
@@ -247,10 +328,10 @@ function Find-CachedPackage {
         # manifest - which is why the flat regexes below are safe: a merged
         # manifest from a download has a single Installers: entry.
         $base = [System.IO.Path]::GetFileNameWithoutExtension($yaml.Name)
-        $installer = Get-ChildItem $dir -File -Filter "$base.*" -ErrorAction SilentlyContinue |
+        $installer = Get-ChildItem -LiteralPath $yaml.DirectoryName -File -Filter "$base.*" -ErrorAction SilentlyContinue |
                      Where-Object { $_.Extension -ne '.yaml' } | Select-Object -First 1
         if (-not $installer) {
-            Write-Warn2 "downloadCache\$($yaml.Name) has no installer beside it - ignoring it."
+            Write-Warn2 "$($yaml.FullName) has no installer beside it - ignoring it."
             continue
         }
 

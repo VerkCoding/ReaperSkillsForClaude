@@ -298,10 +298,16 @@ rather than working around it, cheapest route first:
    with the last three passed as one `-DependencyPath` set. Needs nothing but
    HTTPS, so it works where step 2 cannot — but over 300 MB, hence last.
 
-**Unless the files are already here.** If `downloadCache\winget.msixbundle`
-exists, step 3 costs nothing and goes *first* — it is then both the cheapest
-route and the one with the fewest moving parts. Anything downloaded along the
-way is kept in `downloadCache` for next time.
+**Unless the bundle is already on disk.** If it is — under our name or its own,
+in `downloadCache\`, beside `RunThisToStart.bat`, or in the folder above — step
+3 costs nothing and goes *first*. It is then both the cheapest route and the one
+with the fewest moving parts, and with the dependencies cached too it needs no
+network at all. Anything downloaded along the way is kept for next time.
+
+That matters more than it sounds: step 2's `Repair-WinGetPackageManager` also
+pulls the client from GitHub, so on a machine that is wiped and re-run, *every*
+route was fetching the same 207 MB from the same host. With the bundle on disk,
+none of them do.
 
 Each download is size-checked, so a proxy or captive portal answering with an
 HTML login page is rejected rather than saved under an `.appx` name and failing
@@ -319,6 +325,15 @@ installs from disk.
 powershell -ExecutionPolicy Bypass -File install\fill-download-cache.ps1
 ```
 
+- **Files you already have are used where they lie.** Both the name and the
+  place are matched loosely on purpose. Nobody renames the winget bundle — it
+  arrives as `Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle` and stays
+  that way — and the folder shared into a Sandbox is normally the one
+  *containing* the clone, not the clone itself. So four directories are searched,
+  nearest first: `downloadCache\`, the plugin folder, its parent, and a
+  `downloadCache\` in that parent. Reads only ever; downloads are always written
+  to `downloadCache\` and nowhere else, and nothing outside those four is looked
+  at.
 - **Nothing is guessed.** The applications are fetched with `winget download`,
   which writes a manifest beside each installer. That manifest carries the
   silent switches and success codes, so `[1]` runs REAPER's installer with

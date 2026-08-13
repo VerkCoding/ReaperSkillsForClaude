@@ -257,11 +257,15 @@ if (-not $isAdmin) {
 # rather than the other way round.
 # ---------------------------------------------------------------------------
 $triedDirect = $false
-if (Get-CachedFile -Name 'winget.msixbundle' -MinMB 100) {
-    Write-Info "downloadCache already has the winget package - installing from it."
+$wingetSpec  = Get-BootstrapSpec 'winget.msixbundle'
+$haveBundle  = Get-CachedFile -Name $wingetSpec.Name -MinMB $wingetSpec.MinMB -Match $wingetSpec.Match
+if ($haveBundle) {
+    Write-Info "The winget package is already on disk:"
+    Write-Info "  $haveBundle"
+    Write-Info "Installing from it rather than downloading it again."
     $triedDirect = $true
     if (Invoke-DirectRoute) { Exit-Working }
-    Write-Info "The cached package did not take. Trying the other routes..."
+    Write-Info "That did not take. Trying the other routes..."
 }
 
 # ---------------------------------------------------------------------------
