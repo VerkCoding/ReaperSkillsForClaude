@@ -58,11 +58,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Write-Step($m) { Write-Host "`n=== $m" -ForegroundColor Cyan }
-function Write-Ok($m)   { Write-Host "  [ok]   $m" -ForegroundColor Green }
-function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
-function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
-function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
+# How this talks, and the log it writes. Same function names the rest of
+# this file already calls - see lib-console.ps1.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 $script:Problems = @()
 function Add-Problem($m) { $script:Problems += $m }
@@ -116,11 +114,9 @@ $MarketplaceName = 'reaper-skills-for-claude'
 $PluginName      = 'reaper-for-claude'
 $PluginRef       = "$PluginName@$MarketplaceName"
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "  REAPER for Claude - installer" -ForegroundColor Cyan
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Info "Plugin: $PluginRoot"
+if (-not $ProblemsOut) { [void](Start-RunLog 'configure') }
+Write-Banner "REAPER for Claude - configure the plugin"
+Write-Info "plugin  $PluginRoot"
 
 # ---------------------------------------------------------------------------
 # 1. Python environment
@@ -246,9 +242,12 @@ if ($doReaper) {
         # a machine with no REAPER on it at all - an instruction the user cannot
         # follow, pointing away from the thing that actually needs doing.
         $exe = @(
-            (Join-Path $env:ProgramFiles 'REAPER (x64)eaper.exe'),
-            (Join-Path $env:ProgramFiles 'REAPEReaper.exe'),
-            (Join-Path ${env:ProgramFiles(x86)} 'REAPEReaper.exe')
+            (Join-Path $env:ProgramFiles 'REAPER (x64)
+eaper.exe'),
+            (Join-Path $env:ProgramFiles 'REAPER
+eaper.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'REAPER
+eaper.exe')
         ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
         if ($exe) {
@@ -614,23 +613,13 @@ if ($ProblemsOut) {
     return
 }
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
+Write-Result -Problems $script:Problems
 if ($script:Problems.Count -eq 0) {
-    Write-Host "  DONE - nothing left to do by hand" -ForegroundColor Green
-    Write-Host "===============================================" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  1. Restart REAPER (it needs to reload reaper.ini)."
-    Write-Host "  2. Restart Claude."
-    Write-Host "  3. Ask: `"Check the current REAPER project info`""
+    Write-Host "     1. Restart REAPER (it reloads reaper.ini)."
+    Write-Host "     2. Restart Claude."
+    Write-Host "     3. Ask: `"Check the current REAPER project info`""
 } else {
-    Write-Host "  DONE - with $($script:Problems.Count) thing(s) to fix" -ForegroundColor Yellow
-    Write-Host "===============================================" -ForegroundColor Cyan
-    Write-Host ""
-    $i = 1
-    foreach ($p in $script:Problems) { Write-Host "  $i. $p" -ForegroundColor Yellow; $i++ }
-    Write-Host ""
-    Write-Host "  Re-running this installer after fixing them is safe."
+    Write-Host "     Re-running this after fixing them is safe."
 }
 Write-Host ""
 

@@ -68,11 +68,9 @@ param([switch]$Force, [switch]$Consolidate)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # PS 5.1 progress bars make downloads several times slower
 
-function Write-Step($m) { Write-Host "`n=== $m" -ForegroundColor Cyan }
-function Write-Ok($m)   { Write-Host "  [ok]   $m" -ForegroundColor Green }
-function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
-function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
-function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
+# How this talks, and the log it writes. Same function names the rest of
+# this file already calls - see lib-console.ps1.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 . (Join-Path $PSScriptRoot 'lib-app-control.ps1')
 . (Join-Path $PSScriptRoot 'lib-download-cache.ps1')
@@ -80,10 +78,9 @@ function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 # Long downloads, unattended by design - a stray click must not pause them.
 [void](Disable-ConsoleQuickEdit)
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "  REAPER for Claude - prepare offline files" -ForegroundColor Cyan
-Write-Host "===============================================" -ForegroundColor Cyan
+$stepLog = Start-RunLog 'prepare-offline'
+Write-Banner "REAPER for Claude - prepare offline files"
+if ($stepLog) { Write-Info "log  $stepLog" }
 
 $dir = Get-CacheDir -Create
 if (-not $dir) {
@@ -276,15 +273,7 @@ try {
         (New-Object System.Text.UTF8Encoding $false))
 } catch { }
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-if ($failed.Count -eq 0) {
-    Write-Host "  CACHE READY" -ForegroundColor Green
-} else {
-    Write-Host "  CACHE PARTLY FILLED" -ForegroundColor Yellow
-}
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host ""
+Write-Result -Problems $failed -DoneWord $(if ($failed.Count -eq 0) { 'CACHE READY' } else { 'CACHE PARTLY FILLED' })
 Write-Info ("{0} file(s), {1:N0} MB in {2}" -f $files.Count, $total, $dir)
 
 if ($outside.Count -gt 0) {

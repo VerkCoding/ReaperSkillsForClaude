@@ -57,10 +57,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Write-Ok($m)   { Write-Host "  [ok]   $m" -ForegroundColor Green }
-function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
-function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
-function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
+# How this talks, and the log it writes. Same function names the rest of
+# this file already calls - see lib-console.ps1.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 # For Get-ClaudeProfilePath and Test-ClaudeSignedIn, recorded in the manifest.
 . (Join-Path $PSScriptRoot 'lib-app-control.ps1')

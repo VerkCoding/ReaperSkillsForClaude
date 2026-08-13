@@ -242,6 +242,7 @@ own, and `[1]` is just the two of them in order:
 | `configure-plugin.ps1` | Dependencies, REAPER bridge and Claude only — installs no applications. `-Only python\|reaper\|claude`, `-Link`, `-Force`. |
 | `health-check.ps1` | Health check. Changes nothing. Run it any time. |
 | `install-python.ps1` | Python only, winget or direct download. |
+| `lib-console.ps1` | Dot-sourced. How every script talks, and the log it writes. |
 | `install-winget.ps1` | Install or repair winget itself. |
 | `fill-download-cache.ps1` | Everything `[3]` does. `-Force` re-fetches what is already cached. |
 
@@ -594,8 +595,24 @@ ReaperSkillsForClaude/              # marketplace root AND plugin root
 ```
 
 Every script says what it does in its own name, and each one is runnable on its
-own. The two `lib-` files are the exception: they are dot-sourced by the others
-and do nothing by themselves.
+own. The `lib-` files are the exception: they are dot-sourced by the others and
+do nothing by themselves.
+
+**Every run writes a log**, to `%USERPROFILE%\.reaper-for-claude\logs\`. Each
+line is timestamped and level-tagged plain ASCII — `OK`, `INFO`, `WARN`, `FAIL`,
+`STEP`, `TODO` — so it greps, pastes and reads anywhere:
+
+```
+21:54:21  STEP  Applications
+21:54:21  OK    Git ready (from downloadCache).
+21:54:21  WARN  REAPER failed (exit 1); retrying once...
+21:54:21  FAIL  Claude Code: winget exited 1.
+```
+
+`[1]` writes two: `setup-<time>.log` is that structured trace, and
+`transcript-<time>.log` is the raw capture including winget's and pip's own
+output. The first answers *what did the setup do*, the second *what did
+everything else say*. Read the first.
 
 `downloadCache/` appears beside `RunThisToStart.bat` once `[3]` has run. It is
 gitignored, holds only vendor installers, and is safe to delete.

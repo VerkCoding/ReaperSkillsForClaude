@@ -78,10 +78,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # progress bars slow this down a lot
 
-function Write-Ok($m)   { Write-Host "  [ok]   $m" -ForegroundColor Green }
-function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
-function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
-function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
+# How this talks, and the log it writes. Same function names the rest of
+# this file already calls - see lib-console.ps1.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 # Dot-sourced after the Write-* helpers, which it uses to report cache hits.
 . (Join-Path $PSScriptRoot 'lib-download-cache.ps1')
@@ -110,10 +109,8 @@ function Exit-Working {
     exit 0
 }
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "  winget - install or repair" -ForegroundColor Cyan
-Write-Host "===============================================" -ForegroundColor Cyan
+if (-not $Embedded) { [void](Start-RunLog 'winget') }
+Write-Banner "winget - install or repair"
 
 if ((Test-Winget) -and -not $Force) {
     Write-Ok "winget already works ($(& winget --version)). Nothing to do."

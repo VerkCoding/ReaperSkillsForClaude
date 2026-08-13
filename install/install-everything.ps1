@@ -67,11 +67,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Write-Step($m) { Write-Host "`n=== $m" -ForegroundColor Cyan }
-function Write-Ok($m)   { Write-Host "  [ok]   $m" -ForegroundColor Green }
-function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
-function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
-function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
+# How this talks, and the log it writes. Same function names the rest of
+# this file already calls - see lib-console.ps1.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 $script:Problems = @()
 function Add-Problem($m) { $script:Problems += $m }
@@ -143,15 +141,26 @@ $Apps = Get-AppList -PythonCustom $pythonCustom
 # the symptom hours later. A transcript costs nothing and turns that into a file
 # anyone can read or send on.
 # ---------------------------------------------------------------------------
+#
+# Two files, and they are not the same file. The transcript is the raw capture -
+# winget's own output, pip's, every error verbatim. The step log written by
+# Start-RunLog below is the structured trace of what this script decided and
+# when. The first answers "what happened", the second answers "what did WE do",
+# and the second is the one worth reading first.
+#
+# They are named apart deliberately. Both used to be "setup-<timestamp>.log",
+# which on a run fast enough to land in the same second is one filename - the
+# step logger would have appended into the middle of the transcript, and the
+# transcript's own pruning would have deleted step logs.
 $LogDir = Join-Path $env:USERPROFILE '.reaper-for-claude\logs'
-$LogFile = Join-Path $LogDir ("setup-{0}.log" -f (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
+$LogFile = Join-Path $LogDir ("transcript-{0}.log" -f (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
 $transcribing = $false
 try {
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     Start-Transcript -Path $LogFile -Force | Out-Null
     $transcribing = $true
     # Keep the last handful; these are small, but unbounded is its own mess.
-    Get-ChildItem $LogDir -Filter 'setup-*.log' -ErrorAction SilentlyContinue |
+    Get-ChildItem $LogDir -Filter 'transcript-*.log' -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | Select-Object -Skip 10 |
         ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
 } catch {
@@ -163,12 +172,11 @@ try {
 # output, so there is no window of opportunity. See Disable-ConsoleQuickEdit.
 [void](Disable-ConsoleQuickEdit)
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "  REAPER for Claude - install everything" -ForegroundColor Cyan
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Info "Plugin: $PluginRoot"
-if ($transcribing) { Write-Info "Log:    $LogFile" }
+$stepLog = Start-RunLog 'setup'
+Write-Banner "REAPER for Claude - install everything"
+Write-Info "plugin      $PluginRoot"
+if ($stepLog)      { Write-Info "log         $stepLog" }
+if ($transcribing) { Write-Info "transcript  $LogFile" }
 
 # ---------------------------------------------------------------------------
 # 0. Get REAPER and Claude closed first.
@@ -641,44 +649,24 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
 
 if (-not $serverOk) {
     Write-Host ""
-    Write-Host "===============================================" -ForegroundColor Red
-    Write-Host "  THE REAPER SERVER CANNOT START" -ForegroundColor Red
-    Write-Host "===============================================" -ForegroundColor Red
+    Write-Err  "The REAPER server cannot start."
+    Write-Info "Claude shows 'reaper: server disconnected' until this is fixed."
+    Write-Info "Its dependencies are missing. Build them with:"
     Write-Host ""
-    Write-Host "  Everything else may have installed, but Claude will show" -ForegroundColor Yellow
-    Write-Host "  'reaper: server disconnected' until this is fixed." -ForegroundColor Yellow
+    Write-Host "        python `"$PluginRoot\scripts\bootstrap.py`"" -ForegroundColor White
     Write-Host ""
-    Write-Host "  The dependencies are missing. Build them with:" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "      python `"$PluginRoot\scripts\bootstrap.py`"" -ForegroundColor White
-    Write-Host ""
-    Write-Host "  Whatever went wrong is in the log, above the summary:" -ForegroundColor Gray
-    if ($transcribing) {
-        Write-Host "      $LogFile" -ForegroundColor White
-    }
+    if ($transcribing) { Write-Info "What went wrong is in $LogFile" }
     Add-Problem "The REAPER server cannot start - run scripts\bootstrap.py and read its output."
 }
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-if ($script:Problems.Count -eq 0) {
-    Write-Host "  DONE" -ForegroundColor Green
-    Write-Host "===============================================" -ForegroundColor Cyan
-} else {
-    Write-Host "  DONE - with $($script:Problems.Count) thing(s) to fix" -ForegroundColor Yellow
-    Write-Host "===============================================" -ForegroundColor Cyan
-    Write-Host ""
-    $i = 1
-    foreach ($p in $script:Problems) { Write-Host "  $i. $p" -ForegroundColor Yellow; $i++ }
-}
-Write-Host ""
+Write-Result -Problems $script:Problems
 
+if ($stepLog)      { Write-Info "log         $stepLog" }
 if ($transcribing) {
-    Write-Host "  Full log of this run:" -ForegroundColor Gray
-    Write-Host "    $LogFile" -ForegroundColor Gray
-    Write-Host ""
+    Write-Info "transcript  $LogFile"
     try { Stop-Transcript | Out-Null } catch { }
 }
+Write-Host ""
 
 # Tell the caller whether this worked.
 #

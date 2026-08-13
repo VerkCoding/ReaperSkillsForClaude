@@ -40,11 +40,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Write-Step($m) { Write-Host "`n=== $m" -ForegroundColor Cyan }
-function Write-Ok($m)   { Write-Host "  [ok]   $m" -ForegroundColor Green }
-function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
-function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
-function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
+# How this talks, and the log it writes. Same function names the rest of
+# this file already calls - see lib-console.ps1.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 # For Get-ClaudeProfilePath and Test-ClaudeSignedIn.
 . (Join-Path $PSScriptRoot 'lib-app-control.ps1')
@@ -57,10 +55,9 @@ $Store      = Join-Path $DataDir 'backups'
 $MarketplaceName = 'reaper-skills-for-claude'
 $PluginRef       = "reaper-for-claude@$MarketplaceName"
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "  REAPER for Claude - revert everything" -ForegroundColor Cyan
-Write-Host "===============================================" -ForegroundColor Cyan
+$stepLog = Start-RunLog 'revert'
+Write-Banner "REAPER for Claude - revert everything"
+if ($stepLog) { Write-Info "log  $stepLog" }
 
 # The original, not the newest.
 #
@@ -264,10 +261,7 @@ if ($ours.Count -gt 0) {
     Write-Info "Everything was already installed before the setup ran; nothing to report."
 }
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "  REVERTED" -ForegroundColor Green
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  Restart REAPER and Claude so they reload their configuration."
+Write-Result -DoneWord 'REVERTED'
+Write-Host "     Restart REAPER and Claude so they reload their configuration."
+if ($stepLog) { Write-Host "     Log: $stepLog" -ForegroundColor DarkGray }
 Write-Host ""

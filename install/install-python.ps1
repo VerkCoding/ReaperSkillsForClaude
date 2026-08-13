@@ -37,10 +37,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # PS 5.1 progress bars make downloads several times slower
 
-function Write-Ok($m)   { Write-Host "  [ok]   $m" -ForegroundColor Green }
-function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
-function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
-function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
+# How this talks, and the log it writes. Same function names the rest of
+# this file already calls - see lib-console.ps1.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 function Test-Python {
     $cmd = Get-Command python -ErrorAction SilentlyContinue
@@ -71,10 +70,7 @@ function Update-SessionPath {
     return $false
 }
 
-Write-Host ""
-Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "  Install Python" -ForegroundColor Cyan
-Write-Host "===============================================" -ForegroundColor Cyan
+Write-Banner "Python - install"
 
 $existing = Test-Python
 if ($existing -and -not $Force) {
