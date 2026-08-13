@@ -286,10 +286,11 @@ rather than working around it:
 
 1. **Register an App Installer that is already provisioned** — instant, offline,
    and the usual fix when winget is present but not registered for your user.
-2. **Install Microsoft's release directly** — the Windows App Runtime, VCLibs,
-   UI.Xaml and the ~207 MB `Microsoft.DesktopAppInstaller` bundle, the last
-   three passed as one `-DependencyPath` set. Needs nothing but HTTPS: no
-   Gallery, no NuGet provider, no Store. Nothing at all once cached.
+2. **Deploy the packages directly** — the `Microsoft.DesktopAppInstaller`
+   bundle with VCLibs, UI.Xaml and the Windows App Runtime passed as one
+   `-DependencyPath` set. Needs nothing but HTTPS: no Gallery, no NuGet
+   provider, no Store. Nothing at all once cached. Where the files come from is
+   [below](#where-the-winget-packages-come-from).
 3. **Microsoft's PowerShell Gallery bootstrap**, as the fallback —
    `Install-PackageProvider NuGet` → `Install-Module Microsoft.WinGet.Client` →
    `Repair-WinGetPackageManager`. What to try when step 2 is refused outright by
@@ -307,12 +308,37 @@ the Gallery downloads into somewhere private and deletes it afterwards. On a
 machine wiped between runs that is the difference between paying 207 MB once and
 paying it every time.
 
-The bundle is found under our name or its own, in `downloadCache\`, beside
-`RunThisToStart.bat`, or in the folder above.
-
 Each download is size-checked, so a proxy or captive portal answering with an
 HTML login page is rejected rather than saved under an `.appx` name and failing
 later with an error about the package.
+
+#### Where the winget packages come from
+
+1. **`downloadCache`, if they are already there** — nothing is downloaded. The
+   bundle is recognised under our name or its own, in `downloadCache\`, beside
+   `RunThisToStart.bat`, or in the folder above.
+2. **[EXLOUD/winget-installer](https://github.com/EXLOUD/winget-installer)** —
+   one ~340 MB archive carrying all four packages for every architecture. The
+   four for this machine are extracted into `downloadCache` and the archive is
+   thrown away. It also ships the App Runtime as a 40 MB framework `.msix`
+   rather than Microsoft's 102 MB setup executable, which makes the whole
+   install a single `Add-AppxPackage` call.
+3. **Microsoft's own links, file by file** — for anything still missing.
+
+**Only packages are taken out of that archive. The `Install-Winget.ps1` and
+`Launcher.bat` it also contains are never run.** Running a stranger's script
+with administrator rights on every machine this plugin is installed on is not a
+trade worth making for a faster download.
+
+What makes taking the *packages* defensible is that Windows checks them:
+`Add-AppxPackage` validates the MSIX signature chain at deployment, so anything
+that is not the package Microsoft signed fails to install and step 3 runs
+instead.
+
+Worth being clear about what this does **not** fix: that archive is a GitHub
+release asset, served from the same host as Microsoft's own release. If GitHub
+is rate-limiting an address, it fails exactly as `aka.ms/getwinget` does. The
+thing that solves that is the cache, not the source.
 
 ### The download cache
 

@@ -116,19 +116,27 @@ if ((Test-Winget) -and -not $Force) {
 
 function Install-WingetDirect {
     <#
-      Install winget from Microsoft's own release, with its dependencies.
+      Install winget from packages on disk, fetching whatever is not there yet.
 
       This is the route that actually works where winget is genuinely absent -
       Windows Sandbox, Windows Server, a stripped image. It needs nothing but
       HTTPS: no PowerShell Gallery, no NuGet provider, no Store. With a filled
       downloadCache it needs not even that.
 
-      Four files, not three. winget 1.29 also declares
-      Microsoft.WindowsAppRuntime.1.8, which is not an appx but a 102 MB
-      installer - and without it the bundle fails with 0x80073CF3 naming a
-      "framework that could not be found", which reads like a corrupt download.
-      That is why this route is skipped when nothing is cached: over 300 MB to
-      achieve what the Gallery route does with a few.
+      Where the files come from, in order:
+
+        1. downloadCache, if they are already there. Nothing is downloaded.
+        2. The offline bundle - one archive with all of them. Extraction only;
+           nothing in it is executed. See $RfcMirrorBundle.
+        3. Microsoft's own links, file by file, for whatever is still missing.
+
+      Four files, not three. winget also declares Microsoft.WindowsAppRuntime.1.8,
+      and without it the bundle fails with 0x80073CF3 naming a "framework that
+      could not be found", which reads like a corrupt download. It comes in two
+      forms: a 40 MB framework .msix, which is simply another dependency, or
+      Microsoft's 102 MB setup executable, which has to be run. The package is
+      preferred when there is one - smaller, and it makes the whole install a
+      single Add-AppxPackage call.
     #>
     $tmp = Join-Path $env:TEMP ("winget-setup-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -137,31 +145,55 @@ function Install-WingetDirect {
     foreach ($f in $RfcBootstrapFiles) { $spec[$f.Name] = $f }
 
     try {
-        # The Windows App Runtime first: it is a normal installer, not a package,
-        # so it cannot be passed to Add-AppxPackage with the others.
-        $runtime = Join-Path $tmp 'windowsappruntime.exe'
-        [void](Get-BootstrapFile -File $spec['windowsappruntime.exe'] -Path $runtime)
-        Write-Info "Installing Windows App Runtime..."
-        $proc = Start-Process -FilePath $runtime -ArgumentList '--quiet' -Wait -PassThru
-        if ($proc.ExitCode -ne 0) {
-            Write-Warn2 ("  runtime installer exited {0}; continuing anyway" -f $proc.ExitCode)
+        # One archive beats four downloads, so it is tried first - but only when
+        # something is actually missing. Having the files already is the cheapest
+        # outcome of all and must not be thrown away for the sake of an order.
+        if (Test-BootstrapComplete) {
+            Write-Info "Every package is already on disk. Nothing to download."
+        } else {
+            [void](Expand-MirrorBundle)
         }
 
         foreach ($name in @('VCLibs.appx', 'UIXaml.appx', 'winget.msixbundle')) {
             [void](Get-BootstrapFile -File $spec[$name] -Path (Join-Path $tmp $name))
         }
+        $deps = @((Join-Path $tmp 'VCLibs.appx'), (Join-Path $tmp 'UIXaml.appx'))
+
+        # The runtime, in whichever form is available.
+        $runtimeMsix = Get-CachedFile -Name $RfcRuntimeMsix.Name -MinMB $RfcRuntimeMsix.MinMB `
+                                      -Match $RfcRuntimeMsix.Match
+        if ($runtimeMsix) {
+            $local = Join-Path $tmp 'windowsappruntime.msix'
+            Copy-Item -LiteralPath $runtimeMsix -Destination $local -Force
+            Write-Info ("Windows App Runtime: using {0} ({1:N1} MB, as a dependency)." -f `
+                        $runtimeMsix, ((Get-Item $local).Length / 1MB))
+            $deps += $local
+        } else {
+            # Microsoft's form: an installer, not a package, so it cannot go
+            # through Add-AppxPackage with the others and has to run first.
+            $runtime = Join-Path $tmp 'windowsappruntime.exe'
+            [void](Get-BootstrapFile -File $spec['windowsappruntime.exe'] -Path $runtime)
+            Write-Info "Installing Windows App Runtime..."
+            $proc = Start-Process -FilePath $runtime -ArgumentList '--quiet' -Wait -PassThru
+            if ($proc.ExitCode -ne 0) {
+                Write-Warn2 ("  runtime installer exited {0}; continuing anyway" -f $proc.ExitCode)
+            }
+        }
 
         # One call, with the dependencies passed as dependencies.
         #
-        # Installing them as three separate Add-AppxPackage calls is what fails
-        # with 0x80073CF3, "package failed updates, dependency or conflict
+        # Installing them as separate Add-AppxPackage calls is what fails with
+        # 0x80073CF3, "package failed updates, dependency or conflict
         # validation": each call is validated on its own, so the deployment
         # engine never gets to match the bundle's declared dependencies against
         # the files provided, and a version or architecture that does not line
         # up is only discovered at the end. -DependencyPath hands it everything
         # at once and lets it do that matching itself.
+        #
+        # This call is also what makes taking packages from a third-party mirror
+        # defensible: it validates the MSIX signature chain, so anything that is
+        # not the package Microsoft signed does not deploy.
         $bundle = Join-Path $tmp 'winget.msixbundle'
-        $deps   = @((Join-Path $tmp 'VCLibs.appx'), (Join-Path $tmp 'UIXaml.appx'))
 
         Write-Info "Installing winget with its dependencies..."
         try {

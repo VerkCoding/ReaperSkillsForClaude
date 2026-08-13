@@ -21,8 +21,13 @@
 
   What it fetches
   ---------------
-    the winget client and its three dependencies   (~310 MB)
+    the winget client and its three dependencies   (one archive, ~340 MB)
     Python, Git, REAPER, Claude Desktop            (via `winget download`)
+
+  The winget packages come from the offline bundle named in lib-cache.ps1 when
+  they are not already on disk, and from Microsoft's own links file by file when
+  that fails. Only packages are taken out of the archive; the scripts it also
+  contains are never run.
 
   Anything already in the cache is left alone, so this is safe to re-run and
   cheap when it has nothing to do. Nothing is installed. Nothing on this machine
@@ -105,7 +110,31 @@ $outside = @()   # found, but not inside downloadCache
 # ---------------------------------------------------------------------------
 Write-Step "winget and its dependencies"
 
+# The offline bundle first - one archive carrying every package, which is the
+# same source [1] prefers. Extraction only; nothing in it is run. Skipped
+# entirely when the files are already here, because having them is cheaper than
+# any download and no ordering is worth giving that up for.
+if ($Force) {
+    foreach ($n in (@($RfcBootstrapFiles.Name) + $RfcRuntimeMsix.Name)) {
+        Remove-Item (Join-Path $dir $n) -Force -ErrorAction SilentlyContinue
+    }
+}
+if (-not (Test-BootstrapComplete)) {
+    [void](Expand-MirrorBundle)
+} else {
+    Write-Ok "Every winget package is already on disk."
+}
+
 foreach ($f in $RfcBootstrapFiles) {
+    # The runtime comes in two forms and only one is needed. Having the 40 MB
+    # package is a reason not to fetch the 102 MB installer that does the same
+    # job, not a reason to have both.
+    if ($f.Name -eq 'windowsappruntime.exe' -and
+        (Get-CachedFile -Name $RfcRuntimeMsix.Name -MinMB $RfcRuntimeMsix.MinMB -Match $RfcRuntimeMsix.Match)) {
+        Write-Ok "Windows App Runtime: have the package; not fetching the 102 MB installer too."
+        continue
+    }
+
     $have = $null
     if ($Force) {
         Remove-Item (Join-Path $dir $f.Name) -Force -ErrorAction SilentlyContinue

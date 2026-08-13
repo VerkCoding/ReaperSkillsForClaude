@@ -105,6 +105,68 @@ $RfcBootstrapFiles = @(
     }
 )
 
+# The App Runtime as a package rather than an installer.
+#
+# Microsoft's own link for it is a 102 MB setup executable that has to be run;
+# the mirror below carries the 40 MB framework .msix instead, which can simply
+# be handed to Add-AppxPackage as one more dependency. Preferred when present,
+# which is why it is a separate entry rather than a fifth downloadable one -
+# there is no URL to fetch it from on its own.
+$RfcRuntimeMsix = [pscustomobject]@{
+    Name  = 'windowsappruntime.msix'; MinMB = 15
+    Label = 'Windows App Runtime (package)'
+    Match = @('Microsoft.WindowsAppRuntime.1.8.msix', 'Microsoft.WindowsAppRuntime.*.msix')
+    Url   = $null
+}
+
+# The mirror: one archive holding every file above, for every architecture.
+#
+# A third party's re-host of Microsoft's own packages, and used as the first
+# place to DOWNLOAD from - never as something to run. Only the packages are
+# taken out of it; the Install-Winget.ps1 and Launcher.bat it also contains are
+# ignored, because running a stranger's script with administrator rights on
+# every machine this plugin is installed on is not a trade worth making for a
+# faster download.
+#
+# What makes taking the packages defensible is that Windows checks them.
+# Add-AppxPackage validates the MSIX signature chain at deployment, so a bundle
+# that is not the one Microsoft signed does not install - it fails, and the
+# Microsoft download below runs instead. That is the whole safety argument, and
+# it is why extraction is the only thing done here.
+#
+# It is worth being clear about what this does NOT fix: the archive is a GitHub
+# release asset, served from the same host as Microsoft's own release. If GitHub
+# is rate-limiting or blocking an address, this fails exactly as that does. The
+# thing that solves that is the cache, not the source.
+$RfcMirrorBundle = [pscustomobject]@{
+    Label = 'winget offline bundle'
+    Url   = 'https://github.com/EXLOUD/winget-installer/releases/download/v1.2.0/winget-v1.12.460-exloud.zip'
+    MinMB = 300
+    About = 'EXLOUD/winget-installer v1.2.0 (winget 1.12.460)'
+}
+
+function Get-MirrorContents {
+    <#
+      Which entries of the mirror archive are wanted, and what to call them
+      once extracted.
+
+      Matched by wildcard rather than by exact path so a version bump inside the
+      archive does not silently stop finding anything - the names carry versions
+      (Microsoft.VCLibs.14.00_14.0.33728_x64.Appx) and those will move.
+    #>
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+    @(
+        [pscustomobject]@{ As = 'winget.msixbundle'
+                           Pattern = '*Microsoft.DesktopAppInstaller_*.msixbundle' }
+        [pscustomobject]@{ As = 'VCLibs.appx'
+                           Pattern = "*Microsoft.VCLibs.14.00_*_$arch.appx" }
+        [pscustomobject]@{ As = 'UIXaml.appx'
+                           Pattern = "*Microsoft.UI.Xaml.2.8_*_$arch.appx" }
+        [pscustomobject]@{ As = 'windowsappruntime.msix'
+                           Pattern = "*win10-$arch/Microsoft.WindowsAppRuntime.1.8.msix" }
+    )
+}
+
 # ---------------------------------------------------------------------------
 # The directories
 # ---------------------------------------------------------------------------
@@ -290,6 +352,86 @@ function Get-BootstrapFile {
     Write-Info ("  {0:N1} MB" -f $mb)
     [void](Save-ToCache -Path $Path -Name $File.Name)
     return $mb
+}
+
+function Test-BootstrapComplete {
+    <# Is every file needed to install winget offline already on disk? #>
+    foreach ($f in $RfcBootstrapFiles) {
+        if ($f.Name -eq 'windowsappruntime.exe') { continue }   # handled below
+        if (-not (Get-CachedFile -Name $f.Name -MinMB $f.MinMB -Match $f.Match)) { return $false }
+    }
+    # Either form of the runtime will do.
+    if (Get-CachedFile -Name $RfcRuntimeMsix.Name -MinMB $RfcRuntimeMsix.MinMB -Match $RfcRuntimeMsix.Match) { return $true }
+    $exe = Get-BootstrapSpec 'windowsappruntime.exe'
+    return [bool](Get-CachedFile -Name $exe.Name -MinMB $exe.MinMB -Match $exe.Match)
+}
+
+function Expand-MirrorBundle {
+    <#
+      Fetch the mirror archive and take the packages out of it. Returns how
+      many were extracted; 0 means the caller should fall back to Microsoft.
+
+      Extraction only. Nothing from the archive is ever executed - see
+      $RfcMirrorBundle for why that line matters and why Add-AppxPackage's
+      signature check is what makes taking the packages safe.
+
+      The archive itself is not kept. It carries all three architectures, so
+      most of its 340 MB is for machines this is not, and the four files pulled
+      out of it are the thing worth keeping.
+    #>
+    $dir = Get-CacheDir -Create
+    if (-not $dir) {
+        Write-Info "Nowhere to extract to; skipping the offline bundle."
+        return 0
+    }
+
+    $tmp = Join-Path $env:TEMP ("rfc-mirror-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $zip = Join-Path $tmp 'winget-offline.zip'
+    $taken = 0
+
+    try {
+        Write-Info ("Downloading the {0} (about 340 MB)..." -f $RfcMirrorBundle.Label)
+        Write-Info ("  {0}" -f $RfcMirrorBundle.About)
+        [void](Get-RemoteFile -Url $RfcMirrorBundle.Url -Path $zip -MinMB $RfcMirrorBundle.MinMB)
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+        try {
+            foreach ($want in (Get-MirrorContents)) {
+                # Separators normalised before matching. The zip format says
+                # entry names use '/', and this archive does - but plenty of
+                # tools write '\' instead, and the only pattern here with a
+                # directory in it is the runtime, so a mismatch would silently
+                # cost 40 MB of package and fetch Microsoft's 102 MB installer
+                # instead. Cheaper to normalise than to depend on it.
+                $entry = $archive.Entries |
+                         Where-Object { ($_.FullName -replace '\\', '/') -like $want.Pattern } |
+                         Select-Object -First 1
+                if (-not $entry) {
+                    Write-Warn2 "  $($want.As): nothing matching in the archive."
+                    continue
+                }
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $dir $want.As), $true)
+                Write-Info ("  {0}  <-  {1} ({2:N1} MB)" -f $want.As, $entry.FullName, ($entry.Length / 1MB))
+                $taken++
+            }
+        } finally {
+            $archive.Dispose()
+        }
+
+        if ($taken -gt 0) {
+            Write-Ok "$taken package(s) extracted into downloadCache."
+            Write-Info "Kept there, so this download happens once and not again."
+        }
+    } catch {
+        Write-Warn2 "  offline bundle failed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+        Write-Info  "  Falling back to Microsoft's own downloads."
+    } finally {
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    return $taken
 }
 
 # ---------------------------------------------------------------------------
