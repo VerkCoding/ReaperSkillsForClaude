@@ -223,20 +223,20 @@ own, and `[1]` is just the two of them in order:
 
 | Script | Does |
 | --- | --- |
-| `setup-all.ps1` | Everything `[1]` does. `-SkipApps` configures the plugin only. |
-| `revert-all.ps1` | Everything `[2]` does. `-From <dir>` picks an older snapshot. |
-| `snapshot.ps1` | `-Backup`, `-Restore`, `-List` — the backup engine on its own. |
-| `install.ps1` | Plugin setup only: `-Only python\|reaper\|claude`, `-Link`, `-Force`. |
-| `doctor.ps1` | Health check. Changes nothing. Run it any time. |
+| `install-everything.ps1` | Everything `[1]` does. `-SkipApps` configures the plugin only. |
+| `revert-everything.ps1` | Everything `[2]` does. `-From <dir>` picks an older snapshot. |
+| `backup-restore.ps1` | `-Backup`, `-Restore`, `-List` — the backup engine on its own. |
+| `configure-plugin.ps1` | Dependencies, REAPER bridge and Claude only — installs no applications. `-Only python\|reaper\|claude`, `-Link`, `-Force`. |
+| `health-check.ps1` | Health check. Changes nothing. Run it any time. |
 | `install-python.ps1` | Python only, winget or direct download. |
-| `repair-winget.ps1` | Install or repair winget itself. |
+| `install-winget.ps1` | Install or repair winget itself. |
 | `fill-download-cache.ps1` | Everything `[3]` does. `-Force` re-fetches what is already cached. |
 
 The health check is worth knowing about by name — `[1]` runs it at the end, but
 it is the thing to reach for whenever something stops working:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install\doctor.ps1
+powershell -ExecutionPolicy Bypass -File install\health-check.ps1
 ```
 
 ### About the winget invocation
@@ -473,7 +473,7 @@ just not the skills.
 ## Troubleshooting
 
 **Start here:** `RunThisToStart.bat` → `[2]`, or
-`powershell -ExecutionPolicy Bypass -File install\doctor.ps1`.
+`powershell -ExecutionPolicy Bypass -File install\health-check.ps1`.
 
 Every line is `[ok]`, `[warn]` or `[FAIL]`, and each failure carries a `->` fix.
 It checks the layout, whether the MCP server can *actually start*, REAPER's
@@ -542,7 +542,7 @@ absolute path, so moving or renaming this folder breaks it. Re-add it:
 exactly the way REAPER does with `reaper.ini`. An edit made while it is running
 may be silently undone, which shows up later as a server pointing at a path that
 no longer exists. Quit Desktop fully (including the tray icon), run
-`install.ps1 -Only claude`, then start it again. The installer warns when it
+`configure-plugin.ps1 -Only claude`, then start it again. The installer warns when it
 detects Desktop running, and the health check catches the reverted state.
 
 ---
@@ -572,11 +572,17 @@ ReaperSkillsForClaude/              # marketplace root AND plugin root
 │   ├── claude_bridge.lua
 │   └── enable_reapy.py
 └── install/                        # Windows setup, PowerShell
-    ├── setup-all.ps1  revert-all.ps1  snapshot.ps1
-    ├── install.ps1    doctor.ps1      lib-apps.ps1
-    ├── install-python.ps1  repair-winget.ps1
-    └── fill-download-cache.ps1  lib-cache.ps1
+    ├── install-everything.ps1      # [1]
+    ├── revert-everything.ps1       # [2]
+    ├── fill-download-cache.ps1     # [3]
+    ├── install-winget.ps1  install-python.ps1  configure-plugin.ps1
+    ├── backup-restore.ps1  health-check.ps1
+    └── lib-app-control.ps1  lib-download-cache.ps1
 ```
+
+Every script says what it does in its own name, and each one is runnable on its
+own. The two `lib-` files are the exception: they are dot-sourced by the others
+and do nothing by themselves.
 
 `downloadCache/` appears beside `RunThisToStart.bat` once `[3]` has run. It is
 gitignored, holds only vendor installers, and is safe to delete.
@@ -595,7 +601,7 @@ Three rules keep this navigable:
   `${CLAUDE_PLUGIN_ROOT}` unresolved. Inlining sidesteps that without needing a
   separate file to point at.
 
-`doctor.ps1` is a thin wrapper around `doctor.py`. Two health checks that can
+`health-check.ps1` is a thin wrapper around `doctor.py`. Two health checks that can
 disagree about what "working" means are worse than one, because whichever you
 happen to run tells you the setup is fine.
 
@@ -697,7 +703,7 @@ while working.
 For live editing, run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install\install.ps1 -Only claude -Link
+powershell -ExecutionPolicy Bypass -File install\configure-plugin.ps1 -Only claude -Link
 ```
 
 That creates a junction at `~\.claude\skills\reaper-for-claude` pointing here,
@@ -714,7 +720,7 @@ claude plugin uninstall reaper-for-claude@reaper-skills-for-claude
 claude plugin marketplace remove reaper-skills-for-claude
 ```
 
-`install.ps1 -Only claude -Link` does both for you, and the health check flags
+`configure-plugin.ps1 -Only claude -Link` does both for you, and the health check flags
 the shadowed state.
 
 Changes to a `SKILL.md` apply immediately. Changes to `plugin.json` need

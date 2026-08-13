@@ -15,10 +15,10 @@
   The filename is kept because the skills and the docs point at it.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File doctor.ps1
+  powershell -ExecutionPolicy Bypass -File health-check.ps1
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File doctor.ps1 -ReaperResourcePath "E:\REAPER\Portable"
+  powershell -ExecutionPolicy Bypass -File health-check.ps1 -ReaperResourcePath "E:\REAPER\Portable"
 #>
 [CmdletBinding()]
 param(

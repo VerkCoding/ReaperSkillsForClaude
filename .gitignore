@@ -19,7 +19,7 @@ venv/
 
 # Installer downloads, kept so a re-run does not fetch 300 MB again.
 # Hundreds of megabytes of vendor binaries - never ours to commit, and the
-# whole point is that it is machine-local. install\lib-cache.ps1 owns it.
+# whole point is that it is machine-local. install\lib-download-cache.ps1 owns it.
 downloadCache/
 
 # OS

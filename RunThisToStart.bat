@@ -15,8 +15,8 @@ rem  [3] is not a third way to install. It downloads what [1] would download and
 rem  then stops, which is the only useful thing to do from a machine that is not
 rem  the one being set up - no internet there, or wiped after every run.
 rem
-rem      [1] -> install\setup-all.ps1           backup, apps, plugin, health check
-rem      [2] -> install\revert-all.ps1          restore that backup, remove our files
+rem      [1] -> install\install-everything.ps1           backup, apps, plugin, health check
+rem      [2] -> install\revert-everything.ps1          restore that backup, remove our files
 rem      [3] -> install\fill-download-cache.ps1 fetch the installers, install nothing
 rem ===========================================================================
 
@@ -122,7 +122,7 @@ if /I not "%GO%"=="y" goto menu
 
 rem -Confirmed: the user has just read all of the above and agreed. Asking a
 rem second time inside the script reads as though something changed.
-%PS% "%PLUGIN%install\setup-all.ps1" -Confirmed
+%PS% "%PLUGIN%install\install-everything.ps1" -Confirmed
 
 rem Captured on its own line, before anything else can overwrite it. setup-all
 rem now exits 0 only when it has nothing left to report.
@@ -169,7 +169,7 @@ goto menu
 
 :revert
 cls
-%PS% "%PLUGIN%install\revert-all.ps1"
+%PS% "%PLUGIN%install\revert-everything.ps1"
 echo.
 pause
 goto menu

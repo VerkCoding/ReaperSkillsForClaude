@@ -1,6 +1,9 @@
 <#
 .SYNOPSIS
-  Installer for the REAPER for Claude plugin.
+  Configure the plugin: dependencies, REAPER bridge, distant API, Claude.
+
+  Installs no applications - install-everything.ps1 has done that by the time
+  this runs, and running this on its own assumes they are already there.
 
 .DESCRIPTION
   The repository is the plugin. Nothing is copied into a skills directory any
@@ -27,10 +30,10 @@
   bumped and it is reinstalled. Use this while developing the plugin.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File install.ps1
+  powershell -ExecutionPolicy Bypass -File configure-plugin.ps1
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File install.ps1 -Only reaper -Force
+  powershell -ExecutionPolicy Bypass -File configure-plugin.ps1 -Only reaper -Force
 #>
 [CmdletBinding()]
 param(
@@ -42,7 +45,7 @@ param(
     [switch]$SkipReaperConfig,
     [switch]$Link,
     [switch]$Force,
-    # Set by setup-all.ps1, which prints the combined summary itself.
+    # Set by install-everything.ps1, which prints the combined summary itself.
     #
     # Without this there are two "DONE" banners, and they can disagree: each
     # script keeps its own $script:Problems, and `&` runs this one in a child
@@ -594,7 +597,7 @@ if ($doClaude) {
 # ---------------------------------------------------------------------------
 # 5. Health check + summary
 # ---------------------------------------------------------------------------
-$doctor = Join-Path $PSScriptRoot 'doctor.ps1'
+$doctor = Join-Path $PSScriptRoot 'health-check.ps1'
 if (Test-Path $doctor) {
     if ($ReaperResourcePath) { & $doctor -ReaperResourcePath $ReaperResourcePath }
     else { & $doctor }

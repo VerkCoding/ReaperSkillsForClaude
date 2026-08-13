@@ -28,7 +28,7 @@
   ----------------------------------
     a. downloadCache, if they are there. Nothing is downloaded.
     b. Microsoft's own links otherwise, file by file, each pinned to a specific
-       version. See $RfcBootstrapFiles in lib-cache.ps1 for why the versions
+       version. See $RfcBootstrapFiles in lib-download-cache.ps1 for why the versions
        matter and are not free to move.
 
   Why route 2 is not last any more
@@ -63,12 +63,12 @@
   Run even when winget already works.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File repair-winget.ps1
+  powershell -ExecutionPolicy Bypass -File install-winget.ps1
 #>
 [CmdletBinding()]
 param(
     [switch]$Force,
-    # Set by setup-all.ps1. The advice to close the window and start again is
+    # Set by install-everything.ps1. The advice to close the window and start again is
     # right when this is run on its own from the menu, and wrong mid-install:
     # the caller re-checks winget itself and carries straight on, so telling the
     # user to restart makes a working run look like a failed one.
@@ -84,7 +84,7 @@ function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
 function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 
 # Dot-sourced after the Write-* helpers, which it uses to report cache hits.
-. (Join-Path $PSScriptRoot 'lib-cache.ps1')
+. (Join-Path $PSScriptRoot 'lib-download-cache.ps1')
 
 function Test-Winget {
     $cmd = Get-Command winget -ErrorAction SilentlyContinue
@@ -149,7 +149,7 @@ function Install-WingetDirect {
 
     try {
         # Fetch whatever is not on disk. Three files, each from its own pinned
-        # URL - see $RfcBootstrapFiles in lib-cache.ps1 for why the versions are
+        # URL - see $RfcBootstrapFiles in lib-download-cache.ps1 for why the versions are
         # not free to move.
         $missing = Get-MissingBootstrap
         if ($missing.Count -eq 0) {

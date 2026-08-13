@@ -1,7 +1,7 @@
 <#
   Shared helpers for finding, closing and first-running REAPER and Claude.
 
-  Dot-sourced by setup-all.ps1. Nothing here runs on its own.
+  Dot-sourced by install-everything.ps1. Nothing here runs on its own.
 
   The care in this file is mostly about one hazard: Claude Desktop and the
   Claude Code CLI are BOTH called claude.exe. Closing "claude" by name would
@@ -387,7 +387,7 @@ function Get-AppList {
       The applications, in dependency order. `Safe` means "leave it alone if
       present", which is the whole of the promise not to touch user data.
 
-      Lives here rather than in setup-all.ps1 because two scripts need the same
+      Lives here rather than in install-everything.ps1 because two scripts need the same
       list and neither owns it: setup-all installs them, and
       fill-download-cache.ps1 downloads them ahead of time. A list kept in two
       files is a list that will disagree with itself.

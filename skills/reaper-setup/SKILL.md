@@ -30,7 +30,7 @@ establish which route is broken before changing anything.
 On Windows, run the health check:
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/install/doctor.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/install/health-check.ps1"
 ```
 
 Every line is `[ok]`, `[warn]` or `[FAIL]`, and each failure carries a `->` fix.
@@ -173,7 +173,7 @@ that).
 On Windows, everything above is automated:
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/install/install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/install/configure-plugin.ps1"
 ```
 
 It bootstraps Python, installs the REAPER-side files, configures the distant

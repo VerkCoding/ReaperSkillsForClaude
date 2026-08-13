@@ -4,7 +4,7 @@
 Run it when something stops working, or hand the output to Claude and ask it to
 read it. Every line is [ok], [warn] or [FAIL], and each failure says what to do.
 
-This is the only implementation. `install/doctor.ps1` delegates here rather than
+This is the only implementation. `install/health-check.ps1` delegates here rather than
 carrying a parallel copy in PowerShell: two health checks that can disagree
 about what "working" means are worse than none, because the one you happen to
 run tells you the setup is fine.

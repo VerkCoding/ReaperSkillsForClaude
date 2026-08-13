@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   "Revert Everything" is only honest if a snapshot was taken before anything
-  moved, so setup-all.ps1 calls this first, every time, before its first write.
+  moved, so install-everything.ps1 calls this first, every time, before its first write.
 
   Two kinds of entry are recorded, and the difference is what makes a clean
   revert possible:
@@ -44,7 +44,7 @@
   Show the snapshots that exist.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File snapshot.ps1 -Backup
+  powershell -ExecutionPolicy Bypass -File backup-restore.ps1 -Backup
 #>
 [CmdletBinding(DefaultParameterSetName = 'List')]
 param(

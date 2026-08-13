@@ -43,7 +43,7 @@
   It is still only ever an optimisation: an absent, empty or unwritable cache
   falls straight back to `winget install` and behaves as it always did. [3]
   Prepare Offline Files does the same fetching without installing, for setting
-  up a machine that cannot reach the vendors at all. See lib-cache.ps1.
+  up a machine that cannot reach the vendors at all. See lib-download-cache.ps1.
 
 .PARAMETER SkipApps
   Configure the plugin only; install no applications.
@@ -52,7 +52,7 @@
   Continue past the "REAPER is running" warning.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File setup-all.ps1
+  powershell -ExecutionPolicy Bypass -File install-everything.ps1
 #>
 [CmdletBinding()]
 param(
@@ -84,8 +84,8 @@ $Here       = $PSScriptRoot
 $PluginRoot = Split-Path -Parent $Here
 
 # Dot-sourced so their helpers share these Write-* functions and $script: scope.
-. (Join-Path $Here 'lib-apps.ps1')
-. (Join-Path $Here 'lib-cache.ps1')
+. (Join-Path $Here 'lib-app-control.ps1')
+. (Join-Path $Here 'lib-download-cache.ps1')
 
 # ---------------------------------------------------------------------------
 # Whether installing Python may touch PATH.
@@ -130,7 +130,7 @@ $pythonCustom = if ($pathPythonUsable) {
     'PrependPath=1 InstallAllUsers=0 Include_test=0'
 }
 
-# Applications, in dependency order. Defined in lib-apps.ps1 so
+# Applications, in dependency order. Defined in lib-app-control.ps1 so
 # fill-download-cache.ps1 works from the same list.
 $Apps = Get-AppList -PythonCustom $pythonCustom
 
@@ -207,12 +207,12 @@ try {
     # switch, and the call fails with "a positional parameter cannot be found".
     $snapArgs = @{ Backup = $true }
     if ($ReaperResourcePath) { $snapArgs['ReaperResourcePath'] = $ReaperResourcePath }
-    # Out-Null alone, not Out-Host. snapshot.ps1 reports progress with Write-Host,
+    # Out-Null alone, not Out-Host. backup-restore.ps1 reports progress with Write-Host,
     # which bypasses the pipeline and is displayed either way, and returns the
     # snapshot directory on the success stream for programmatic callers. Piping
     # through Out-Host renders that path too, so the transcript showed the
     # directory twice - once in the [ok] line and once bare.
-    & (Join-Path $Here 'snapshot.ps1') @snapArgs | Out-Null
+    & (Join-Path $Here 'backup-restore.ps1') @snapArgs | Out-Null
     Write-Info "Undo this whole setup later with [2] Revert Everything."
 } catch {
     Write-Err "Could not take a snapshot: $_"
@@ -239,7 +239,7 @@ if ($SkipApps) {
         # through it, so getting it installed is worth doing properly rather
         # than working around.
         #
-        # repair-winget.ps1 deploys the packages directly, which needs nothing
+        # install-winget.ps1 deploys the packages directly, which needs nothing
         # but HTTPS - no PowerShell Gallery, no NuGet provider, no Store - and
         # is the route that works on the machines that lack winget. It reads
         # them from downloadCache when they are there and downloads them when
@@ -247,7 +247,7 @@ if ($SkipApps) {
         # Gallery bootstrap is still there behind it.
         Write-Warn2 "winget is not available - installing it."
         try {
-            & (Join-Path $Here 'repair-winget.ps1') -Embedded | Out-Host
+            & (Join-Path $Here 'install-winget.ps1') -Embedded | Out-Host
         } catch {
             Write-Warn2 "winget install did not succeed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
         }
@@ -271,7 +271,7 @@ if ($SkipApps) {
     Write-Step "Applications"
 
     # downloadCache, if it has been filled, comes before every download below.
-    # See lib-cache.ps1 for the whole argument; the short version is that a
+    # See lib-download-cache.ps1 for the whole argument; the short version is that a
     # machine wiped between runs pays the same 300 MB every time, and repeating
     # that often enough is what gets an address blocked.
     if (Get-CacheDir) {
@@ -560,7 +560,7 @@ if (-not $SkipApps) {
 }
 
 # ---------------------------------------------------------------------------
-# 4. The plugin itself. install.ps1 owns this and is unchanged by the wrapper.
+# 4. The plugin itself. configure-plugin.ps1 owns this and is unchanged by the wrapper.
 #
 # One last check before it runs. Everything below writes to files that REAPER
 # and Claude rewrite from memory on exit, and by now the user has been through
@@ -572,7 +572,7 @@ if (-not $SkipApps) {
 
 Write-Step "Configuring the plugin"
 # Hashtable, for the same reason as the snapshot call above: an array splat is
-# positional, so '-Force' would bind to install.ps1's first parameter, -Only,
+# positional, so '-Force' would bind to configure-plugin.ps1's first parameter, -Only,
 # and fail its ValidateSet.
 $installArgs = @{}
 if ($ReaperResourcePath) { $installArgs['ReaperResourcePath'] = $ReaperResourcePath }
@@ -584,13 +584,13 @@ $problemsFile = Join-Path $env:TEMP ("rfc-problems-" + [Guid]::NewGuid().ToStrin
 $installArgs['ProblemsOut'] = $problemsFile
 
 try {
-    # Same NativeCommandError hazard as inside install.ps1: pip and the claude
+    # Same NativeCommandError hazard as inside configure-plugin.ps1: pip and the claude
     # CLI both write to stderr in normal operation, and under EAP 'Stop' that
     # would abort the configuration this call exists to perform.
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & (Join-Path $Here 'install.ps1') @installArgs | Out-Host
+        & (Join-Path $Here 'configure-plugin.ps1') @installArgs | Out-Host
     } finally {
         $ErrorActionPreference = $prevEAP
     }

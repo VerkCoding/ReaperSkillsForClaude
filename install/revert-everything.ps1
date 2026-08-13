@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Undo everything setup-all.ps1 changed.
+  Undo everything install-everything.ps1 changed.
 
 .DESCRIPTION
   Puts the machine back the way it was before [1] Install Everything:
@@ -30,7 +30,7 @@
   Skip the confirmation prompt.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File revert-all.ps1
+  powershell -ExecutionPolicy Bypass -File revert-everything.ps1
 #>
 [CmdletBinding()]
 param(
@@ -65,7 +65,7 @@ Write-Host "===============================================" -ForegroundColor Cy
 # that is one specific snapshot. Picking the newest meant that on any machine
 # where [1] had been run twice - which eight different failure messages tell
 # people to do - Revert restored the half-installed state left by the first run
-# instead. snapshot.ps1 now writes `original` once and promotes the earliest
+# instead. backup-restore.ps1 now writes `original` once and promotes the earliest
 # directory on machines that predate that; this mirrors the same choice.
 $snapshot = if ($From) { $From } else {
     $original = Join-Path $Store 'original'
@@ -157,7 +157,7 @@ if (Test-Path $link) {
 # ---------------------------------------------------------------------------
 Write-Step "Restoring configuration"
 try {
-    & (Join-Path $Here 'snapshot.ps1') -Restore -From $snapshot | Out-Host
+    & (Join-Path $Here 'backup-restore.ps1') -Restore -From $snapshot | Out-Host
 } catch {
     Write-Err "Restore failed: $_"
     exit 1

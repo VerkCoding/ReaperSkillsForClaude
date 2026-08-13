@@ -25,7 +25,7 @@
     Python, Git, REAPER, Claude Desktop        (via `winget download`)
 
   The winget packages come from pinned Microsoft URLs. The versions are not
-  incidental - see $RfcBootstrapFiles in lib-cache.ps1.
+  incidental - see $RfcBootstrapFiles in lib-download-cache.ps1.
 
   Anything already in the cache is left alone, so this is safe to re-run and
   cheap when it has nothing to do. Nothing is installed. Nothing on this machine
@@ -74,8 +74,8 @@ function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
 function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
 function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 
-. (Join-Path $PSScriptRoot 'lib-apps.ps1')
-. (Join-Path $PSScriptRoot 'lib-cache.ps1')
+. (Join-Path $PSScriptRoot 'lib-app-control.ps1')
+. (Join-Path $PSScriptRoot 'lib-download-cache.ps1')
 
 Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan

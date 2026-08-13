@@ -1,7 +1,7 @@
 <#
   The download cache: downloadCache\ beside RunThisToStart.bat.
 
-  Dot-sourced by repair-winget.ps1, setup-all.ps1 and fill-download-cache.ps1.
+  Dot-sourced by install-winget.ps1, install-everything.ps1 and fill-download-cache.ps1.
   Nothing here runs on its own.
 
   Why this exists
@@ -87,7 +87,7 @@ $RfcArch = if (($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE) -conta
 }
 
 # The three files winget cannot be installed without, in the order they are
-# needed. One list, so repair-winget.ps1 and fill-download-cache.ps1 cannot
+# needed. One list, so install-winget.ps1 and fill-download-cache.ps1 cannot
 # drift apart about what "cached" means.
 #
 # MinMB is a floor, not a size: a proxy or captive portal answers with an HTML
