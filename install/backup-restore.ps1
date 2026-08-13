@@ -62,6 +62,9 @@ function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
 function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
 function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 
+# For Get-ClaudeProfilePath and Test-ClaudeSignedIn, recorded in the manifest.
+. (Join-Path $PSScriptRoot 'lib-app-control.ps1')
+
 $Store = Join-Path $env:USERPROFILE '.reaper-for-claude\backups'
 
 function Get-ReaperPath {
@@ -187,10 +190,18 @@ if ($Backup) {
     }
 
     $manifest = [ordered]@{
-        created           = (Get-Date).ToString('o')
-        reaperPath        = Get-ReaperPath
-        entries           = $entries
-        appsPresentBefore = Get-InstalledApps
+        created             = (Get-Date).ToString('o')
+        reaperPath          = Get-ReaperPath
+        entries             = $entries
+        appsPresentBefore   = Get-InstalledApps
+        # Which of Claude's own state directories were here before any of this
+        # ran, and whether an account was already attached. Recorded as fact
+        # rather than inferred later, because after the setup has installed
+        # Claude there is no way to tell its profile from one the user has had
+        # for a year. Revert needs exactly that distinction - see the note in
+        # revert-everything.ps1.
+        claudeProfilesBefore = @(Get-ClaudeProfilePath)
+        claudeSignedInBefore = [bool](Test-ClaudeSignedIn)
     }
     [System.IO.File]::WriteAllText(
         (Join-Path $dir 'manifest.json'),

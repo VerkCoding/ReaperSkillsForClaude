@@ -77,6 +77,9 @@ function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 . (Join-Path $PSScriptRoot 'lib-app-control.ps1')
 . (Join-Path $PSScriptRoot 'lib-download-cache.ps1')
 
+# Long downloads, unattended by design - a stray click must not pause them.
+[void](Disable-ConsoleQuickEdit)
+
 Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host "  REAPER for Claude - prepare offline files" -ForegroundColor Cyan

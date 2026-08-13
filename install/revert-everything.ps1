@@ -46,6 +46,9 @@ function Write-Info($m) { Write-Host "  .      $m" -ForegroundColor Gray }
 function Write-Warn2($m){ Write-Host "  [warn] $m" -ForegroundColor Yellow }
 function Write-Err($m)  { Write-Host "  [FAIL] $m" -ForegroundColor Red }
 
+# For Get-ClaudeProfilePath and Test-ClaudeSignedIn.
+. (Join-Path $PSScriptRoot 'lib-app-control.ps1')
+
 $Here       = $PSScriptRoot
 $PluginRoot = Split-Path -Parent $Here
 $DataDir    = Join-Path $env:USERPROFILE '.reaper-for-claude'
@@ -186,6 +189,59 @@ Remove-Item (Join-Path $DataDir 'requirements.sha256') -Force -ErrorAction Silen
 # packages, removing them risks breaking something else that came to depend on
 # them, and leaving them behind costs nothing.
 Write-Info "python-reapy was left in your system Python - harmless, and safe to keep."
+
+# ---------------------------------------------------------------------------
+# 3b. A Claude profile that only this setup ever created.
+#
+# Restoring configuration cannot fix a Claude that will not start. The damage
+# that actually strands people is in the profile itself - Chromium's Local
+# Storage, a LevelDB - and a revert that only puts JSON files back reports
+# success over a machine where Claude is still broken. That is the state this
+# exists for: Claude installed by the setup, killed before it finished writing
+# its profile, never signed into, and no way back.
+#
+# Two conditions, both from the manifest, and both required:
+#
+#   the profile did not exist before this setup ran   (so it is not theirs)
+#   no account was attached, then or now              (so nothing is in it)
+#
+# Under those, the directory provably holds nothing the user made: no chats, no
+# account, no settings they chose. It is renamed rather than deleted, so even a
+# wrong call here is recoverable by hand.
+#
+# Anything else - a profile that predates the setup, or one with a session in
+# it - is left completely alone. A signed-in Claude has conversations in it, and
+# no install problem is worth those.
+# ---------------------------------------------------------------------------
+Write-Step "Claude profile"
+if ($null -eq $manifest.claudeProfilesBefore) {
+    Write-Info "This snapshot predates profile tracking; leaving Claude's data alone."
+} elseif (Test-ClaudeSignedIn) {
+    Write-Info "Claude has an account attached, so its profile is yours now - left alone."
+} elseif ($manifest.claudeSignedInBefore) {
+    Write-Info "Claude was already signed in before this ran; leaving its profile alone."
+} else {
+    $before = @($manifest.claudeProfilesBefore)
+    $ours   = @(Get-ClaudeProfilePath | Where-Object { $before -notcontains $_ })
+
+    if ($ours.Count -eq 0) {
+        Write-Info "No Claude profile was created by this setup; nothing to reset."
+    } else {
+        foreach ($dir in $ours) {
+            $aside = "$dir.before-revert-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            try {
+                Move-Item -LiteralPath $dir -Destination $aside -Force -ErrorAction Stop
+                Write-Ok "Reset $dir"
+                Write-Info "  Moved aside to $aside - delete it once Claude starts again."
+                Write-Info "  It was created by this setup and never signed into, so there"
+                Write-Info "  are no conversations in it."
+            } catch {
+                Write-Warn2 "Could not move $dir : $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+                Write-Info  "  Close Claude fully and try again, or rename that folder by hand."
+            }
+        }
+    }
+}
 
 # ---------------------------------------------------------------------------
 # 4. Applications: report, never remove.

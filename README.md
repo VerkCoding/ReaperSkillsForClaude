@@ -162,6 +162,19 @@ repositories that have nothing to do with this plugin. It reports which ones
 `[1]` installed and leaves removing them to you. Projects, media, presets, FX
 chains and conversations are never touched.
 
+**One exception, and it is narrow.** If `[1]` installed Claude and Claude was
+never signed into, `[2]` moves its profile directory aside. Restoring config
+files cannot fix a Claude that will not start, and the state that strands people
+is a profile that was interrupted while being created for the first time — a
+revert that only puts JSON back reports success over a machine still broken.
+
+Both conditions come from the snapshot and both are required: the profile did
+not exist before `[1]` ran, and no account was attached then or now. Under those,
+the directory provably holds nothing you made — no conversations, no account, no
+settings you chose. It is **renamed, not deleted**, so a wrong call is still
+recoverable. A profile that predates the setup, or one with a session in it, is
+left completely alone.
+
 ## Requirements
 
 Everything below is handled by `[1]`; this is what it is arranging for you.

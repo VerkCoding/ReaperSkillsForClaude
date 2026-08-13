@@ -158,6 +158,11 @@ try {
     # Transcription is a nicety, never a reason not to install.
 }
 
+# A click in the console window pauses everything until a key is pressed, and a
+# stalled window looks exactly like a busy one. Off before the first line of
+# output, so there is no window of opportunity. See Disable-ConsoleQuickEdit.
+[void](Disable-ConsoleQuickEdit)
+
 Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host "  REAPER for Claude - install everything" -ForegroundColor Cyan
@@ -543,6 +548,14 @@ if (-not $SkipApps) {
 
     if ($reaperWasNew -or $claudeWasNew) {
         Write-Step "First run"
+
+        # Claude first, and before REAPER, even though REAPER's first run comes
+        # after it. Claude's installer launches the app itself, so by now it is
+        # very likely already up and building its profile - and REAPER's first
+        # run ends by force-closing what it opened. Getting Claude shut down
+        # cleanly here means nothing downstream is racing a Chromium profile
+        # that has never been written before.
+        if ($claudeWasNew) { [void](Wait-ClaudeSettled) }
 
         if ($reaperWasNew) {
             $resource = if ($ReaperResourcePath) { $ReaperResourcePath } else { Join-Path $env:APPDATA 'REAPER' }

@@ -32,6 +32,63 @@
 # done below.
 
 # ---------------------------------------------------------------------------
+# The console
+# ---------------------------------------------------------------------------
+
+function Disable-ConsoleQuickEdit {
+    <#
+      Stop a stray mouse click from pausing the whole install.
+
+      QuickEdit is on by default in the Windows console. A click in the window
+      starts a text selection, and a console with a selection active BLOCKS the
+      next write to it - so the script stops dead at its next Write-Host and
+      stays there until somebody presses a key. Nobody does, because a window
+      full of output that has simply stopped scrolling looks exactly like a
+      window that is busy working. People walk away from it.
+
+      That is not a cosmetic problem here. This setup opens and closes REAPER
+      and Claude on timers; a run frozen in the middle of that leaves both in
+      whatever half-state they were in.
+
+      Only the console this process is attached to is changed, and only for as
+      long as it lives - nothing is written to the registry, so the user's own
+      console defaults are untouched. ENABLE_EXTENDED_FLAGS must be set in the
+      same call or the QuickEdit bit is ignored.
+
+      Best effort: a redirected or absent console simply has no mode to set,
+      which is not a reason to stop installing.
+    #>
+    try {
+        if (-not ('Rfc.Console' -as [type])) {
+            Add-Type -Namespace Rfc -Name Console -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+'@ -ErrorAction Stop
+        }
+
+        $handle = [Rfc.Console]::GetStdHandle(-10)          # STD_INPUT_HANDLE
+        if ($handle -eq [IntPtr]::Zero -or $handle -eq [IntPtr](-1)) { return $false }
+
+        $mode = [uint32]0
+        if (-not [Rfc.Console]::GetConsoleMode($handle, [ref]$mode)) { return $false }
+
+        $QUICK_EDIT     = [uint32]0x0040
+        $EXTENDED_FLAGS = [uint32]0x0080
+
+        if (($mode -band $QUICK_EDIT) -eq 0) { return $true }   # already off
+
+        $new = [uint32](($mode -bor $EXTENDED_FLAGS) -band (-bnot $QUICK_EDIT))
+        return [Rfc.Console]::SetConsoleMode($handle, $new)
+    } catch {
+        return $false
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Process identity
 # ---------------------------------------------------------------------------
 
@@ -161,11 +218,30 @@ function Confirm-AppsClosed {
       opened the application itself. It is deliberately NOT used for the check
       before the configuration writes: by then the user has been through several
       prompts and may have reopened REAPER with a project in it.
+
+      -Only narrows it to one application, and pairs with -AllowForce every time.
+      Without it, REAPER's first run - which legitimately force-closes the REAPER
+      it just opened - also swept CLAUDE, force-closing an app it had never
+      opened and knew nothing about. On a machine with a filled downloadCache
+      there is no download to slow the run down, so that sweep lands while
+      Claude's installer is still auto-launching it for the very first time and
+      Chromium is building its Local Storage. A SIGKILL there leaves a LevelDB
+      that cannot be read, and with no account attached yet there is no session
+      to fall back on: Claude then fails to start, every time, and nothing in
+      the setup or the revert knows why. Force-closing is only ever defensible
+      against the application this script just opened, so it now has to be
+      named.
     #>
-    param([string]$Because = "", [switch]$AllowForce)
+    param(
+        [string]$Because = "",
+        [switch]$AllowForce,
+        [ValidateSet('reaper', 'claude')] [string[]]$Only
+    )
+
+    $kinds = if ($Only) { $Only } else { @('reaper', 'claude') }
 
     $reopened = @()
-    foreach ($kind in @('reaper', 'claude')) {
+    foreach ($kind in $kinds) {
         if (@(Get-TargetProcesses $kind).Count -gt 0 -and -not (Test-SelfHostedBy $kind)) {
             $reopened += $kind
         }
@@ -454,6 +530,32 @@ function Test-AppPresent {
 # Login detection
 # ---------------------------------------------------------------------------
 
+function Get-ClaudeProfilePath {
+    <#
+      Every directory Claude Desktop keeps its own state in, whichever way it
+      was installed. Existing ones only.
+
+      Two shapes: a plain install writes to %APPDATA%\Claude, and an MSIX one is
+      redirected into its package's LocalCache. Both hold the same things -
+      config.json, and Chromium's Local Storage, which is the LevelDB that a
+      kill at the wrong moment ruins.
+
+      One list, because three separate places used to enumerate this and the
+      backup only knew about the ones that existed when it ran - which on a
+      first install is neither of them.
+    #>
+    $dirs = @()
+    $plain = Join-Path $env:APPDATA 'Claude'
+    if (Test-Path $plain -PathType Container) { $dirs += $plain }
+
+    Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Packages') -Filter 'Claude_*' -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $d = Join-Path $_.FullName 'LocalCache\Roaming\Claude'
+            if (Test-Path $d -PathType Container) { $dirs += $d }
+        }
+    return $dirs
+}
+
 function Test-ClaudeSignedIn {
     <#
       Presence check only. Token VALUES are never read, printed or stored -
@@ -462,9 +564,8 @@ function Test-ClaudeSignedIn {
       lastKnownAccountUuid is written once an account is attached, and survives
       the app being closed, which makes it a better signal than any window state.
     #>
-    $paths = @("$env:APPDATA\Claude\config.json")
-    Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter 'Claude_*' -Directory -ErrorAction SilentlyContinue |
-        ForEach-Object { $paths += Join-Path $_.FullName 'LocalCache\Roaming\Claude\config.json' }
+    $paths = @()
+    foreach ($d in (Get-ClaudeProfilePath)) { $paths += Join-Path $d 'config.json' }
 
     foreach ($p in $paths) {
         if (-not (Test-Path $p)) { continue }
@@ -548,8 +649,11 @@ function Invoke-ReaperFirstRun {
             # REAPER writes reaper.ini again on exit, so give that write time to
             # land, then make sure it did not come back up - a splash screen or
             # a queued restart would otherwise still be holding the file.
+            #
+            # -Only reaper. This used to sweep Claude too, which is how a Claude
+            # still being created by its own installer got force-killed.
             Start-Sleep -Seconds 2
-            [void](Confirm-AppsClosed -AllowForce)
+            [void](Confirm-AppsClosed -AllowForce -Only reaper)
             return (Test-Path $ini)
         }
     }
@@ -559,8 +663,61 @@ function Invoke-ReaperFirstRun {
     [void](Read-Host)
     [void](Request-AppClosed -Kind reaper -Label 'REAPER' -GraceSeconds 10 -AllowForce)
     Start-Sleep -Seconds 2
-    [void](Confirm-AppsClosed -AllowForce)
+    [void](Confirm-AppsClosed -AllowForce -Only reaper)
     return (Test-Path $ini)
+}
+
+function Wait-ClaudeSettled {
+    <#
+      Claude's installer opens Claude when it finishes. Let that first launch
+      finish on its own terms before anything else in the setup touches it.
+
+      A brand-new Claude spends its first seconds building a profile, including
+      Chromium's Local Storage - a LevelDB. Anything that ends the process
+      during that leaves a store it cannot read afterwards, and because no
+      account has been attached yet there is no session to fall back on. Claude
+      then fails to start, every single time, and the fix is deleting a folder
+      the user has never heard of.
+
+      So this waits for it to appear, gives the profile write a head start, then
+      asks it to close the same way the X button does - and waits properly.
+
+      It never forces. That is the entire point: if Claude will not close, the
+      right answer is to leave it running and let the sign-in step below deal
+      with it, not to end a process that is still writing. Returning $false is
+      not a failure, it is "still open, handle it downstream".
+    #>
+    param([int]$AppearSeconds = 20, [int]$GraceSeconds = 45)
+
+    if (Test-SelfHostedBy 'claude') { return $true }
+
+    # It may already be up, or the installer may still be getting to it.
+    $deadline = (Get-Date).AddSeconds($AppearSeconds)
+    while ((Get-Date) -lt $deadline -and @(Get-TargetProcesses 'claude').Count -eq 0) {
+        Start-Sleep -Milliseconds 500
+    }
+
+    $procs = @(Get-TargetProcesses 'claude')
+    if ($procs.Count -eq 0) { return $true }
+
+    Write-Info "Claude opened itself after installing. Letting it finish setting up..."
+    Start-Sleep -Seconds 5
+    foreach ($p in $procs) {
+        try { if ($p.MainWindowHandle -ne 0) { [void]$p.CloseMainWindow() } } catch { }
+    }
+
+    $deadline = (Get-Date).AddSeconds($GraceSeconds)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        if (@(Get-TargetProcesses 'claude').Count -eq 0) {
+            Write-Ok "Claude closed cleanly; its profile is intact."
+            return $true
+        }
+    }
+
+    Write-Info "Claude is still open. Leaving it alone rather than ending it -"
+    Write-Info "a new Claude stopped mid-setup cannot start again afterwards."
+    return $false
 }
 
 function Invoke-ClaudeFirstRun {
@@ -643,7 +800,7 @@ function Invoke-ClaudeFirstRun {
             # had its chance to flush, and this sweep is what stops Claude
             # holding the config file the setup writes next.
             Start-Sleep -Seconds 2
-            [void](Confirm-AppsClosed -AllowForce)
+            [void](Confirm-AppsClosed -AllowForce -Only claude)
 
             if (-not (Test-ClaudeSignedIn)) {
                 # Worth saying out loud rather than discovering later. If the
