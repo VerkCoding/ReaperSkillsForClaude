@@ -286,11 +286,20 @@ rather than working around it:
 
 1. **Register an App Installer that is already provisioned** — instant, offline,
    and the usual fix when winget is present but not registered for your user.
-2. **Deploy the packages directly** — the `Microsoft.DesktopAppInstaller`
-   bundle with VCLibs and UI.Xaml passed as one `-DependencyPath` set. Needs
-   nothing but HTTPS: no Gallery, no NuGet provider, no Store. Nothing at all
-   once cached. Three files, ~265 MB, all from Microsoft — see
+2. **Deploy the packages directly.** Register VCLibs and UI.Xaml on their own
+   first, swallowing failures, then install the `Microsoft.DesktopAppInstaller`
+   bundle with both passed as `-DependencyPath`. Needs nothing but HTTPS: no
+   Gallery, no NuGet provider, no Store. Nothing at all once cached. Three
+   files, ~265 MB, all from Microsoft — see
    [the pinned versions](#the-pinned-versions).
+
+   Registering them separately is belt to `-DependencyPath`'s braces.
+   Registration makes a framework *present*, so the bundle resolves it from the
+   machine and needs nothing handed over; `-DependencyPath` makes it *matched*.
+   A stripped image needs the first; a machine holding a newer copy of one
+   dependency and none of the other needs both. Failures on that first pass are
+   expected and ignored — offering a framework the machine already has at a
+   newer version is itself a conflict, and it is already satisfied.
 3. **Microsoft's PowerShell Gallery bootstrap**, as the fallback —
    `Install-PackageProvider NuGet` → `Install-Module Microsoft.WinGet.Client` →
    `Repair-WinGetPackageManager`. What to try when step 2 is refused outright by
@@ -307,8 +316,15 @@ leaves its files in `downloadCache`; the Gallery downloads into somewhere privat
 and deletes it afterwards. On a machine wiped between runs that is the difference
 between paying once and paying every time.
 
-Each download is size-checked, so a proxy or captive portal answering with an
-HTML login page is rejected rather than saved under an `.appx` name and failing
+Downloads go through `curl.exe` (in Windows since 1803) with
+`Invoke-WebRequest` behind it — curl streams to disk where PowerShell 5.1
+buffers, which matters on a 252 MB file. `--fail` is passed so an HTTP error
+cannot be written to the output file and reported as success.
+
+Each download is also size-checked, and that catches what `--fail` cannot: a
+captive portal's login page, or `aka.ms` answering a retired short link with a
+**Bing search result**, both arrive as HTTP 200. Anything too small to be the
+package is rejected and deleted rather than left under an `.appx` name to fail
 later with an error about the package.
 
 #### The pinned versions

@@ -325,17 +325,52 @@ function Get-RemoteFile {
 
       -TimeoutSec is a parameter rather than a constant because the payloads
       here differ by a factor of fifty. A fixed 600 seconds is generous for a
-      5 MB appx and a 4.6 Mbit/s speed limit on a 340 MB archive, and the retry
-      loop restarts from zero, so getting it wrong costs three full timeouts
-      before anything else is tried.
+      5 MB appx and tight on a 252 MB bundle, and the retry loop restarts from
+      zero, so getting it wrong costs three full timeouts before anything else
+      is tried.
+
+      curl.exe first, Invoke-WebRequest behind it. curl has shipped in Windows
+      since 1803 and streams straight to disk; Invoke-WebRequest in PowerShell
+      5.1 buffers the response and is several times slower on a file this size,
+      which is why every script here has to remember to turn $ProgressPreference
+      off just to make it bearable. The reference installer uses curl for the
+      same reason.
+
+      --fail matters: without it curl writes a 404 body to the output file and
+      exits 0, which would land an HTML error page under an .appx name - the
+      exact failure the size floor below exists to catch, but better caught
+      here. -sS keeps the progress meter off stderr while still reporting real
+      errors, so nothing has to merge streams and trip PowerShell's
+      NativeCommandError.
     #>
     param([string]$Url, [string]$Path, [double]$MinMB, [int]$Attempts = 3, [int]$TimeoutSec = 600)
+
+    # `curl` alone is an alias for Invoke-WebRequest in Windows PowerShell, so
+    # the .exe is named explicitly here and at the call below.
+    $curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
     $lastError = $null
     for ($try = 1; $try -le $Attempts; $try++) {
         try {
             if (Test-Path $Path) { Remove-Item $Path -Force -ErrorAction SilentlyContinue }
-            Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -UserAgent 'Mozilla/5.0' -TimeoutSec $TimeoutSec
+
+            if ($curl) {
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                try {
+                    & $curl.Source -L --fail -sS --connect-timeout 30 `
+                        --max-time $TimeoutSec -A 'Mozilla/5.0' -o $Path $Url
+                    $code = $LASTEXITCODE
+                } finally {
+                    $ErrorActionPreference = $prevEAP
+                }
+                if ($code -ne 0) { throw "curl exited $code" }
+            } else {
+                Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -UserAgent 'Mozilla/5.0' -TimeoutSec $TimeoutSec
+            }
+
+            if (-not (Test-Path $Path)) { throw "nothing was written" }
             $mb = (Get-Item $Path).Length / 1MB
             if ($mb -lt $MinMB) {
                 throw ("only {0:N1} MB - expected at least {1} MB, so that is not the package" -f $mb, $MinMB)
@@ -349,6 +384,13 @@ function Get-RemoteFile {
             }
         }
     }
+    # Nothing usable is left at the destination. The size floor rejects things
+    # like a captive portal's login page or aka.ms answering a retired short
+    # link with a Bing search result - and those arrive with HTTP 200, so they
+    # land as a file first and are judged second. Callers only cache what this
+    # returns, so a leftover cannot reach downloadCache today; deleting it means
+    # a future caller cannot find one either.
+    Remove-Item $Path -Force -ErrorAction SilentlyContinue
     throw ("could not download after {0} attempts: {1}" -f $Attempts, $lastError)
 }
 

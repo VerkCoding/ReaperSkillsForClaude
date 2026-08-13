@@ -163,19 +163,33 @@ function Install-WingetDirect {
         }
         $deps = @((Join-Path $tmp "VCLibs.$RfcArch.appx"), (Join-Path $tmp "UIXaml.$RfcArch.appx"))
 
-        # One call, with the dependencies passed as dependencies.
+        # Register the frameworks individually first, swallowing failures.
         #
-        # Installing them as separate Add-AppxPackage calls is what fails with
-        # 0x80073CF3, "package failed updates, dependency or conflict
-        # validation": each call is validated on its own, so the deployment
-        # engine never gets to match the bundle's declared dependencies against
-        # the files provided, and a version or architecture that does not line
-        # up is only discovered at the end. -DependencyPath hands it everything
-        # at once and lets it do that matching itself.
+        # This is the reference script's own order, and it is the more forgiving
+        # one. Once a framework is REGISTERED ON THE MACHINE, the bundle resolves
+        # it from there and does not need it handed over at all - which is why
+        # that script can install the bundle bare and still work. Failures here
+        # are expected and harmless: offering a framework the machine already
+        # has at a newer version is itself a conflict, and it is already
+        # satisfied, so there is nothing to do.
         #
-        # This call also validates the MSIX signature chain, so anything that is
-        # not the package Microsoft signed does not deploy - the second of the
-        # two checks applied to anything taken from the archive.
+        # It is not a replacement for -DependencyPath below, it is a belt to its
+        # braces. Registration makes them present; -DependencyPath makes them
+        # matched. A stripped image needs the first, and a machine with a newer
+        # copy of one dependency and none of the other needs both.
+        Write-Info "Registering the framework packages..."
+        foreach ($dep in $deps) {
+            $leaf = Split-Path -Leaf $dep
+            try {
+                Add-AppxPackage -Path $dep -ErrorAction Stop
+                Write-Info "  $leaf registered."
+            } catch {
+                Write-Info "  $leaf : $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+            }
+        }
+
+        # Then the bundle. Add-AppxPackage validates the MSIX signature chain,
+        # so nothing that is not the package Microsoft signed can deploy.
         $bundle = Join-Path $tmp 'winget.msixbundle'
 
         # Offering a dependency the machine already has at a NEWER version is
