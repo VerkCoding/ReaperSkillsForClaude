@@ -99,8 +99,22 @@ real and known.
 
 ## Shout-outs
 
-**[bonfire-systems/reaper-mcp](https://github.com/bonfire-systems/reaper-mcp)** —
-the MCP server here is derived from it. The tool surface started as theirs.
+This plugin stands on three REAPER projects that got there first.
+
+**Ideology of — [xDarkzx/Reaper-MCP](https://github.com/xDarkzx/Reaper-MCP)**
+(Apache-2.0). The idea that an AI should reach REAPER through a *broad* tool
+surface rather than a handful of calls — composition, mixing, mastering, QC,
+ReaScript automation, all of it. That ambition set the target here.
+
+**Toolkit by — [bonfire-systems/reaper-mcp](https://github.com/bonfire-systems/reaper-mcp)**
+(MIT). The MCP server here is derived from it. The tool surface started as
+theirs, and much of it still is.
+
+**Inspired by — [DevWesC/Reaper-Claude-MCP](https://github.com/DevWesC/Reaper-Claude-MCP)**
+(MIT). The Claude-and-REAPER pairing, and the PowerShell-installer approach to
+making it actually land on a Windows machine.
+
+And the ground everything stands on:
 
 **[python-reapy](https://github.com/RomeoDespres/reapy)** by Roméo Després — the
 distant API that lets anything outside REAPER talk to it at all. Most of what

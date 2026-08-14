@@ -37,11 +37,31 @@ This project is released under the **MIT Licence**. The full text is in
 
 ## Third-party components
 
-### Derived from
+### Derived from — code
 
 | Project | Licence | Relationship |
 | --- | --- | --- |
 | [bonfire-systems/reaper-mcp](https://github.com/bonfire-systems/reaper-mcp) | MIT | The MCP server here is derived from it. |
+
+MIT requires its copyright notice to be kept in derivative works, which is why
+the line discussed [above](#licence) stays in `LICENSE`.
+
+### Acknowledged influence — no code taken
+
+Credited in the [shout-outs](README.md#shout-outs). Listed here so the boundary
+is on the record: these shaped the design, and no source was copied from either.
+
+| Project | Licence | Relationship |
+| --- | --- | --- |
+| [xDarkzx/Reaper-MCP](https://github.com/xDarkzx/Reaper-MCP) | Apache-2.0 | Ideology — the case for a broad tool surface rather than a few calls. |
+| [DevWesC/Reaper-Claude-MCP](https://github.com/DevWesC/Reaper-Claude-MCP) | MIT | Inspiration — the Claude-and-REAPER pairing, and installing it with PowerShell. |
+
+Ideas are not copyrightable, so influence alone carries no licence obligation
+and neither project's terms attach to this one. Worth knowing where that line
+is, though: **Apache-2.0 is stricter than MIT** about reuse. If code were ever
+taken from xDarkzx/Reaper-MCP, that would additionally require preserving its
+`NOTICE` file and stating what was changed. Nothing here does, and this section
+should be revisited if that ever stops being true.
 
 ### Runtime dependencies
 
