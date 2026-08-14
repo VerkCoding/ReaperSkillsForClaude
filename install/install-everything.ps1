@@ -208,7 +208,14 @@ if (-not $Confirmed) {
 }
 
 $reaperClosed = Request-AppClosed -Kind reaper -Label 'REAPER'
-$claudeClosed = Request-AppClosed -Kind claude -Label 'Claude'
+
+# Claude's result is deliberately not kept, unlike REAPER's below. A REAPER that
+# stays open means one step will be skipped, which has to be reported at the
+# end. A Claude that stays open does not: Request-AppClosed has already
+# explained the consequence itself, Confirm-AppsClosed checks again immediately
+# before anything is written, and configure-plugin.ps1 handles a running Claude
+# on its own. There is nothing left for this value to decide.
+[void](Request-AppClosed -Kind claude -Label 'Claude')
 
 if (-not $reaperClosed) {
     Add-Problem "REAPER stayed open, so its connection settings may not have been saved. Close it and re-run [1]."

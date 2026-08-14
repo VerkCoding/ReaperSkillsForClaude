@@ -143,8 +143,6 @@ function Start-RunLog {
     }
 }
 
-function Get-RunLogPath { return $script:RfcLogPath }
-
 function Write-LogLine {
     <#
       One timestamped, level-tagged, plain-ASCII line. Never throws.

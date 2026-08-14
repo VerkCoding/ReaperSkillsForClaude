@@ -48,7 +48,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib-app-control.ps1')
 
 $Here       = $PSScriptRoot
-$PluginRoot = Split-Path -Parent $Here
 $DataDir    = Join-Path $env:USERPROFILE '.reaper-for-claude'
 $Store      = Join-Path $DataDir 'backups'
 

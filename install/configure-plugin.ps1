@@ -200,7 +200,7 @@ if ($PythonExe) {
             #
             # Rejecting here rather than attempting means the user gets the
             # "install 3.12" instruction instead of watching a step fail first.
-            $ver = & $chosen -c 'import sys; sys.exit(0 if sys.version_info[:2] <= (3, 12) else 1)' 2>&1
+            $null = & $chosen -c 'import sys; sys.exit(0 if sys.version_info[:2] <= (3, 12) else 1)' 2>&1
             $verOk = ($LASTEXITCODE -eq 0)
             $null = & $chosen -c 'import reapy' 2>&1
             $reapyOk = ($LASTEXITCODE -eq 0)

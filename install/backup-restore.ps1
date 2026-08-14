@@ -51,6 +51,9 @@ param(
     [Parameter(ParameterSetName = 'Backup')]  [switch]$Backup,
     [Parameter(ParameterSetName = 'Restore')] [switch]$Restore,
     [Parameter(ParameterSetName = 'Restore')] [string]$From,
+    # $List is never read, and must stay. It is the default parameter set, so
+    # listing is what happens when nothing else is asked for - and the switch
+    # itself is what makes `-List` a valid thing to type.
     [Parameter(ParameterSetName = 'List')]    [switch]$List,
     [string]$ReaperResourcePath
 )
