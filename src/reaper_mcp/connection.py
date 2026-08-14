@@ -128,8 +128,15 @@ def _import_reapy():
     already too late to prevent it.
     """
     global _first_connect
-    _wait_for_server(COLD_START_WAIT_SEC if _first_connect else WARM_WAIT_SEC)
-    _first_connect = False
+    import sys  # noqa: PLC0415
+
+    # Only the import that actually runs reapy's module-level connect can
+    # trigger anything. Python caches modules, so every later call here is a
+    # dictionary lookup - waiting in front of it cannot prevent a dialog and
+    # only delays the answer.
+    if "reapy" not in sys.modules:
+        _wait_for_server(COLD_START_WAIT_SEC if _first_connect else WARM_WAIT_SEC)
+        _first_connect = False
 
     try:
         import reapy  # noqa: PLC0415
@@ -143,8 +150,8 @@ def _import_reapy():
         ) from e
 
 
-def _server_port_published(timeout_sec: float = 0.5) -> bool:
-    """Has REAPER's reapy server announced itself yet?
+def _server_state(timeout_sec: float = 0.5) -> str:
+    """"ready", "starting", or "down" - and the three are not interchangeable.
 
     Read directly, deliberately not through reapy. reapy's own read is the thing
     that starts the dialog: on a miss it calls activate_reapy_server(), which
@@ -155,6 +162,17 @@ def _server_port_published(timeout_sec: float = 0.5) -> bool:
     The URL and the tab-separated reply shape are reapy's
     ``ExtState.__getitem__``; matching it exactly is the point, because what
     matters is whether the value reapy is about to read is there yet.
+
+    "down" is the distinction that earns this its three states rather than a
+    bool. Look at what reapy does with each::
+
+        except (URLError, timeout):     raise DisabledDistAPIError   # no dialog
+        except UndefinedExtStateError:  self.activate_reapy_server() # DIALOG
+
+    A web interface that does not answer means REAPER is not running, and reapy
+    raises rather than performing anything. There is no dialog to prevent, so
+    there is nothing to wait for - and waiting anyway is what made every single
+    tool call stall while REAPER was closed.
     """
     from urllib import request  # noqa: PLC0415
 
@@ -164,10 +182,8 @@ def _server_port_published(timeout_sec: float = 0.5) -> bool:
     try:
         body = request.urlopen(url, timeout=timeout_sec).read().decode("utf-8")
     except Exception:
-        # No web interface yet, or REAPER is not up. Either way, not ready -
-        # and not something to report differently from "not ready".
-        return False
-    return bool(body.split("\t")[-1][:-1])
+        return "down"
+    return "ready" if body.split("\t")[-1][:-1] else "starting"
 
 
 def _wait_for_server(budget_sec: float) -> None:
@@ -194,18 +210,44 @@ def _wait_for_server(budget_sec: float) -> None:
     what it did before, because a REAPER that genuinely is not running the
     server does need the action performed, and then there is no second instance
     to clash with.
-    """
-    if _server_port_published():
-        return
 
-    logger.info("Waiting up to %.0fs for REAPER's reapy server to start", budget_sec)
+    Only a REAPER that is actually there is worth waiting for. If the web
+    interface never answers, REAPER is not running, reapy will raise instead of
+    performing anything, and there is no dialog to prevent - so the budget is
+    abandoned after a few seconds rather than spent. Without that, closing
+    REAPER made every tool call stall for the full wait before failing, which
+    is a far more common state than the one this exists to fix.
+    """
     deadline = time.monotonic() + budget_sec
-    while time.monotonic() < deadline:
-        time.sleep(0.5)
-        if _server_port_published():
-            logger.info("REAPER's reapy server is up")
+    give_up_on_silence = time.monotonic() + WARM_WAIT_SEC
+    announced = False
+    saw_interface = False
+
+    while True:
+        state = _server_state()
+        if state == "ready":
+            if announced:
+                logger.info("REAPER's reapy server is up")
             return
-    logger.info("It did not appear; letting reapy start it")
+
+        if state == "starting":
+            saw_interface = True
+            if not announced:
+                logger.info(
+                    "REAPER is still starting its reapy server; waiting up to %.0fs",
+                    budget_sec,
+                )
+                announced = True
+        elif not saw_interface and time.monotonic() >= give_up_on_silence:
+            # No web interface at all. REAPER is not running, so reapy will
+            # raise rather than prompt, and there is nothing here to prevent.
+            return
+
+        if time.monotonic() >= deadline:
+            if announced:
+                logger.info("It did not appear; letting reapy start it")
+            return
+        time.sleep(0.5)
 
 
 def _connect(reapy) -> None:
