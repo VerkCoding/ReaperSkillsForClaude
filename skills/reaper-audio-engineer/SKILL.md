@@ -1,13 +1,12 @@
 ---
 name: reaper-audio-engineer
 description: >-
-  Use this skill whenever the user asks you to interact with a REAPER DAW
-  project: mixing, mastering, gain staging, EQ, compression, panning,
-  automation, reverb sends, loudness and LUFS targets, stems, plugin and FX
-  parameters, routing, MIDI, or rendering. It covers the two ways to reach
-  REAPER - the `reaper` MCP server for structural work and the Lua file bridge
-  for measurement and rendering - and the offline DSP toolkit that lets you make
-  audio decisions from numbers instead of guesswork.
+  Audio engineering judgement for work inside REAPER: mixing, mastering, gain
+  staging, EQ and resonance decisions, compression and dynamics, panning and
+  stereo width, automation rides, reverb sends, loudness and LUFS targets, and
+  deciding what a measurement means. Use when the question is *what move to
+  make* rather than how to reach REAPER. For calling tools, running Lua, or
+  debugging a failed call, use reaper-mcp.
 ---
 
 # REAPER Audio Engineer
@@ -15,74 +14,10 @@ description: >-
 You are a master audio engineer working inside REAPER **without ears**. Every
 decision has to come from a measurement, because you cannot hear the result.
 
-## Two ways in, and how to tell which you have
-
-This skill ships in a plugin that may be running on any of three surfaces, and
-they do not offer the same access. **Check what you actually have before
-promising the user anything.**
-
-| Route | What it is | Available when |
-| --- | --- | --- |
-| **MCP server** | ~70 structured tools (`create_track`, `add_fx`, `render_project`, …) | Claude Code and Claude Desktop, once the server starts |
-| **File bridge** | Arbitrary Lua executed inside REAPER | Anywhere you can run shell commands on the machine REAPER is on |
-
-On **claude.ai in the browser** you have neither: there is no local machine to
-reach. Say so plainly and use this skill as reference knowledge instead of
-pretending to touch the project.
-
-If REAPER tools are missing where you expected them, call `reaper_setup_status`
-if it exists — it is the diagnostic stub the MCP server leaves behind when it
-cannot start, and it names the exact fix. Otherwise use the **reaper-setup**
-skill in this plugin.
-
-### 1. MCP server, for structure
-
-Projects, tempo, time signature; tracks, naming, volume, pan, solo, mute,
-colour; FX; MIDI items, chords, drum patterns; sends, buses, rendering, stems.
-
-### 2. File bridge, for what the API cannot express
-
-- **Offline DSP measurement** — LUFS, spectrum analysis, finding resonances.
-- **Dynamic parameter search** — setting a plugin parameter by its *formatted*
-  value (`"110 ms"`, `"-12 dB"`) when no tool maps it. Binary-search it.
-- **Rendering workarounds** — scripted renders come out silent because of the
-  `offlineinact` preference. Force media online (action `40101`) through the
-  bridge first, then restore.
-
-## Running Lua through the bridge
-
-Pass the Lua directly. Do **not** write a temp file and point the client at it —
-that was the old workflow and it fails on Windows, where PowerShell 5.1 writes a
-UTF-8 BOM and the bridge answers `PARSE_ERROR` on byte one.
-
-```bash
-reaper-bridge --code 'return reaper.GetAppVersion()'
-```
-
-`reaper-bridge` is on the Bash tool's PATH whenever this plugin is enabled. If
-it is not found, call the script directly:
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.py" --code 'return reaper.GetAppVersion()'
-```
-
-For anything longer than a line, write the Lua to a file with a file-writing
-tool and pass `--lua-file`; the client strips a BOM if one got in.
-
-Rules that matter:
-
-- **Always `return` a string** from your chunk. A chunk that returns nothing
-  answers `OK`, which tells you it ran and nothing else.
-- **Raise `--timeout` for renders.** They block REAPER for minutes. The client
-  waits for `out.txt` to actually change rather than sleeping, so it will never
-  hand you the previous command's output — a timeout means slow, not failed.
-- **`PARSE_ERROR` and `RUNTIME_ERROR` also set a non-zero exit code.** Treat
-  either as a hard failure and read the message rather than retrying blind.
-
-If `${CLAUDE_PLUGIN_ROOT}` appears literally in the command instead of a real
-path, the host did not substitute it: find the plugin directory yourself (look
-for `scripts/bridge.py` under `~/.claude/plugins/`
-or the repository) and use the absolute path.
+This skill owns the **judgement**: what to measure, what the number means, and
+which move follows from it. How to actually reach REAPER — MCP tools, the Lua
+bridge, what breaks — belongs to **reaper-mcp**. Read that one first if you do
+not yet have a working route to the project.
 
 ## The Measure → Change → Verify loop
 
@@ -92,7 +27,13 @@ or the repository) and use the absolute path.
   Read a parameter's formatted value before changing it, to confirm you are
   touching the right index. Tweaking Ratio when you meant Threshold is the
   characteristic failure here, and it is silent.
-- **Verify after.** Read the formatted value back once you have set it.
+- **Verify after.** Read the formatted value back once you have set it. A tool
+  that reports success has not told you the value landed — see
+  [reaper-mcp](../reaper-mcp/SKILL.md) for why that distinction is not
+  theoretical.
+- **Change one thing at a time.** Band levels are relative to the signal's own
+  mean, so cutting several bands raises everything else by comparison. If you
+  want to know what a move did, make one move and re-measure.
 - **Report numbers, not adjectives.** "-14.2 LUFS-I, true peak -1.1 dBTP", not
   "sounds balanced now".
 - **Say when you cannot tell.** If a measurement is ambiguous or a plugin's
@@ -100,30 +41,57 @@ or the repository) and use the absolute path.
   worse than reporting nothing, because the user cannot hear the difference
   either until much later.
 
+## Measure the right thing
+
+A measurement taken the wrong way is worse than none, because it looks
+authoritative:
+
+- **Render to measure a bus.** Take audio accessors only cover items on their
+  own track, so an FX-only bus measures as silence rather than as an error.
+- **Gate before you average.** A silence between phrases drags any average
+  toward nothing.
+- **Prefer a short section for iteration.** A 20-second chorus render tells you
+  what a move did; reserve full-song renders for final verification.
+
+## Diagnostics worth knowing
+
+These are interpretations, not readings — the numbers alone do not say them:
+
+- **Crest factor** (true peak − LUFS-I) around 18–22 dB is a real kick drum.
+  Near 35 dB with a very low integrated level means a sparse impulse train — a
+  trigger click, not a drum. No EQ fixes that; say so.
+- **The nasal signature**: +5 dB at 1 kHz with −4 to −6 through 2–4 kHz is too
+  much honk relative to intelligibility. The *ratio* between those regions
+  matters far more than either alone, so fix it from both ends.
+- **Not every peak is a problem.** Voices have formants. A bump that survives a
+  proper cut and does not move when you increase it is the instrument's own
+  character — prove it is not the mastering chain, a reverb return or a channel
+  strip, then leave it alone.
+- **A compressor with a threshold too high to ever engage** is a gain stage
+  wearing a compressor's name. Check that it is actually working before
+  crediting it.
+
+## Before handing back
+
+Walk the project and report **warnings, not values**. Zero warnings is a much
+stronger statement than pages of numbers, and it catches your own slips: track
+count unchanged, nothing left soloed or muted, no disabled FX chain, sends at
+the levels you set, render settings and time selection restored to the user's
+originals.
+
 ## Reference materials
 
-Read the relevant one before attempting a complex task:
+- **[Measurement Toolkit](./references/measurement.md)** — LUFS and true peak,
+  reading samples, band analysis, finding a resonance, mapping the arrangement,
+  writing a measured automation ride, and the project audit.
 
-- **[Measurement Toolkit](./references/measurement.md)** — LUFS, band analysis,
-  arrangement mapping via Lua.
-- **[Plugin Control](./references/plugin-control.md)** — binary-searching
-  parameters, known index traps (FabFilter Pro-Q 4, Pro-C 3).
-- **[Rendering Secrets](./references/rendering.md)** — the silent-render trap
-  (`offlineinact`) and setting bounds correctly.
+For the mechanics of getting these numbers out of REAPER, see **reaper-mcp** —
+its [Rendering Secrets](../reaper-mcp/references/rendering.md) and
+[Plugin Control](../reaper-mcp/references/plugin-control.md) cover the traps that
+make a measurement lie.
 
 ## When things are broken
 
-Use the **reaper-setup** skill in this plugin. It owns installation, the health
-check, and repair, and it reports Python status, REAPER's distant-API config,
-and whether the bridge listener is alive.
-
-Common causes, in the order worth checking:
-
-| Symptom | Cause |
-| --- | --- |
-| No REAPER tools at all | The MCP server did not start. Call `reaper_setup_status`, or run the health check. On claude.ai there is no local server by design. |
-| MCP tools fail with a socket error | REAPER is not running, or the distant API was never configured. The server reconnects by itself when REAPER restarts, so a *persistent* failure means configuration, not a stale connection. |
-| Bridge times out | REAPER is not running `claude_bridge.lua`. Check `status.txt` in the bridge directory — a stale heartbeat means the listener stopped. |
-| `PARSE_ERROR` on byte one | The Lua reached the bridge with a UTF-8 BOM. Pass `--code`, or `--lua-file` so it gets stripped. |
-| Renders are silent | The `offlineinact` preference. See the rendering reference. |
-| `import reapy` fails | The interpreter running the server cannot load reapy. Run the bootstrap; see reaper-setup. |
+A failing tool, a hanging call or a silent render is not an engineering problem.
+Use **reaper-mcp** to diagnose the route, and **reaper-core-setup** if the plugin
+itself needs installing or repairing.

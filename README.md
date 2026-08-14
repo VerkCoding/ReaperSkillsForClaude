@@ -58,7 +58,7 @@ powershell -ExecutionPolicy Bypass -File install\health-check.ps1
 ```
 
 Every line is `[ok]`, `[warn]` or `[FAIL]`, and each failure carries a fix. Or
-just ask Claude — the **reaper-setup** skill covers all of it.
+just ask Claude — the **reaper-core-setup** skill covers all of it.
 
 Full guide, options and internals: **[DOCS.md](DOCS.md)**.
 

@@ -133,7 +133,7 @@ surfaces, and whether an older install is still loading in parallel.
 | Tools fail with a socket error | REAPER is not running, or the distant API was never configured. A *persistent* failure means configuration. |
 | Bridge times out | REAPER is not running `claude_bridge.lua`. Check `status.txt` in the bridge directory. |
 | `PARSE_ERROR` on byte one | Lua reached the bridge with a UTF-8 BOM. Use `--code`, or `--lua-file` so it is stripped. |
-| Renders are silent | The `offlineinact` preference — see [rendering.md](skills/reaper-audio-engineer/references/rendering.md). |
+| Renders are silent | The `offlineinact` preference — see [rendering.md](skills/reaper-mcp/references/rendering.md). |
 | Everything appears twice | An older install is still loading from `~\.claude\skills\`. Delete `reaper-mcp` and `reaper-ai-engineer-skill`. |
 | Edits here do nothing | You installed from the marketplace, which is a copy. See [Editing](#editing-the-plugin). |
 
@@ -183,12 +183,14 @@ interpreter: `py -3.12 scripts\bootstrap.py --recreate`.
 ReaperSkillsForClaude/              # marketplace root AND plugin root
 ├── .claude-plugin/                 #   plugin.json + marketplace.json
 ├── skills/                         # documentation only, no executables
-│   ├── reaper-audio-engineer/      #   the engineering playbook
-│   └── reaper-setup/               #   install, diagnose, repair
+│   ├── reaper-core-setup/          #   install, diagnose, repair; routes the rest
+│   ├── reaper-mcp/                 #   the channel: MCP tools and the Lua bridge
+│   └── reaper-audio-engineer/      #   the engineering playbook
 ├── scripts/                        # every cross-platform executable
 │   ├── launch_server.py            #   picks an interpreter, then serves
 │   ├── bootstrap.py                #   builds the dependency virtualenv
 │   ├── bridge.py                   #   the file-bridge client
+│   ├── benchmark_tools.py          #   exercises all 58 tools against REAPER
 │   └── doctor.py                   #   the health check itself
 ├── bin/reaper-bridge               # puts bridge.py on the Bash tool's PATH
 ├── src/reaper_mcp/                 # the MCP server

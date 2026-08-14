@@ -49,14 +49,34 @@ def register_tools(mcp):
         try:
             project = get_project()
             track = project.tracks[track_index]
-            track.armed = True
+
+            # reapy's Track has no `armed` property, so `track.armed = True`
+            # only set an attribute on a throwaway Python object - REAPER never
+            # heard about it. Recording then started with nothing armed, which
+            # REAPER answers with a modal "No tracks are armed for recording"
+            # warning; a modal dialog stops every background script, so the
+            # tool that was meant to start a recording instead froze the
+            # connection until somebody clicked the box.
+            RPR.SetMediaTrackInfo_Value(track.id, "I_RECARM", 1)
+            if not RPR.GetMediaTrackInfo_Value(track.id, "I_RECARM"):
+                return {
+                    "success": False,
+                    "error": (
+                        f"Could not arm track {track_index}. Not starting the "
+                        "transport: recording with nothing armed opens a modal "
+                        "warning in REAPER that blocks every other tool."
+                    ),
+                }
+
             RPR.Main_OnCommand(1013, 0)  # Transport: Record
             return {
                 "success": True,
                 "track_index": track_index,
+                "armed": True,
                 "message": "Recording started. Call stop_transport to stop.",
             }
         except Exception as e:
+            logger.error(f"start_recording failed: {e}")
             return {"success": False, "error": str(e)}
 
     @mcp.tool()

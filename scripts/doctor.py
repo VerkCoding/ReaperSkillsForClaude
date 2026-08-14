@@ -42,7 +42,8 @@ REQUIRED_LAYOUT = (
     "scripts/bridge.py",
     "src/reaper_mcp/server.py",
     "skills/reaper-audio-engineer/SKILL.md",
-    "skills/reaper-setup/SKILL.md",
+    "skills/reaper-mcp/SKILL.md",
+    "skills/reaper-core-setup/SKILL.md",
 )
 
 MANIFEST = ".claude-plugin/plugin.json"
@@ -281,9 +282,25 @@ def check_python(r: Report) -> None:
     # Imported lazily by the analysis tools, so the server starts without them
     # and the shortfall shows up only when one of those tools is called - which
     # is why it is checked here rather than left to surface mid-task.
-    p = run([sys.executable, "-c", "import librosa, soundfile, pyloudnorm"])
+    # soxr is named explicitly, and that is the whole substance of this check.
+    # librosa loads its submodules through lazy_loader, so `import librosa`
+    # succeeds even when the compiled extension underneath cannot load at all -
+    # the failure waits until something calls librosa.load or librosa.stft, by
+    # which point it surfaces as a tool error rather than a setup problem. This
+    # check reported everything present on a machine where two analysis tools
+    # could never have worked.
+    p = run([sys.executable, "-c", "import librosa, soundfile, pyloudnorm, soxr"])
     if p and p.returncode == 0:
         r.ok("analysis libraries present (loudness, spectrum, transients)")
+    elif p and "soxr" in (p.stderr or "") and "DLL load failed" in (p.stderr or ""):
+        # A missing C++ runtime rather than a missing package, and reinstalling
+        # the package cannot fix it.
+        r.fail(
+            "soxr cannot load - the Visual C++ runtime is missing, so "
+            "analyze_frequency_spectrum and analyze_transients will fail",
+            "winget install -e --id Microsoft.VCRedist.2015+.x64 --source winget",
+        )
+        r.info("Windows ships no C++ runtime and Python installs only the C one.")
     else:
         r.fail(
             "analysis libraries are missing - the offline analysis tools will fail",

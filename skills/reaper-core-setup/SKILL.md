@@ -1,15 +1,46 @@
 ---
-name: reaper-setup
+name: reaper-core-setup
 description: >-
-  Install, diagnose and repair the REAPER for Claude plugin. Use when REAPER
-  tools are missing or failing, when the file bridge times out, when
-  `reaper_setup_status` reports a problem, when the user is setting this up for
-  the first time, or when they ask why Claude cannot reach REAPER. Covers the
-  Python environment, REAPER's distant API, the bridge listener, and the
-  differences between Claude Code, Claude Desktop and claude.ai.
+  The foundation the other REAPER skills stand on: install, diagnose and repair
+  the REAPER for Claude plugin, and work out which skill a request belongs to.
+  Use when REAPER tools are missing or failing, when the file bridge times out,
+  when `reaper_setup_status` reports a problem, when the user is setting this up
+  for the first time, when they ask why Claude cannot reach REAPER, or when it
+  is unclear whether a request is a transport problem or an engineering one.
+  Covers the Python environment, REAPER's distant API, the bridge listener, and
+  the differences between Claude Code, Claude Desktop and claude.ai.
 ---
 
-# REAPER for Claude — setup and repair
+# REAPER for Claude — core setup
+
+This plugin ships three skills. This one is the ground floor: it gets the
+connection working, and it says which of the other two a request belongs to.
+
+## The three skills
+
+| Skill | Owns | Reach for it when |
+| --- | --- | --- |
+| **reaper-core-setup** (this one) | Installation, the health check, repair, and which surface you are on | Nothing works yet, or you cannot tell which layer is at fault |
+| **reaper-mcp** | The channel — MCP tools, the Lua bridge, what silently lies, what hangs | You need to *reach* REAPER, or a call failed, hung, or returned something suspicious |
+| **reaper-audio-engineer** | The craft — what to measure, what it means, which move follows | You have a working route and the question is *what to do* |
+
+The split that matters: **reaper-mcp answers "did the command land?", and
+reaper-audio-engineer answers "was it the right command?"** A silent render is
+the first kind. A render that is clean but too quiet is the second.
+
+Crossing between them is normal and safe in this order:
+
+1. **Here**, until the health check is clean.
+2. **reaper-mcp**, until you have a route and a value you trust.
+3. **reaper-audio-engineer**, to decide and to interpret.
+4. Back to **reaper-mcp** to apply the change and read it back.
+
+If a measurement looks impossible — a bus reading silence, every source
+reporting the same level, a parameter that will not move — stop treating it as
+an engineering result and go back to step 2. Those are transport failures
+wearing an engineering costume, and reaper-mcp lists the specific ones.
+
+## Four requirements
 
 Four things have to be true before Claude can work in REAPER. Diagnose in this
 order; each one depends on the ones above it.

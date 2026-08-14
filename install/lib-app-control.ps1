@@ -483,6 +483,17 @@ function Get-AppList {
     param([string]$PythonCustom)
 
     @(
+        # First, because it is what the compiled wheels in the virtualenv link
+        # against. Windows ships no C++ runtime and Python installs only the C
+        # one (vcruntime140.dll), so on a machine that has never had a C++
+        # application installed - a fresh Sandbox, a clean VM - msvcp140.dll is
+        # simply absent. numpy and scipy survive that; soxr does not, and soxr
+        # is imported by librosa, so `import librosa` fails with "DLL load
+        # failed while importing soxr_ext" and takes analyze_frequency_spectrum
+        # and analyze_transients with it. The message names neither librosa nor
+        # the missing runtime, which is why this belongs in the install rather
+        # than in a troubleshooting note.
+        [pscustomobject]@{ Id = 'Microsoft.VCRedist.2015+.x64'; Name = 'Visual C++ runtime'; Safe = $true; Custom = $null }
         [pscustomobject]@{ Id = 'Python.Python.3.12';   Name = 'Python 3.12';     Safe = $false; Custom = $PythonCustom }
         [pscustomobject]@{ Id = 'Git.Git';              Name = 'Git';             Safe = $false; Custom = $null }
         [pscustomobject]@{ Id = 'Cockos.REAPER';        Name = 'REAPER';          Safe = $true;  Custom = $null }
@@ -510,6 +521,13 @@ function Test-AppPresent {
     param([string]$Id)
 
     switch ($Id) {
+        'Microsoft.VCRedist.2015+.x64' {
+            # The file the wheels actually need, rather than an uninstall entry.
+            # The runtime arrives by many routes - another application's
+            # installer, a Windows image that already had it - and what matters
+            # is only whether the DLL is loadable.
+            return (Test-Path (Join-Path $env:SystemRoot 'System32\msvcp140.dll'))
+        }
         'Cockos.REAPER'  { return [bool](Get-ReaperExe) }
         'Git.Git'        { return [bool](Get-Command git -ErrorAction SilentlyContinue) }
         'Python.Python.3.12' {

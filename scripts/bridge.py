@@ -151,7 +151,7 @@ def main() -> int:
             raise SystemExit(
                 f"The bridge did not pick up the command within {args.timeout:.0f}s, so "
                 "it was withdrawn. REAPER is probably not running claude_bridge.lua - "
-                "check status.txt in the bridge directory, and see the reaper-setup skill."
+                "check status.txt in the bridge directory, and see the reaper-core-setup skill."
             )
         raise SystemExit(
             f"No new out.txt after {args.timeout:.0f}s, though cmd.lua was consumed. The "

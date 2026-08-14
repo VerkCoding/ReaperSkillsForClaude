@@ -16,6 +16,20 @@ MASTERING_PRESETS = {
 }
 
 
+def _add_fx(track, fx_name: str):
+    """Add a plugin and return its FX object, or None if there is no such plugin.
+
+    reapy 0.10's ``add_fx`` returns an FX object and raises ValueError for an
+    unknown name; it never returns the -1 that REAPER's own API documents. Every
+    caller here used to test the result against a number, which raises a
+    TypeError before the plugin can be reported as added.
+    """
+    try:
+        return track.add_fx(fx_name)
+    except ValueError:
+        return None
+
+
 def register_tools(mcp):
 
     @mcp.tool()
@@ -24,11 +38,10 @@ def register_tools(mcp):
         try:
             project = get_project()
             master = project.master_track
-            fx_index = master.add_fx(fx_name)
-            if fx_index < 0:
+            fx = _add_fx(master, fx_name)
+            if fx is None:
                 return {"success": False, "error": f"Plugin not found: '{fx_name}'"}
-            fx = master.fxs[fx_index]
-            return {"success": True, "fx_index": fx_index, "name": fx.name, "n_params": fx.n_params}
+            return {"success": True, "fx_index": fx.index, "name": fx.name, "n_params": fx.n_params}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -50,16 +63,26 @@ def register_tools(mcp):
     def set_master_fx_parameter(fx_index: int, param_index: int, value: float) -> dict:
         """Set a normalized parameter (0.0–1.0) on a master track FX plugin."""
         try:
+            if not 0.0 <= value <= 1.0:
+                return {"success": False, "error": f"value must be 0.0-1.0, got {value}"}
             project = get_project()
             master = project.master_track
             fx = master.fxs[fx_index]
-            fx.params[param_index].normalized_value = value
+            param_name = fx.params[param_index].name
+
+            # Through ReaScript for the reason set_fx_parameter explains: the
+            # attribute assignment this used to do lands on a throwaway float
+            # subclass and never reaches REAPER.
+            RPR.TrackFX_SetParamNormalized(master.id, fx_index, param_index, value)
+            applied = RPR.TrackFX_GetParamNormalized(master.id, fx_index, param_index)
+
             return {
                 "success": True,
                 "fx_index": fx_index,
                 "param_index": param_index,
-                "param_name": fx.params[param_index].name,
-                "value": value,
+                "param_name": param_name,
+                "value": applied,
+                "requested": value,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -91,12 +114,20 @@ def register_tools(mcp):
                 }
             project = get_project()
             master = project.master_track
-            added = []
+            added, missing = [], []
             for fx_name in MASTERING_PRESETS[preset]:
-                fx_index = master.add_fx(fx_name)
-                if fx_index >= 0:
-                    fx = master.fxs[fx_index]
-                    added.append({"fx_index": fx_index, "name": fx.name})
+                fx = _add_fx(master, fx_name)
+                if fx is None:
+                    missing.append(fx_name)
+                else:
+                    added.append({"fx_index": fx.index, "name": fx.name})
+            if missing:
+                return {
+                    "success": False,
+                    "error": f"Not installed: {', '.join(missing)}",
+                    "preset": preset,
+                    "fx_chain": added,
+                }
             return {"success": True, "preset": preset, "fx_chain": added}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -111,16 +142,15 @@ def register_tools(mcp):
         try:
             project = get_project()
             master = project.master_track
-            fx_index = master.add_fx("ReaLimit")
-            if fx_index < 0:
+            fx = _add_fx(master, "ReaLimit")
+            if fx is None:
                 return {"success": False, "error": "ReaLimit not found — check REAPER installation"}
-            fx = master.fxs[fx_index]
             return {
                 "success": True,
-                "fx_index": fx_index,
+                "fx_index": fx.index,
                 "name": fx.name,
                 "hint": (
-                    f"ReaLimit added at index {fx_index}. "
+                    f"ReaLimit added at index {fx.index}. "
                     "Use get_fx_parameters to find threshold/release param indices, "
                     "then use set_master_fx_parameter to set them."
                 ),

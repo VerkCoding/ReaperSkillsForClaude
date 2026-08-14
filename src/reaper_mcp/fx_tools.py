@@ -21,13 +21,24 @@ def register_tools(mcp):
         try:
             project = get_project()
             track = project.tracks[track_index]
-            fx_index = track.add_fx(fx_name)
-            if fx_index < 0:
-                return {"success": False, "error": f"Plugin not found: '{fx_name}'"}
-            fx = track.fxs[fx_index]
+            # reapy 0.10 hands back an FX object, not the index REAPER's own API
+            # returns, and it raises for a name it cannot find rather than
+            # answering -1. Comparing the result to a number - the obvious
+            # reading of the ReaScript docs - raises a TypeError instead of
+            # adding anything.
+            try:
+                fx = track.add_fx(fx_name)
+            except ValueError:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Plugin not found: '{fx_name}'. Use the exact name from "
+                        "REAPER's FX browser."
+                    ),
+                }
             return {
                 "success": True,
-                "fx_index": fx_index,
+                "fx_index": fx.index,
                 "name": fx.name,
                 "n_params": fx.n_params,
                 "track_index": track_index,
@@ -57,18 +68,30 @@ def register_tools(mcp):
         Use get_fx_parameters to discover available parameters and their indices.
         """
         try:
+            if not 0.0 <= value <= 1.0:
+                return {"success": False, "error": f"value must be 0.0-1.0, got {value}"}
             project = get_project()
             track = project.tracks[track_index]
             fx = track.fxs[fx_index]
-            fx.params[param_index].normalized_value = value
             param_name = fx.params[param_index].name
+
+            # Set through ReaScript, not through reapy. reapy's FXParam
+            # subclasses float, so assigning to an attribute it does not define
+            # succeeds against a throwaway object and never reaches REAPER - the
+            # call reported success and changed nothing. Its own `normalized`
+            # setter is no better: it reads `parent_fx.id`, which FX does not
+            # have, and raises.
+            RPR.TrackFX_SetParamNormalized(track.id, fx_index, param_index, value)
+            applied = RPR.TrackFX_GetParamNormalized(track.id, fx_index, param_index)
+
             return {
                 "success": True,
                 "track_index": track_index,
                 "fx_index": fx_index,
                 "param_index": param_index,
                 "param_name": param_name,
-                "value": value,
+                "value": applied,
+                "requested": value,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -82,12 +105,15 @@ def register_tools(mcp):
             fx = track.fxs[fx_index]
             params = []
             for i in range(fx.n_params):
+                # reapy names these `normalized` and `formatted`; there is no
+                # `normalized_value` or `formatted_value`, and reading them
+                # raised rather than returning anything.
                 param = fx.params[i]
                 params.append({
                     "index": i,
                     "name": param.name,
-                    "normalized_value": param.normalized_value,
-                    "formatted_value": param.formatted_value,
+                    "normalized_value": param.normalized,
+                    "formatted_value": param.formatted,
                 })
             return {
                 "success": True,

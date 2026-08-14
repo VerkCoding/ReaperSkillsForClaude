@@ -133,6 +133,35 @@ rem installed, and five things had failed. Sending somebody off to test a setup
 rem that did not happen is worse than telling them nothing at all.
 set "RC=%ERRORLEVEL%"
 
+rem ---------------------------------------------------------------------------
+rem  The Visual C++ runtime, both architectures.
+rem
+rem  The compiled wheels in the dependency virtualenv link against msvcp140.dll,
+rem  and Windows does not ship it - Python installs only the C runtime
+rem  (vcruntime140.dll). On a machine that has never had a C++ application on it,
+rem  a fresh Sandbox or a clean VM, it is simply absent: numpy and scipy survive
+rem  that, soxr does not, and librosa imports soxr. So `import librosa` fails with
+rem  "DLL load failed while importing soxr_ext" and takes analyze_frequency_spectrum
+rem  and analyze_transients with it, naming neither librosa nor the missing DLL.
+rem
+rem  x64 is what those wheels need and is already in the installer's app list.
+rem  x86 is here for anything 32-bit that comes later - a VST bridge, an older
+rem  plugin host - and costs a few seconds when it is already present.
+rem
+rem  Placed AFTER RC is captured so it cannot overwrite the exit code the block
+rem  below reports on, and guarded on winget existing at all: when [1] failed
+rem  before it got winget installed, there is nothing here to call.
+rem ---------------------------------------------------------------------------
+where winget >nul 2>&1
+if errorlevel 1 goto after_vcredist
+
+echo.
+echo   Visual C++ runtime (x64 and x86)...
+winget install -e --id Microsoft.VCRedist.2015+.x64 --source winget --accept-package-agreements --accept-source-agreements
+winget install -e --id Microsoft.VCRedist.2015+.x86 --source winget --accept-package-agreements --accept-source-agreements
+
+:after_vcredist
+
 echo.
 if "%RC%"=="0" goto install_ok
 
