@@ -30,7 +30,7 @@ there. That is the browser, not a broken install.
 **1.** Clone it:
 
 ```bash
-git clone <this repo>
+git clone https://github.com/VerkCoding/ReaperSkillsForClaude.git
 ```
 
 **2.** Double-click **`RunThisToStart.bat`** and choose **`[1] Install Everything`**.
