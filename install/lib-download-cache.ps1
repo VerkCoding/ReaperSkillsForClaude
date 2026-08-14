@@ -58,6 +58,14 @@
        manifest says, in the same words winget itself would have used.
 #>
 
+# Everything below says what it is doing with Write-Ok / Write-Info / Write-Warn2,
+# and those live in lib-console.ps1. Dot-source it here rather than relying on
+# the caller having done so first: a library that calls functions it did not
+# arrange to have is one dot-source line away from a "term is not recognized"
+# in the middle of a download. Dot-sourcing twice is harmless - it redefines the
+# same functions - and it makes this file safe to load on its own.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
+
 # Resolved at dot-source time, when $PSScriptRoot is unambiguously this file's
 # folder. Every caller lives in install\, so the plugin root is one level up.
 $RfcPluginRoot = Split-Path -Parent $PSScriptRoot
@@ -483,9 +491,32 @@ function Find-CachedPackage {
         # `winget download` writes exactly that pair, flat, one installer per
         # manifest - which is why the flat regexes below are safe: a merged
         # manifest from a download has a single Installers: entry.
+        #
+        # One dot exactly. -Filter is a DOS wildcard, where `*` spans dots, so
+        # "$base.*" matches "$base.exe" and equally "$base.exe.tmp",
+        # "$base.exe.part", "$base.exe.crdownload". Extension -ne '.yaml' does
+        # not exclude those, and -First 1 would then hand a half-finished
+        # download to Install-CachedPackage to be executed. Requiring the name
+        # minus its extension to be exactly $base keeps the real installer and
+        # rejects every interrupted sibling beside it.
         $base = [System.IO.Path]::GetFileNameWithoutExtension($yaml.Name)
-        $installer = Get-ChildItem -LiteralPath $yaml.DirectoryName -File -Filter "$base.*" -ErrorAction SilentlyContinue |
-                     Where-Object { $_.Extension -ne '.yaml' } | Select-Object -First 1
+        $beside = @(Get-ChildItem -LiteralPath $yaml.DirectoryName -File -Filter "$base.*" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Extension -ne '.yaml' })
+
+        $installer = $beside |
+                     Where-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) -eq $base } |
+                     Select-Object -First 1
+
+        # What was rejected, reported rather than dropped. A null Installer
+        # already means something specific here - "winget extracts this one, so
+        # the manifest is a note and there is no payload" - and silently
+        # producing that same signal for a fragment would make an interrupted
+        # download indistinguishable from a package that never has a payload.
+        # Downstream that difference decides between "fetch it again" and
+        # "skip it forever", so it is carried rather than inferred.
+        $partial = @($beside |
+                     Where-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) -ne $base } |
+                     ForEach-Object { $_.FullName })
 
         $silent = ([regex]::Match($text, '(?m)^\s*Silent:\s*(.+?)\s*$')).Groups[1].Value
         if (-not $silent) {
@@ -506,6 +537,7 @@ function Find-CachedPackage {
             Version      = ([regex]::Match($text, '(?m)^PackageVersion:\s*(\S+)\s*$')).Groups[1].Value
             Manifest     = $yaml.FullName
             Installer    = if ($installer) { $installer.FullName } else { $null }
+            Partial      = $partial
             Type         = ([regex]::Match($text, '(?m)^\s*InstallerType:\s*(\S+)\s*$')).Groups[1].Value.ToLower()
             Nested       = ([regex]::Match($text, '(?m)^\s*NestedInstallerType:\s*(\S+)\s*$')).Groups[1].Value.ToLower()
             Silent       = $silent

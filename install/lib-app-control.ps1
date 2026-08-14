@@ -31,6 +31,14 @@
 # false into a terminating error, which is precisely the shape of most probing
 # done below.
 
+# Write-Ok / Write-Info / Write-Warn2, used throughout this file, are defined in
+# lib-console.ps1. Sourced here rather than assumed from the caller: every
+# consumer happens to load lib-console.ps1 first today, and the first one that
+# does not - anyone wanting only the app helpers - would get "Write-Info is not
+# recognized" at the moment a process refuses to close, not at load. Dot-sourcing
+# it twice just redefines the same functions.
+. (Join-Path $PSScriptRoot 'lib-console.ps1')
+
 # ---------------------------------------------------------------------------
 # The console
 # ---------------------------------------------------------------------------

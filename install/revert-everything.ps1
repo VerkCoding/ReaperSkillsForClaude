@@ -58,6 +58,13 @@ $stepLog = Start-RunLog 'revert'
 Write-Banner "REAPER for Claude - revert everything"
 if ($stepLog) { Write-Info "log  $stepLog" }
 
+# Everything that could not be put back, collected here rather than only warned
+# about, so the closing word matches the machine. Declared up here because the
+# first thing that can fail - removing the developer junction - happens before
+# the restore does, and a list that starts halfway down the file can only ever
+# hold half the failures.
+$problems = @()
+
 # The original, not the newest.
 #
 # "Revert Everything" can only mean "back to before this setup ever ran", and
@@ -148,6 +155,7 @@ if (Test-Path $link) {
         Write-Ok "Developer link removed."
     } catch {
         Write-Warn2 "Could not remove $link : $_"
+        $problems += "The developer link is still there: $link - it shadows the marketplace plugin, so delete it by hand."
     }
 }
 
@@ -155,11 +163,33 @@ if (Test-Path $link) {
 # 2. Files
 # ---------------------------------------------------------------------------
 Write-Step "Restoring configuration"
+$restoreOk = $true
+
+# Hand this run's log down, so the child writes WHICH file it could not put back
+# into the log the summary below points at. Without it backup-restore.ps1 opens
+# its own backup-<timestamp>.log and the revert log holds this step's header and
+# nothing under it - the user is sent to a file that names no failure. Scoped to
+# the call and cleared in the finally, so none of the early exits above this
+# point can leak it into an interactive session.
+if ($stepLog) { $env:RFC_LOG_PATH = $stepLog }
 try {
     & (Join-Path $Here 'backup-restore.ps1') -Restore -From $snapshot | Out-Host
+    # The exit code, not just the exception. backup-restore.ps1 ends with
+    # `exit 1` when a file could not be put back - locked by something still
+    # running, or a permissions refusal - and a child script exiting non-zero
+    # does NOT throw, so catching alone saw nothing and this went on to print
+    # REVERTED over a machine whose configuration had not been restored. On the
+    # one path a user reaches when they are already recovering from something,
+    # that is the worst possible thing to get wrong.
+    $restoreOk = ($LASTEXITCODE -eq 0)
 } catch {
     Write-Err "Restore failed: $_"
     exit 1
+} finally {
+    Remove-Item Env:\RFC_LOG_PATH -ErrorAction SilentlyContinue
+}
+if (-not $restoreOk) {
+    $problems += "Some files could not be restored - see the warnings above. Close REAPER and Claude, then run [2] again."
 }
 
 # ---------------------------------------------------------------------------
@@ -174,6 +204,7 @@ if (Test-Path $venv) {
     } catch {
         Write-Warn2 "Could not remove $venv : $_"
         Write-Info "Close anything using it, then delete it by hand."
+        $problems += "The dependency virtualenv is still there: $venv - close whatever is using it, then delete it."
     }
 } else {
     Write-Info "No virtualenv to remove."
@@ -234,6 +265,7 @@ if ($null -eq $manifest.claudeProfilesBefore) {
             } catch {
                 Write-Warn2 "Could not move $dir : $($_.Exception.Message.Split([Environment]::NewLine)[0])"
                 Write-Info  "  Close Claude fully and try again, or rename that folder by hand."
+                $problems += "Claude's profile could not be reset: $dir - close Claude fully and run [2] again, or rename that folder by hand."
             }
         }
     }
@@ -260,7 +292,7 @@ if ($ours.Count -gt 0) {
     Write-Info "Everything was already installed before the setup ran; nothing to report."
 }
 
-Write-Result -DoneWord 'REVERTED'
+Write-Result -Problems $problems -DoneWord 'REVERTED'
 Write-Host "     Restart REAPER and Claude so they reload their configuration."
 if ($stepLog) { Write-Host "     Log: $stepLog" -ForegroundColor DarkGray }
 Write-Host ""

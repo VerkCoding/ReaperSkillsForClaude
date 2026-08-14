@@ -175,8 +175,12 @@ if ($doPython) {
 # The server has no such limit and happily runs on 3.14, which is why it is
 # selected separately.
 # ---------------------------------------------------------------------------
-$ReapyPython     = $null
-$ReapyPythonArgs = @()
+# One value, not an interpreter plus arguments. `--print-reaper-python` returns
+# a resolved path - which is why Test-Path can be called on it below - so the
+# launcher-style "py -3.12" pair it used to allow for cannot occur. The empty
+# argument array that carried that case is gone rather than left as a branch
+# nothing can reach.
+$ReapyPython = $null
 
 # bootstrap.py owns this choice, so ask it rather than repeating the search.
 # The interpreter that runs enable_reapy.py BECOMES REAPER's embedded Python -
@@ -217,10 +221,7 @@ if ($PythonExe) {
 
 function Invoke-Reapy {
     param([string[]]$ScriptArgs)
-    $all = @()
-    if ($ReapyPythonArgs.Count -gt 0) { $all += $ReapyPythonArgs }
-    $all += $ScriptArgs
-    & $ReapyPython @all
+    & $ReapyPython @ScriptArgs
 }
 
 # ---------------------------------------------------------------------------
@@ -241,13 +242,16 @@ if ($doReaper) {
         # unavailable reported "Launch REAPER once so it creates its config" on
         # a machine with no REAPER on it at all - an instruction the user cannot
         # follow, pointing away from the thing that actually needs doing.
+        # Interpolated rather than Join-Path'd, for two reasons. An edit once
+        # collapsed the "\r" of "\reaper.exe" into a carriage return inside these
+        # literals, which made every Test-Path false and left this branch
+        # unreachable - so the "install REAPER" message was printed even to
+        # people who already had it. And Join-Path throws on a null first
+        # argument, which ${env:ProgramFiles(x86)} is on a 32-bit install.
         $exe = @(
-            (Join-Path $env:ProgramFiles 'REAPER (x64)
-eaper.exe'),
-            (Join-Path $env:ProgramFiles 'REAPER
-eaper.exe'),
-            (Join-Path ${env:ProgramFiles(x86)} 'REAPER
-eaper.exe')
+            "$env:ProgramFiles\REAPER (x64)\reaper.exe",
+            "$env:ProgramFiles\REAPER\reaper.exe",
+            "${env:ProgramFiles(x86)}\REAPER\reaper.exe"
         ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
         if ($exe) {
@@ -330,7 +334,7 @@ end
             Write-Info  "  Actions > Show action list > ReaScript: Run... > $ScriptsDir\enable_reapy.py"
             Add-Problem "Distant API not configured: REAPER was open. Close it and re-run."
         } else {
-            Write-Info "Using interpreter: $ReapyPython $($ReapyPythonArgs -join ' ')"
+            Write-Info "Using interpreter: $ReapyPython"
             # Not $args - that is an automatic variable in PowerShell.
             $pyArgs = @($EnableRpy, '--resource-path', $ReaperResourcePath)
             if ($Force) { $pyArgs += '--force' }
@@ -397,17 +401,22 @@ if ($doClaude) {
         # which is why this clears them rather than printing advice.
         $claude = Get-Command claude -ErrorAction SilentlyContinue
         if ($claude) {
+            # Every one of these goes through Invoke-Native, not just the first.
+            # They all merge stderr, and under EAP 'Stop' a single warning line
+            # from the CLI is a terminating error - which would abort exactly
+            # here, leaving the marketplace entry still shadowing the junction
+            # this block exists to clear.
             $listing = Invoke-Native { & claude plugin list 2>&1 | Out-String }
             if ($listing -match [regex]::Escape($PluginRef)) {
                 Write-Info "Removing the marketplace install, which would shadow the link."
-                & claude plugin uninstall $PluginRef 2>&1 | ForEach-Object { Write-Info $_ }
+                Invoke-Native { & claude plugin uninstall $PluginRef 2>&1 | ForEach-Object { Write-Info $_ } }
             }
-            $markets = & claude plugin marketplace list 2>&1 | Out-String
+            $markets = Invoke-Native { & claude plugin marketplace list 2>&1 | Out-String }
             if ($markets -match [regex]::Escape($MarketplaceName)) {
                 Write-Info "Removing the marketplace registration, which reserves the name."
-                & claude plugin marketplace remove $MarketplaceName 2>&1 | ForEach-Object { Write-Info $_ }
+                Invoke-Native { & claude plugin marketplace remove $MarketplaceName 2>&1 | ForEach-Object { Write-Info $_ } }
             }
-            $after = & claude plugin list 2>&1 | Out-String
+            $after = Invoke-Native { & claude plugin list 2>&1 | Out-String }
             if ($after -match 'reaper-for-claude@skills-dir') { Write-Ok "Loaded in place; edits are live." }
             else { Write-Warn2 "Not loaded yet - restart Claude Code or run /reload-plugins." }
         }

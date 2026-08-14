@@ -87,9 +87,23 @@ $RfcGlyph = if ($RfcUnicodeConsole) {
     }
 }
 
-$RfcWidth    = 62      # everything is drawn to this, so nothing ragged
-$RfcStep     = 0
-$RfcLogPath  = $null
+$RfcWidth = 62      # everything is drawn to this, so nothing ragged
+
+# The two below are state, and are guarded because this file is now loaded more
+# than once per script: lib-app-control.ps1 and lib-download-cache.ps1 each
+# dot-source it so they stand on their own, and a dot-source runs in the CALLER's
+# scope - so a second load writes over what the first one set up.
+#
+# Unguarded, that reset $RfcLogPath to $null. A script that dot-sourced one of
+# those libraries after Start-RunLog kept printing to the console and stopped
+# writing to the log entirely, since Write-LogLine returns at its null check.
+# Measured: two logged lines became one, with no error either side of it. Every
+# script today happens to load its libraries before opening the log, so this was
+# an unwritten ordering rule whose only symptom was a silent hole in the file
+# people are told to send. Loading twice is now what the comments already claim
+# it is - harmless.
+if (-not (Test-Path 'variable:RfcStep'))    { $RfcStep    = 0 }
+if (-not (Test-Path 'variable:RfcLogPath')) { $RfcLogPath = $null }
 
 # ---------------------------------------------------------------------------
 # The log
@@ -124,6 +138,12 @@ function Start-RunLog {
         $script:RfcLogPath = $env:RFC_LOG_PATH
         return $script:RfcLogPath
     }
+
+    # Past that point this is a top-level run, not a child joining one, so the
+    # step counter starts over. Tied to opening the log rather than left to each
+    # script to remember, because "am I the parent?" is a question already
+    # answered here and answering it twice is how the two would drift apart.
+    Remove-Item Env:\RFC_STEP -ErrorAction SilentlyContinue
 
     try {
         $dir = Join-Path $env:USERPROFILE '.reaper-for-claude\logs'
@@ -184,7 +204,20 @@ function Write-Step {
     #>
     param([string]$m)
 
-    $script:RfcStep++
+    # Carried in the environment for the same reason the log path is: a child
+    # script is its own PowerShell scope, so $RfcStep restarted at zero there
+    # and the console showed steps 1..5 from the parent followed by 1.. again
+    # from configure-plugin.ps1, as if the run had begun over.
+    #
+    # -as rather than a cast. [int]$env:RFC_STEP throws on anything non-numeric,
+    # and a cast failure is terminating whatever $ErrorActionPreference says - so
+    # one odd value in a short, generic environment variable killed the installer
+    # at its next section rule, naming neither the variable nor the script. -as
+    # yields $null instead, which falls back to this script's own count.
+    $inherited = if ($env:RFC_STEP) { $env:RFC_STEP -as [int] } else { $null }
+    $script:RfcStep = if ($null -ne $inherited) { $inherited + 1 } else { $script:RfcStep + 1 }
+    $env:RFC_STEP   = $script:RfcStep
+
     $label = " $($script:RfcStep) $($RfcGlyph.Dot) $m "
     # -2 for the two leading rule characters, so a step rule ends in the same
     # column as the banner box above it. Two characters out is not a bug, but a

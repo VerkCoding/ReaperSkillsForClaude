@@ -67,6 +67,19 @@ $ErrorActionPreference = 'Stop'
 # For Get-ClaudeProfilePath and Test-ClaudeSignedIn, recorded in the manifest.
 . (Join-Path $PSScriptRoot 'lib-app-control.ps1')
 
+# Open the log - or join the parent's, which is what happens when
+# install-everything.ps1 and revert-everything.ps1 call this. Without it every
+# Write-* below wrote to the console only, so the one file people are told to
+# send when a revert goes wrong held no record of WHICH file could not be put
+# back. Assigned away because this script's stdout is its return value: the
+# snapshot directory, read by the caller.
+#
+# Named for the operation, and only for the two that change something. -List
+# reads, and a listing that creates a log file - then prunes real backup and
+# restore logs out of the ten kept - costs more than it records.
+$logName = if ($Backup) { 'backup' } elseif ($Restore) { 'restore' } else { $null }
+if ($logName) { $null = Start-RunLog $logName }
+
 $Store = Join-Path $env:USERPROFILE '.reaper-for-claude\backups'
 
 function Get-ReaperPath {

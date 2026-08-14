@@ -179,7 +179,11 @@ foreach ($f in $RfcBootstrapFiles) {
         Write-Ok "$($f.Label) cached."
     } catch {
         Write-Err "$($f.Label): $($_.Exception.Message.Split([Environment]::NewLine)[0])"
-        $failed += $f.Label
+        # A sentence, not a bare name. Write-Result prints this list numbered
+        # under "N thing(s) still to do", and a list of nouns there never says
+        # what happened to them - which is what the line that used to name them
+        # said, and the only thing it said that Write-Result does not.
+        $failed += "$($f.Label) could not be downloaded"
     } finally {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
@@ -207,6 +211,19 @@ if (-not $wingetOk) {
 } else {
     foreach ($app in (Get-AppList)) {
         $existing = Find-CachedPackage -Id $app.Id
+
+        # A fragment beside the manifest is an interrupted download, not a
+        # cached package and not a package that has no payload by design. Left
+        # unseparated it reads as the latter, and the branch below would print
+        # "not installable from disk - noted, skipping" on this run and every
+        # run after it, so the package would never be cached again and nothing
+        # would ever say why.
+        if ($existing -and $existing.Partial -and -not $existing.Installer) {
+            Write-Warn2 "$($app.Name): an interrupted download was in the way - fetching it again."
+            foreach ($p in $existing.Partial) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+            $existing = $null
+        }
+
         if ($existing -and -not $Force) {
             if ($existing.Installer) {
                 Write-Ok "$($app.Name) $($existing.Version): already cached."
@@ -236,10 +253,10 @@ if (-not $wingetOk) {
         # A package winget extracts rather than installs leaves its manifest
         # behind as a note; anything else genuinely did not download.
         $after = Find-CachedPackage -Id $app.Id
-        if ($after -and -not $after.Installer) {
+        if ($after -and -not $after.Installer -and -not $after.Partial) {
             Write-Info "  That one still needs a working winget on the target machine."
         } else {
-            $failed += $app.Name
+            $failed += "$($app.Name) could not be downloaded"
         }
     }
 }
@@ -284,9 +301,12 @@ if ($outside.Count -gt 0) {
 }
 
 if ($failed.Count -gt 0) {
-    Write-Host ""
-    Write-Warn2 "These could not be downloaded: $($failed -join ', ')"
-    Write-Info  "Run this again later - whatever did work is kept and skipped."
+    # Once, not twice. Write-Result above already listed every failure, numbered,
+    # from this same array - repeating them here as a comma-joined sentence made
+    # two problems read as four. The entries themselves now carry the verb, so
+    # nothing was lost with the second copy. What is left is the part it does
+    # not say.
+    Write-Info "Run this again later - whatever did work is kept and skipped."
 }
 
 Write-Host ""

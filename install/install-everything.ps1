@@ -67,6 +67,20 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Give the environment back even when this dies partway.
+#
+# RFC_LOG_PATH is set below so child scripts write into this run's log, and the
+# clear at the end of the file only runs if the end of the file is reached. A
+# terminating error anywhere in between skipped it - and `& .\install-everything.ps1`
+# from a prompt runs in the CALLER's process, so the variable outlived the run
+# and the next script appended itself to a dead run's log. The failed run is the
+# one most likely to be followed straight away by another attempt, so that was
+# the leak's most likely moment, not its least.
+#
+# trap fires only on errors nothing else handled - the try/catch blocks below
+# still win - and `break` re-throws, so failure still looks exactly like failure.
+trap { Remove-Item Env:\RFC_LOG_PATH -ErrorAction SilentlyContinue; break }
+
 # How this talks, and the log it writes. Same function names the rest of
 # this file already calls - see lib-console.ps1.
 . (Join-Path $PSScriptRoot 'lib-console.ps1')
@@ -678,6 +692,19 @@ if ($transcribing) {
     try { Stop-Transcript | Out-Null } catch { }
 }
 Write-Host ""
+
+# Hand back the environment as it was found. RFC_LOG_PATH exists so child
+# scripts join this run's log; left set, the next script started in the same
+# session would append its output to THIS run's log. The menu starts each option
+# in a fresh process, but the scripts are documented as individually runnable,
+# which is exactly when that would bite. The trap at the top covers the path
+# where this line is never reached.
+#
+# RFC_STEP is deliberately NOT cleared here. Start-RunLog clears it whenever a
+# top-level run opens its own log, which is the same moment and one mechanism
+# instead of two - and revert-everything.ps1 and fill-download-cache.ps1 set it
+# through Write-Step and are already correct for that reason.
+Remove-Item Env:\RFC_LOG_PATH -ErrorAction SilentlyContinue
 
 # Tell the caller whether this worked.
 #
