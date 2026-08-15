@@ -127,28 +127,41 @@ def register_tools(mcp):
             track = project.tracks[track_index]
             item = track.items[item_index]
 
+            # Written through reascript_api and read back below.
+            #
+            # `item.position` and `item.length` do reach REAPER, but the other
+            # three reapy properties in this block did not: fade_in_length and
+            # fade_out_length assign an attribute and go nowhere, so the fades
+            # were silently dropped while this returned success, and
+            # take.start_offset has no setter at all - it raised AttributeError
+            # and took the whole trim with it.
             if start_trim > 0:
-                item.position += start_trim
-                item.length -= start_trim
+                RPR.SetMediaItemInfo_Value(item.id, "D_POSITION", item.position + start_trim)
+                RPR.SetMediaItemInfo_Value(item.id, "D_LENGTH", item.length - start_trim)
                 take = item.active_take
                 if take:
-                    take.start_offset += start_trim
+                    offset = RPR.GetMediaItemTakeInfo_Value(take.id, "D_STARTOFFS")
+                    RPR.SetMediaItemTakeInfo_Value(take.id, "D_STARTOFFS", offset + start_trim)
 
             if end_trim > 0:
-                item.length -= end_trim
+                RPR.SetMediaItemInfo_Value(item.id, "D_LENGTH", item.length - end_trim)
 
             if fade_in > 0:
-                item.fade_in_length = fade_in
+                RPR.SetMediaItemInfo_Value(item.id, "D_FADEINLEN", fade_in)
 
             if fade_out > 0:
-                item.fade_out_length = fade_out
+                RPR.SetMediaItemInfo_Value(item.id, "D_FADEOUTLEN", fade_out)
 
+            # Reported from REAPER rather than from the arguments, so a value it
+            # clamped or refused shows up here instead of being echoed back.
             return {
                 "success": True,
                 "track_index": track_index,
                 "item_index": item_index,
-                "position": item.position,
-                "length": item.length,
+                "position": RPR.GetMediaItemInfo_Value(item.id, "D_POSITION"),
+                "length": RPR.GetMediaItemInfo_Value(item.id, "D_LENGTH"),
+                "fade_in": RPR.GetMediaItemInfo_Value(item.id, "D_FADEINLEN"),
+                "fade_out": RPR.GetMediaItemInfo_Value(item.id, "D_FADEOUTLEN"),
             }
         except Exception as e:
             return {"success": False, "error": str(e)}

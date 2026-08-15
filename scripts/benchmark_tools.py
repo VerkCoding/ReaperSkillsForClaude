@@ -443,6 +443,79 @@ class Bench:
     def fail(self, tool: str, group: str, detail: str) -> None:
         self.results.append(Result(tool, group, FAIL, None, detail))
 
+    def confirm(self, probe, expected, label: str, tol: float | None = None) -> None:
+        """Ask REAPER, and fail the call just recorded if REAPER disagrees.
+
+        ``expect=`` above is handed the tool's own payload - the tool's word for
+        what it did. This is REAPER's word, read straight through
+        ``reascript_api``, and the difference is the entire point.
+
+        It is not a theoretical difference. ``set_fx_parameter`` used to report
+        the value it had been given rather than the value REAPER held, so it
+        looked right in every transcript; ``track.armed = True`` assigns an
+        attribute to a temporary object and never reaches REAPER at all. Both
+        pass a check that reads the payload. Neither passes this one.
+
+        ``expected`` is a value, or a predicate taking the reading - use the
+        predicate when the claim is "more than none" rather than an exact
+        number. ``tol`` compares floats loosely, which dB and pan need: they
+        round-trip through REAPER's own scaling and do not come back bit-exact.
+
+        Silent when the recorded call is not already ``ok``. A tool that failed
+        has changed nothing, so probing it would add a second row saying the
+        same thing in different words.
+        """
+        if not self.results or self.results[-1].status != OK:
+            return
+
+        box: dict = {}
+        done = threading.Event()
+
+        def worker():
+            try:
+                box["value"] = probe()
+            except Exception as e:
+                box["error"] = f"{type(e).__name__}: {e}"
+            finally:
+                done.set()
+
+        # Same no-hanging rule as every other call into REAPER. A probe reads
+        # over the same reapy socket a modal dialog freezes, so an unguarded one
+        # would be a new way to wedge the run - the exact failure this script
+        # was built around.
+        threading.Thread(target=worker, daemon=True, name=f"probe-{label}").start()
+        if not done.wait(self.timeout):
+            self._demote(f"REAPER did not answer the {label} probe within {self.timeout:.0f}s")
+            return
+        if "error" in box:
+            self._demote(f"could not read {label} back from REAPER: {box['error']}")
+            return
+
+        actual = box["value"]
+        if callable(expected):
+            agrees = bool(expected(actual))
+            wanted = getattr(expected, "__doc__", None) or "the expected value"
+        elif tol is not None:
+            agrees = approx(actual, expected, tol)
+            wanted = f"{expected!r} (+/-{tol})"
+        else:
+            agrees = actual == expected
+            wanted = repr(expected)
+
+        if not agrees:
+            self._demote(f"REAPER says {label} is {actual!r}, not {wanted}")
+
+    def _demote(self, detail: str) -> None:
+        """Turn the last recorded pass into a failure, keeping its timing.
+
+        The tempo check already rewrote ``results[-1]`` in place; this is that
+        move with a name on it, so twenty-odd probes do not each reinvent it.
+        """
+        result = self.results[-1]
+        result.status = FAIL
+        result.detail = f"REAPER disagrees: {detail}" if not result.detail else \
+                        f"{result.detail}; REAPER disagrees: {detail}"
+
     # -- undo --------------------------------------------------------------
 
     def defer(self, description: str, fn) -> None:
@@ -545,6 +618,101 @@ def approx(value, target, tolerance=0.05) -> bool:
         return abs(float(value) - float(target)) <= tolerance
     except (TypeError, ValueError):
         return False
+
+
+# --------------------------------------------------------------------------
+# Probes: what REAPER holds, asked directly
+#
+# Everything here goes through reascript_api and never through a tool, because
+# the tools are what is on trial. Each one is read fresh - no pointer is cached
+# across a call, since adding or deleting a track can move them.
+# --------------------------------------------------------------------------
+
+NULL_PTR = "0x0000000000000000"
+
+
+def _is_null(pointer) -> bool:
+    return not pointer or NULL_PTR in str(pointer)
+
+
+def _track_id(index: int):
+    from reaper_mcp.connection import get_project  # noqa: PLC0415
+
+    return get_project().tracks[index].id
+
+
+def _item_ptr(track_index: int, item_index: int):
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    return RPR.GetTrackMediaItem(_track_id(track_index), item_index)
+
+
+def _note_count(track_index: int, item_index: int) -> int:
+    """Notes REAPER holds in an item's active take."""
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    take = RPR.GetActiveTake(_item_ptr(track_index, item_index))
+    if _is_null(take):
+        return -1
+    # (retval, take, notecnt, ccevtcnt, textsyxevtcnt)
+    return RPR.MIDI_CountEvts(take, 0, 0, 0)[2]
+
+
+def _envelope_points(track_index: int, name: str) -> int:
+    """Points on a named track envelope. 0 when the envelope does not exist.
+
+    An automation call that never made the envelope and one that made an empty
+    envelope are different bugs, but both are "no automation", and 0 says so
+    without needing the distinction.
+    """
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    env = RPR.GetTrackEnvelopeByName(_track_id(track_index), name)
+    if _is_null(env):
+        return 0
+    return RPR.CountEnvelopePoints(env)
+
+
+def _fx_enabled(track_index: int, fx_index: int) -> bool:
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    return bool(RPR.TrackFX_GetEnabled(_track_id(track_index), fx_index))
+
+
+def _fx_count(track_index: int) -> int:
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    return RPR.TrackFX_GetCount(_track_id(track_index))
+
+
+def _master_fx_names() -> list:
+    from reaper_mcp.connection import get_project  # noqa: PLC0415
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    master = get_project().master_track.id
+    # (retval, track, fx, name, sz)
+    return [RPR.TrackFX_GetFXName(master, i, "", 256)[3]
+            for i in range(RPR.TrackFX_GetCount(master))]
+
+
+def _send_count(track_index: int, category: int = 0) -> int:
+    """category 0 = sends out of this track, -1 = receives into it."""
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    return RPR.GetTrackNumSends(_track_id(track_index), category)
+
+
+def _play_state() -> int:
+    """Bit 1 = playing, bit 2 = paused, bit 4 = recording."""
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    return RPR.GetPlayState()
+
+
+def _track_count() -> int:
+    from reaper_mcp.connection import get_project  # noqa: PLC0415
+
+    return get_project().n_tracks
 
 
 def rendered_bytes(payload: dict) -> str | None:
@@ -660,9 +828,26 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
         )
 
     if destructive:
-        b.call("save_project", {"project_path": str(workdir / "bench.rpp")}, group=g)
-        b.call("load_project", {"project_path": str(workdir / "bench.rpp")}, group=g)
+        saved = workdir / "bench.rpp"
+        b.call("save_project", {"project_path": str(saved)}, group=g)
+        # Two claims in one: REAPER wrote the file, and it no longer considers
+        # the project unsaved. save_project has to do both - the ReaScript that
+        # writes the file leaves the dirty flag set, and a project still marked
+        # dirty is what makes the next create_project open a modal.
+        b.confirm(lambda: (saved.is_file() and saved.stat().st_size > 0, RPR.IsProjectDirty(0)),
+                  lambda pair: pair[0] and pair[1] == 0,
+                  f"(a file at {saved.name}, IsProjectDirty), wanted (True, 0)")
+
+        b.call("load_project", {"project_path": str(saved)}, group=g)
+        b.confirm(lambda: RPR.GetProjectName(0, "", 512)[2],
+                  lambda name: saved.stem.lower() in str(name).lower(),
+                  f"the open project name, wanted one containing {saved.stem!r}")
+
+        tabs_before = _project_tab_count()
         b.call("create_project", {"tempo": 120.0}, group=g)
+        # New Project opens a tab rather than replacing the current one, so the
+        # observable effect is the tab count, not the contents of this one.
+        b.confirm(_project_tab_count, tabs_before + 1, "the open project-tab count")
     else:
         for tool in ("save_project", "load_project", "create_project"):
             b.skip(tool, g, "writes or replaces the open project; --include-destructive")
@@ -688,6 +873,12 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
            expect=lambda p: None if p.get("soloed") is True else "solo did not stick")
     b.call("set_track_solo", {"track_index": audio_ix, "soloed": False}, group=g)
     b.call("set_track_color", {"track_index": audio_ix, "r": 200, "g": 60, "b": 60}, group=g)
+    # Both reads happen inside the probe thread. ColorToNative is a REAPER call
+    # too, and one made on this thread would be one more way to hang.
+    b.confirm(lambda: (int(RPR.GetMediaTrackInfo_Value(_track_id(audio_ix), "I_CUSTOMCOLOR")),
+                       RPR.ColorToNative(200, 60, 60) | 0x1000000),
+              lambda pair: pair[0] == pair[1],
+              "I_CUSTOMCOLOR (stored, wanted)")
     b.call("get_track_info", {"track_index": audio_ix}, group=g, times=b.repeat,
            expect=lambda p: None if approx(p.get("volume_db"), -6.0, 0.1) else "volume_db disagrees with what was set")
     b.call("list_tracks", group=g, times=b.repeat,
@@ -697,12 +888,13 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     # everything below depends on are never disturbed.
     throwaway = b.call("create_track", {"name": PREFIX + "throwaway"}, group=g)
     if throwaway.get("success"):
-        before = b.raw("list_tracks").get("count", 0)
+        # Counted through REAPER rather than through list_tracks. The old check
+        # asked one tool whether another tool had worked, so a shared fault -
+        # both reading the same stale project handle, say - would have agreed
+        # with itself and passed.
+        before = _track_count()
         b.call("delete_track", {"track_index": throwaway["track_index"]}, group=g)
-        after = b.raw("list_tracks").get("count", 0)
-        if after != before - 1 and b.results[-1].status == OK:
-            b.results[-1].status = FAIL
-            b.results[-1].detail = f"track count went {before} -> {after}, expected {before - 1}"
+        b.confirm(_track_count, before - 1, "the track count")
     else:
         b.skip("delete_track", g, "no track to delete")
 
@@ -718,9 +910,22 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     b.call("set_cursor_position", {"position": 1.5}, group=g,
            expect=lambda p: None if approx(p.get("position"), 1.5, 0.01) else f"cursor at {p.get('position')}")
     b.call("play_project", group=g)
+    # Bit 1 of the play state, not the whole word: REAPER reports paused and
+    # recording in the same integer, so == 1 would call a paused transport a
+    # failure to start.
+    b.confirm(lambda: _play_state() & 1, 1, "the transport play bit")
     b.call("stop_transport", group=g)
+    b.confirm(_play_state, 0, "the transport state")
+
     b.call("edit_audio_item",
            {"track_index": audio_ix, "item_index": item_ix, "fade_in": 0.1, "fade_out": 0.1}, group=g)
+    # The fades are the only thing this call was asked to change, and its
+    # payload reports position and length - never the fades. So there is no
+    # value in the reply that could have caught a fade that did not land.
+    b.confirm(lambda: (RPR.GetMediaItemInfo_Value(_item_ptr(audio_ix, item_ix), "D_FADEINLEN"),
+                       RPR.GetMediaItemInfo_Value(_item_ptr(audio_ix, item_ix), "D_FADEOUTLEN")),
+              lambda pair: approx(pair[0], 0.1, 0.001) and approx(pair[1], 0.1, 0.001),
+              "the item fades (in, out), wanted 0.1 each")
     b.call("adjust_pitch", {"track_index": audio_ix, "item_index": item_ix, "semitones": 2.0}, group=g,
            expect=lambda p: None if approx(p.get("pitch_semitones"), 2.0, 0.01) else f"read back {p.get('pitch_semitones')}")
     b.call("adjust_pitch", {"track_index": audio_ix, "item_index": item_ix, "semitones": 0.0}, group=g)
@@ -729,7 +934,12 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
 
     if destructive:
         b.call("start_recording", {"track_index": midi_ix}, group=g)
+        # Bit 4 is recording. This is the check that would have caught the
+        # `track.armed = True` no-op: the transport rolled, nothing was armed,
+        # and REAPER raised a modal instead of recording.
+        b.confirm(lambda: _play_state() & 4, 4, "the transport record bit")
         b.call("stop_transport", group=g)
+        b.confirm(_play_state, 0, "the transport state")
     else:
         b.skip("start_recording", g, "records audio to disk; --include-destructive")
 
@@ -738,14 +948,23 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     item = b.call("create_midi_item", {"track_index": midi_ix, "start_position": 0.0, "length": 2.0}, group=g,
                   expect=lambda p: None if approx(p.get("length"), 2.0, 0.05) else f"length {p.get('length')}")
     midi_item_ix = item.get("item_index", 0)
+    notes_before = _note_count(midi_ix, midi_item_ix)
     b.call("add_midi_note",
            {"track_index": midi_ix, "item_index": midi_item_ix, "pitch": 60,
             "start": 0.0, "length": 0.5, "velocity": 100}, group=g)
+    b.confirm(lambda: _note_count(midi_ix, midi_item_ix), notes_before + 1,
+              "the note count in the take")
     b.call("create_chord_progression",
            {"track_index": midi_ix, "chords": "C,Am,F,G7", "start_position": 4.0}, group=g,
            expect=lambda p: None if len(p.get("chords", [])) == 4 else f"{len(p.get('chords', []))} chords placed")
     b.call("create_drum_pattern",
            {"track_index": midi_ix, "pattern": "k...h...s...h...", "start_position": 12.0}, group=g)
+    # k, h, s, h are the four characters in DRUM_MAPPINGS, and repeats defaults
+    # to 1, so REAPER should hold exactly four notes. Counted on the item the
+    # call just made - the newest on the track - because the payload returns an
+    # item_id pointer and no index.
+    b.confirm(lambda: _note_count(midi_ix, RPR.CountTrackMediaItems(_track_id(midi_ix)) - 1),
+              4, "the drum note count")
 
     # --- FX ----------------------------------------------------------------
     g = "fx"
@@ -771,12 +990,27 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
         if not approx(stored, 0.6, 0.02) and b.results[-1].status == OK:
             b.results[-1].status = FAIL
             b.results[-1].detail = f"get_fx_parameters still reports {stored}"
+        # bypass_fx writes `fx.is_enabled = not bypassed`, which is a reapy
+        # attribute assignment on an FX object - the same shape as every silent
+        # no-op in the traps table. Checked in both directions, because a setter
+        # that is simply ignored looks correct in whichever state the FX already
+        # happened to be in.
         b.call("bypass_fx", {"track_index": audio_ix, "fx_index": fx_ix, "bypassed": True}, group=g)
+        b.confirm(lambda: _fx_enabled(audio_ix, fx_ix), False, "TrackFX_GetEnabled after bypassing")
         b.call("bypass_fx", {"track_index": audio_ix, "fx_index": fx_ix, "bypassed": False}, group=g)
+        b.confirm(lambda: _fx_enabled(audio_ix, fx_ix), True, "TrackFX_GetEnabled after un-bypassing")
+
         b.call("load_fx_preset",
                {"track_index": audio_ix, "fx_index": fx_ix, "preset_name": "Default"}, group=g,
                may_fail="stock ReaEQ ships no preset named 'Default'")
+        # Only when the call claimed to succeed - confirm is silent otherwise,
+        # and a stock ReaEQ usually has no preset by that name.
+        b.confirm(lambda: RPR.TrackFX_GetPreset(_track_id(audio_ix), fx_ix, "", 256)[3],
+                  "Default", "the loaded preset name")
+
+        fx_before = _fx_count(audio_ix)
         b.call("remove_fx", {"track_index": audio_ix, "fx_index": fx_ix}, group=g)
+        b.confirm(lambda: _fx_count(audio_ix), fx_before - 1, "the track FX count")
     else:
         # Everything here addresses an FX by index; without one they would all
         # fail for a reason that has nothing to do with them.
@@ -786,18 +1020,34 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
 
     # --- mixing ------------------------------------------------------------
     g = "mixing"
+    tracks_before_bus = _track_count()
     bus = b.call("create_bus", {"name": PREFIX + "bus", "track_indices": [audio_ix, midi_ix]}, group=g)
     bus_ix = bus.get("bus_index", midi_ix + 1)
+    # A bus is a track plus the receives that make it one. Both are checked: a
+    # bare track with nothing routed into it would satisfy the count alone and
+    # is not a bus.
+    b.confirm(lambda: (_track_count(), _send_count(bus_ix, -1)),
+              lambda pair: pair[0] == tracks_before_bus + 1 and pair[1] >= 2,
+              f"(track count, receives into the bus), wanted ({tracks_before_bus + 1}, >=2)")
 
+    sends_before = _send_count(audio_ix, 0)
     b.call("create_send",
            {"source_track_index": audio_ix, "dest_track_index": bus_ix, "volume_db": -3.0}, group=g)
+    b.confirm(lambda: _send_count(audio_ix, 0), sends_before + 1, "the send count on the source track")
+
     sends = b.call("list_sends", {"track_index": audio_ix}, group=g,
                    expect=lambda p: None if p.get("sends") else "no sends listed after create_send")
     last_send = len(sends.get("sends", [])) - 1
     if last_send >= 0:
         b.call("set_send_volume",
                {"source_track_index": audio_ix, "send_index": last_send, "volume_db": -6.0}, group=g)
+        # D_VOL is a linear gain, not dB: -6 dB is about 0.501.
+        b.confirm(lambda: RPR.GetTrackSendInfo_Value(_track_id(audio_ix), 0, last_send, "D_VOL"),
+                  10 ** (-6.0 / 20.0), "the send gain (linear)", tol=0.01)
+
+        before_remove = _send_count(audio_ix, 0)
         b.call("remove_send", {"source_track_index": audio_ix, "send_index": last_send}, group=g)
+        b.confirm(lambda: _send_count(audio_ix, 0), before_remove - 1, "the send count after removal")
     else:
         b.skip("set_send_volume", g, "no send to operate on")
         b.skip("remove_send", g, "no send to operate on")
@@ -806,8 +1056,12 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     # nothing in the tool surface can make that happen.
     b.call("add_volume_automation", {"track_index": audio_ix, "position": 1.0, "value_db": -3.0}, group=g,
            may_fail="the volume envelope must be shown in REAPER first")
+    b.confirm(lambda: _envelope_points(audio_ix, "Volume"), lambda n: n > 0,
+              "points on the Volume envelope, wanted at least one")
     b.call("add_pan_automation", {"track_index": audio_ix, "position": 1.0, "pan": 0.25}, group=g,
            may_fail="the pan envelope must be shown in REAPER first")
+    b.confirm(lambda: _envelope_points(audio_ix, "Pan"), lambda n: n > 0,
+              "points on the Pan envelope, wanted at least one")
 
     # --- render ------------------------------------------------------------
     g = "render"
@@ -850,7 +1104,14 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
                else f"asked for 0.35, REAPER kept {p.get('value')}")
     else:
         b.skip("set_master_fx_parameter", g, "add_master_fx failed, so there is no FX to address")
+    limiter_before = len(_master_fx_names())
     b.call("apply_limiter", {"threshold_db": -0.5}, group=g)
+    # The count alone would pass if it added the wrong plugin, so the names are
+    # read too and one of them has to look like a limiter.
+    b.confirm(_master_fx_names,
+              lambda names: len(names) == limiter_before + 1
+              and any("limit" in n.lower() for n in names),
+              f"the master FX chain, wanted {limiter_before + 1} ending in a limiter")
     b.call("apply_mastering_chain", {"preset": "default"}, group=g,
            expect=lambda p: None if len(p.get("fx_chain", [])) == 3 else f"{len(p.get('fx_chain', []))} of 3 plugins added")
     b.call("normalize_project", {"target_lufs": -14.0}, group=g,
@@ -945,6 +1206,9 @@ def main() -> int:
     parser.add_argument("--json", metavar="PATH", help="also write results as JSON")
     parser.add_argument("--include-destructive", action="store_true",
                         help="also run save/load/create_project and start_recording")
+    parser.add_argument("--scratch", action="store_true",
+                        help="open a fresh project tab and run everything there; "
+                             "implies --include-destructive")
     parser.add_argument("--no-dismiss", action="store_true",
                         help="report REAPER's modal dialogs but leave them on screen")
     parser.add_argument("--list", action="store_true",
@@ -982,14 +1246,42 @@ def main() -> int:
           f"project {probe.get('name') or '(unsaved)'!r}, "
           f"{probe.get('track_count')} tracks, {probe.get('length', 0):.1f}s long")
     print(f"interpreter: {sys.executable}")
-    if not args.include_destructive:
+
+    # --scratch turns the destructive tools on, because the only reason they
+    # were off is that they write to whatever project is open.
+    destructive = args.include_destructive or args.scratch
+
+    if args.scratch:
+        from reapy import reascript_api as RPR  # noqa: PLC0415
+
+        # Refuse rather than prompt. New Project on a project with unsaved
+        # changes opens a three-button save dialog, and a modal stops REAPER
+        # running deferred scripts - which stops the reapy server AND the Lua
+        # bridge, so nothing can answer and nothing can clear it but a human.
+        # Saying no here costs one sentence; provoking it costs the session.
+        if RPR.IsProjectDirty(0):
+            print("\nThe open project has unsaved changes, and --scratch would make REAPER\n"
+                  "ask about them in a modal dialog - which freezes every route into\n"
+                  "REAPER until someone clicks it.\n\n"
+                  "  Save or discard your work in REAPER, then run this again.",
+                  file=sys.stderr)
+            return 1
+
+        tabs_before_scratch = _project_tab_count()
+        RPR.Main_OnCommand(40859, 0)  # Action: New project tab
+        if _project_tab_count() != tabs_before_scratch + 1:
+            print("\nAsked REAPER for a new project tab and did not get one; refusing to\n"
+                  "run destructive tools against the project you have open.", file=sys.stderr)
+            return 1
+        print(f"scratch mode: working in a new tab ({_project_tab_count()} now open)")
+    elif not destructive:
         print("project-replacing tools are skipped; pass --include-destructive to run them")
 
     workdir = Path(tempfile.mkdtemp(prefix="reaper-bench-"))
     aborted = ""
     started = time.perf_counter()
     try:
-        run_plan(b, workdir, args.include_destructive)
+        run_plan(b, workdir, destructive)
     except Wedged as e:
         aborted = str(e)
     finally:
@@ -1004,6 +1296,12 @@ def main() -> int:
         shutil.rmtree(workdir, ignore_errors=True)
 
     code = report(b, registered, elapsed, cleanup_problems, aborted)
+
+    if args.scratch:
+        # Left open on purpose. Closing a tab with unsaved changes asks a
+        # three-button question, and this script does not answer those.
+        print("  scratch mode left its project tab open - close it in REAPER without\n"
+              "  saving when you are done reading the results above.\n")
 
     if args.json:
         Path(args.json).write_text(

@@ -70,6 +70,36 @@ state back.
 | `project.time_signature = (n, d)` | Read-only property → `AttributeError` | `RPR.SetTempoTimeSigMarker` — see below |
 | `project.save(path)` | Its only argument is `force_save_as`, a **bool**. A path lands where an int is expected → `'str' object cannot be interpreted as an integer` | `RPR.Main_SaveProjectEx(0, path, 0)`. It writes the file but leaves the project dirty; follow with `RPR.Main_SaveProject(0, False)` to clear the flag |
 | `project.bpm = x` | Correct **only while no tempo marker sits at position 0**. With one there it changes nothing and inserts a duplicate marker | Rewrite the marker (see below) |
+| `item.fade_in_length` / `item.fade_out_length` | **Silent no-op.** The fade stays 0.0 and the call reports success — and the payload returns position and length, so nothing in the reply could contradict it | `RPR.SetMediaItemInfo_Value(item.id, "D_FADEINLEN" / "D_FADEOUTLEN", seconds)` |
+| `take.start_offset = x` | Read-only property → `AttributeError`, which took the whole `start_trim` branch with it | `RPR.SetMediaItemTakeInfo_Value(take.id, "D_STARTOFFS", value)` |
+| `fx.preset_name = name` | **Silent no-op**, and it accepts a name no plugin has — so "preset loaded" was reported for presets that do not exist | `RPR.TrackFX_SetPreset(track.id, fx, name)`, then read `TrackFX_GetPreset(...)[3]` back and compare |
+| `item.position` / `item.length` / `fx.is_enabled` | **These do work.** Listed so the next sweep does not "fix" them on suspicion of matching the pattern | Leave them alone |
+
+## Null pointers are strings, and strings are true
+
+The trap under [Never loop unbounded](#never-loop-unbounded-against-reaper) is
+not only about loops, and `EnumProjects` is not the only call that springs it.
+**Every** ReaScript function returning a pointer returns it as a *string*, so a
+null one arrives as `'(TrackEnvelope*)0x0000000000000000'` — twenty-eight
+non-empty characters, and therefore true.
+
+```python
+envelope = RPR.GetTrackEnvelopeByName(track.id, "Volume")
+if not envelope:        # NEVER fires, whatever REAPER returned
+```
+
+Both automation tools were written with that guard, so the "show the envelope
+first" error they carried could not be reached. They inserted a point into a
+null envelope — which does nothing, and returns 0 — and reported success. The
+guard has to look at the value:
+
+```python
+def _is_null(pointer) -> bool:
+    return not pointer or "0x0000000000000000" in str(pointer)
+```
+
+Then check the work landed, because a bad pointer is not the only way an insert
+fails: `CountEnvelopePoints` before and after is the claim worth making.
 
 The pattern behind most of these: reapy exposes a property for the *getter* and
 either omits or breaks the *setter*, and Python's permissiveness turns the
@@ -266,6 +296,7 @@ comes back, times everything, and cleans up after itself.
 ```bash
 python scripts/benchmark_tools.py                    # default: skips project-replacing tools
 python scripts/benchmark_tools.py --include-destructive
+python scripts/benchmark_tools.py --scratch          # run it all in a fresh project tab
 python scripts/benchmark_tools.py --json out.json
 ```
 
@@ -273,16 +304,37 @@ Run it after touching any tool module. It works inside the project that is
 already open, on tracks prefixed `__bench__`, and restores tempo, time signature,
 markers, master volume, master FX and the cursor.
 
-When adding a case, **assert on a value read back independently** — not on
-`success`, and not on the setter's own report. Every silent no-op in the table
-above passed a `success`-only check. The rule that catches them:
+`--scratch` opens a new project tab and runs everything there, which is what
+makes `save_project`, `load_project`, `create_project` and `start_recording`
+safe to exercise. It **refuses to start** when the open project has unsaved
+changes rather than letting REAPER raise the save prompt: a modal stops every
+deferred script, so provoking one costs the whole session. Save or discard
+first.
+
+### Asserting on the right thing
+
+`expect=` is handed **the tool's own payload** — the tool's word for what it
+did. `b.confirm(probe, expected, label)` is handed REAPER's, read straight
+through `reascript_api`, and demotes the call just recorded when the two
+disagree:
 
 ```python
-b.call("set_fx_parameter", {...,"value": 0.6}, group=g,
-       expect=lambda p: None if approx(p.get("value"), 0.6, 0.02) else f"kept {p.get('value')}")
-stored = b.raw("get_fx_parameters", {...})["parameters"][0]["normalized_value"]
-# ... and fail if `stored` disagrees
+b.call("set_track_color", {"track_index": ix, "r": 200, "g": 60, "b": 60}, group=g)
+b.confirm(lambda: (int(RPR.GetMediaTrackInfo_Value(_track_id(ix), "I_CUSTOMCOLOR")),
+                   RPR.ColorToNative(200, 60, 60) | 0x1000000),
+          lambda pair: pair[0] == pair[1], "I_CUSTOMCOLOR (stored, wanted)")
 ```
+
+Both reads go inside the probe, because a REAPER call made outside it is one
+more thing that can hang. `confirm` stays silent when the recorded call already
+failed — a tool that failed changed nothing, and a second row would say the same
+thing twice.
+
+Twenty-one tools once had no `expect=` at all and passed on "did not throw".
+Adding `confirm` to them found four defects in one run, three of which reported
+`success: true`. So: **a new case without an independent read-back is not a
+test.** And a probe that has never been seen to fail is not one either — invert
+it once and watch it go red before trusting it.
 
 `--include-destructive` leaves an extra project tab behind, because REAPER's New
 Project opens a tab rather than replacing the current one. The bench reports it

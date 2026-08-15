@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -110,6 +111,67 @@ def reaper_resource_path(explicit: str = "") -> Path | None:
         if (candidate / "reaper.ini").is_file():
             return candidate
     return None
+
+
+# REAPER writes the directory holding the Python shared library it loads. 64-bit
+# first because that is every current build; the unsuffixed key is the 32-bit one.
+_PY_LIB_KEYS = ("pythonlibpath64", "pythonlibpath")
+
+
+def reaper_embedded_python(explicit: str = "") -> tuple:
+    """The interpreter REAPER actually runs ReaScripts in, and where that came from.
+
+    Three sources, most authoritative first. The distinction matters because
+    this used to read `sys.base_prefix` - the virtualenv's PARENT - and call the
+    result "REAPER's interpreter". Those are the same interpreter only by
+    coincidence, and on a machine where the venv was built from 3.14 while
+    REAPER embeds 3.12 they are not: the check passed against a Python REAPER
+    never loads, which is precisely the false assurance it exists to prevent.
+
+      1. reaper.ini's pythonlibpath64. What REAPER loads, from REAPER's own
+         configuration - the only source that is a fact rather than an intent.
+         The directory holds python3XX.dll, and every CPython layout for Windows
+         puts python.exe beside it.
+      2. bootstrap.py --print-reaper-python. What the installer CHOSE, which is
+         what reaper.ini will say once the configure step has run. Right answer
+         on a machine configured but not yet restarted, or one where REAPER has
+         not been pointed anywhere yet.
+      3. sys.base_prefix, the old behaviour, when neither is available.
+
+    Never raises, and never returns a path that does not exist: every branch is
+    guarded on is_file() before it is offered.
+    """
+    res = reaper_resource_path(explicit)
+    if res:
+        try:
+            text = (res / "reaper.ini").read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            text = ""
+        for key in _PY_LIB_KEYS:
+            m = re.search(rf"(?mi)^{key}=(.+?)\s*$", text)
+            # An empty value is REAPER's "auto-detect", which names nothing.
+            # Without this guard Path("") becomes ".", and the candidate turns
+            # into a relative ./python.exe resolved against the current
+            # directory - a different interpreter that could exist by accident.
+            if not m or not m.group(1).strip():
+                continue
+            lib = Path(m.group(1).strip())
+            exe = lib / ("python.exe" if os.name == "nt" else "bin/python3")
+            if exe.is_file():
+                return exe, "reaper.ini"
+
+    boot = ROOT / "scripts" / "bootstrap.py"
+    if boot.is_file():
+        p = run([sys.executable, str(boot), "--print-reaper-python"])
+        if p and p.returncode == 0:
+            candidate = Path((p.stdout or "").strip())
+            if str(candidate).strip() and candidate.is_file():
+                return candidate, "bootstrap.py (REAPER not configured yet)"
+
+    base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
+    if not base.is_file():
+        base = Path(sys.executable)
+    return base, "this check's own interpreter - no better source available"
 
 
 def desktop_config_paths() -> list:
@@ -233,7 +295,7 @@ def check_mcp_command(r: Report) -> None:
             )
 
 
-def check_python(r: Report) -> None:
+def check_python(r: Report, explicit: str = "") -> None:
     r.section("Python")
     r.ok(f"running this check under {sys.version.split()[0]} ({sys.executable})")
 
@@ -265,9 +327,7 @@ def check_python(r: Report) -> None:
     #
     # Checked separately because the failure is invisible from the server side:
     # the virtualenv can be flawless while REAPER has nothing to answer with.
-    base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
-    if not base.is_file():
-        base = Path(sys.executable)
+    base, source = reaper_embedded_python(explicit)
     p = run([str(base), "-c", "import reapy"])
     if p and p.returncode == 0:
         r.ok(f"REAPER's interpreter can import reapy ({base})")
@@ -278,6 +338,11 @@ def check_python(r: Report) -> None:
             "(or re-run scripts/bootstrap.py, which does it)",
         )
         r.info("Without it, activate_reapy_server fails and the distant API never starts.")
+    if source != "reaper.ini":
+        # Said only when the answer is inferred rather than read from REAPER's
+        # own configuration, so a normal run stays as short as it was and an
+        # uncertain one cannot be mistaken for a certain one.
+        r.info(f"identified from {source}")
 
     # Imported lazily by the analysis tools, so the server starts without them
     # and the shortfall shows up only when one of those tools is called - which
@@ -485,14 +550,23 @@ def check_claude(r: Report) -> None:
         from_dir = "reaper-for-claude@skills-dir" in listing
 
         if from_market and from_dir:
-            # They do not both load. Claude Code prefers the marketplace and
-            # skips the link silently. Uninstalling is not enough either: the
-            # marketplace ENTRY reserves the name whether or not anything is
-            # installed from it.
-            r.fail(
-                "the developer link is being ignored - the marketplace reserves the name",
-                "claude plugin uninstall reaper-for-claude@reaper-skills-for-claude"
-                "  then  claude plugin marketplace remove reaper-skills-for-claude",
+            # A warning, not a failure. They do not both load - Claude prefers
+            # the marketplace and skips the link silently - but the marketplace
+            # copy IS loading, so the plugin works and nothing here is broken.
+            #
+            # It was a [FAIL] with one remedy, "remove the marketplace", which
+            # made a deliberate choice look like a fault and pushed everyone
+            # towards the developer route. Someone who added the plugin through
+            # Claude's Settings > Plugins wants the marketplace copy; the stale
+            # half is their old link. Both directions are offered, and neither
+            # is called wrong.
+            r.warn(
+                "two routes are installed - the marketplace copy is loading, the "
+                "developer link is inert",
+                "Keep the marketplace copy:  rmdir "
+                f'"{Path.home() / ".claude" / "skills" / "reaper-for-claude"}"'
+                "   |   Load this folder live instead:  "
+                "install\\configure-plugin.ps1 -Only claude -Link",
             )
         elif from_market:
             r.ok("Claude Code: installed from the marketplace")
@@ -563,7 +637,9 @@ def main() -> int:
     r = Report()
     check_layout(r)
     check_mcp_command(r)
-    check_python(r)
+    # Same --resource-path as check_reaper: a portable install keeps reaper.ini
+    # somewhere only the caller knows, and that file names REAPER's interpreter.
+    check_python(r, args.resource_path)
     check_reaper(r, args.resource_path)
     if not args.skip_live:
         check_live_link(r)

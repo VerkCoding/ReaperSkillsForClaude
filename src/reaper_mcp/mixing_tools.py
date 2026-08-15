@@ -14,6 +14,42 @@ def _db_to_linear(db: float) -> float:
     return 10 ** (db / 20.0)
 
 
+def _is_null(pointer) -> bool:
+    """Did REAPER hand back a null pointer?
+
+    It cannot be asked with `if not pointer`. The ReaScript bridge returns
+    pointers as STRINGS, so a null one arrives as
+    '(TrackEnvelope*)0x0000000000000000' - which is a non-empty string, and
+    therefore true. `if not envelope` was never once going to fire.
+
+    This is the same trap python-reaper-tools.md documents for EnumProjects,
+    which "returns a pointer string past the end of the list ... which is
+    truthy". Same mechanism, different call, and it silently cost both
+    automation tools their only guard: they went on to insert a point into a
+    null envelope, which does nothing, and reported success.
+    """
+    return not pointer or "0x0000000000000000" in str(pointer)
+
+
+def _envelope_or_error(track, name: str, shown_as: str):
+    """A named track envelope, or the dict explaining how to make it exist.
+
+    REAPER creates a track envelope when it is first shown in the UI, and there
+    is no ReaScript call to show one, so this genuinely cannot be done for the
+    user - only explained.
+    """
+    envelope = RPR.GetTrackEnvelopeByName(track.id, name)
+    if _is_null(envelope):
+        return None, {
+            "success": False,
+            "error": (
+                f"{name} envelope not found. Show it first: right-click the track "
+                f"in REAPER and choose '{shown_as}'."
+            ),
+        }
+    return envelope, None
+
+
 def register_tools(mcp):
 
     @mcp.tool()
@@ -26,19 +62,28 @@ def register_tools(mcp):
         try:
             project = get_project()
             track = project.tracks[track_index]
-            envelope = RPR.GetTrackEnvelopeByName(track.id, "Volume")
-            if not envelope:
+            envelope, problem = _envelope_or_error(
+                track, "Volume", "Show envelope for track volume"
+            )
+            if problem:
+                return problem
+
+            before = RPR.CountEnvelopePoints(envelope)
+            RPR.InsertEnvelopePoint(envelope, position, _db_to_linear(value_db), 0, 0, False, True)
+            RPR.Envelope_SortPoints(envelope)
+            after = RPR.CountEnvelopePoints(envelope)
+            if after <= before:
                 return {
                     "success": False,
-                    "error": (
-                        "Volume envelope not found. Show it first: right-click the track "
-                        "in REAPER and choose 'Show envelope for track volume'."
-                    ),
+                    "error": f"REAPER kept {after} envelope point(s); the point was not added.",
                 }
-            linear_val = _db_to_linear(value_db)
-            RPR.InsertEnvelopePoint(envelope, position, linear_val, 0, 0, False, True)
-            RPR.Envelope_SortPoints(envelope)
-            return {"success": True, "track_index": track_index, "position": position, "value_db": value_db}
+            return {
+                "success": True,
+                "track_index": track_index,
+                "position": position,
+                "value_db": value_db,
+                "envelope_points": after,
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -52,18 +97,28 @@ def register_tools(mcp):
         try:
             project = get_project()
             track = project.tracks[track_index]
-            envelope = RPR.GetTrackEnvelopeByName(track.id, "Pan")
-            if not envelope:
-                return {
-                    "success": False,
-                    "error": (
-                        "Pan envelope not found. Show it first: right-click the track "
-                        "in REAPER and choose 'Show envelope for track pan'."
-                    ),
-                }
+            envelope, problem = _envelope_or_error(
+                track, "Pan", "Show envelope for track pan"
+            )
+            if problem:
+                return problem
+
+            before = RPR.CountEnvelopePoints(envelope)
             RPR.InsertEnvelopePoint(envelope, position, pan, 0, 0, False, True)
             RPR.Envelope_SortPoints(envelope)
-            return {"success": True, "track_index": track_index, "position": position, "pan": pan}
+            after = RPR.CountEnvelopePoints(envelope)
+            if after <= before:
+                return {
+                    "success": False,
+                    "error": f"REAPER kept {after} envelope point(s); the point was not added.",
+                }
+            return {
+                "success": True,
+                "track_index": track_index,
+                "position": position,
+                "pan": pan,
+                "envelope_points": after,
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 

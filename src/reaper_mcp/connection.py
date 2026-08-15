@@ -336,6 +336,29 @@ def get_project():
         _consecutive_failures += 1
     _reset()
 
+    # Ask which failure this is before explaining it.
+    #
+    # _DIALOG_HINT used to be appended to every failure, so a REAPER that was
+    # simply CLOSED produced three paragraphs about a 'ReaScript task control'
+    # dialog and the difference between 'New instance' and 'Terminate
+    # instances' - telling the user to check a window in an application that is
+    # not running. The underlying error does not help either: with REAPER shut,
+    # reapy's reascript_api has no functions at all, so the first one touched
+    # raises "module 'reapy.reascript_api' has no attribute 'EnumProjects'",
+    # which reads like a broken install rather than a closed DAW.
+    #
+    # _server_state already knows the difference and says so in its own
+    # docstring - "a web interface that does not answer means REAPER is not
+    # running". It just was not being asked.
+    if _server_state() == "down":
+        raise RuntimeError(
+            "REAPER is not running, or its web interface is switched off.\n\n"
+            "Start REAPER and try again. If it IS open, re-run the setup - the "
+            "distant API needs the web interface on port "
+            f"{WEB_INTERFACE_PORT}, which [1] Install Everything configures.\n\n"
+            f"(underlying error: {last_error})"
+        ) from last_error
+
     raise RuntimeError(
         f"REAPER is not answering: {last_error}\n\n{_DIALOG_HINT}"
     ) from last_error

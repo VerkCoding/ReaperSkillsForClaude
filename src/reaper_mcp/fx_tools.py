@@ -169,13 +169,31 @@ def register_tools(mcp):
             project = get_project()
             track = project.tracks[track_index]
             fx = track.fxs[fx_index]
-            fx.preset_name = preset_name
+
+            # TrackFX_SetPreset, not `fx.preset_name = ...`. The assignment
+            # succeeds on any name at all - including one no plugin has - and
+            # reaches REAPER for none of them, so this reported loading presets
+            # that do not exist. Reading the name back is what makes the answer
+            # worth anything: REAPER returns the preset it actually has.
+            RPR.TrackFX_SetPreset(track.id, fx_index, preset_name)
+            loaded = RPR.TrackFX_GetPreset(track.id, fx_index, "", 256)[3]
+
+            if str(loaded).strip().lower() != preset_name.strip().lower():
+                return {
+                    "success": False,
+                    "error": (
+                        f"{fx.name} has no preset named {preset_name!r} - REAPER is still "
+                        f"on {loaded!r}. Preset names are the ones in the plugin's own "
+                        "preset menu, and a stock plugin often ships none."
+                    ),
+                    "preset": loaded,
+                }
             return {
                 "success": True,
                 "track_index": track_index,
                 "fx_index": fx_index,
                 "fx_name": fx.name,
-                "preset": fx.preset_name,
+                "preset": loaded,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}

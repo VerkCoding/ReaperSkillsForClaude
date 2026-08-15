@@ -114,6 +114,56 @@ $MarketplaceName = 'reaper-skills-for-claude'
 $PluginName      = 'reaper-for-claude'
 $PluginRef       = "$PluginName@$MarketplaceName"
 
+function Test-MarketplaceInstalled {
+    <#
+      Is the plugin currently installed from the marketplace? Reads, never writes.
+
+      Needed because "a link exists" and "a link is what loads" are different
+      facts. Claude resolves the shared plugin name in favour of the
+      marketplace, so when both are present the link is inert - and saying so
+      requires asking which are present rather than assuming.
+    #>
+    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { return $false }
+    $listing = Invoke-Native { & claude plugin list 2>&1 | Out-String }
+    return [bool]($listing -match [regex]::Escape($PluginRef))
+}
+
+function Clear-MarketplaceRoute {
+    <#
+      Take the marketplace route out, so the developer link is the only one left.
+
+      The two routes share a plugin name, and Claude Code resolves that in
+      favour of the marketplace - silently. Left in place, the link loads
+      nothing and the next edit in this repository simply appears to do nothing.
+
+      Uninstalling is not sufficient on its own: the marketplace ENTRY reserves
+      the name whether or not anything is installed from it. Both have to go.
+
+      Used by BOTH branches below, which is the point. It used to live only in
+      the -Link branch, so a plain [1] on a machine that had a link would notice
+      the link, say so, and register the marketplace on top of it anyway -
+      creating the conflict, reporting "Installed", and leaving the health check
+      to fail on a clash this script had just made.
+    #>
+    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { return }
+
+    # Every call goes through Invoke-Native, not just the first. They all merge
+    # stderr, and under EAP 'Stop' a single warning line from the CLI is a
+    # terminating error - which would abort partway, leaving the marketplace
+    # entry still shadowing the junction this exists to clear.
+    $listing = Invoke-Native { & claude plugin list 2>&1 | Out-String }
+    if ($listing -match [regex]::Escape($PluginRef)) {
+        Write-Info "Removing the marketplace install, which would shadow the link."
+        Invoke-Native { & claude plugin uninstall $PluginRef 2>&1 | ForEach-Object { Write-Info $_ } }
+    }
+
+    $markets = Invoke-Native { & claude plugin marketplace list 2>&1 | Out-String }
+    if ($markets -match [regex]::Escape($MarketplaceName)) {
+        Write-Info "Removing the marketplace registration, which reserves the name."
+        Invoke-Native { & claude plugin marketplace remove $MarketplaceName 2>&1 | ForEach-Object { Write-Info $_ } }
+    }
+}
+
 [void](Start-RunLog 'configure-plugin')
 Write-Banner "REAPER for Claude - configure the plugin"
 Write-Info "plugin  $PluginRoot"
@@ -392,43 +442,64 @@ if ($doClaude) {
             }
         }
 
-        # The two routes share a plugin name, and Claude Code resolves that in
-        # favour of the marketplace - silently. Left in place, the link loads
-        # nothing and the next edit here simply appears to do nothing.
-        #
-        # Uninstalling is not sufficient: the marketplace ENTRY reserves the
-        # name whether or not anything is installed from it. Both have to go,
-        # which is why this clears them rather than printing advice.
-        $claude = Get-Command claude -ErrorAction SilentlyContinue
-        if ($claude) {
-            # Every one of these goes through Invoke-Native, not just the first.
-            # They all merge stderr, and under EAP 'Stop' a single warning line
-            # from the CLI is a terminating error - which would abort exactly
-            # here, leaving the marketplace entry still shadowing the junction
-            # this block exists to clear.
-            $listing = Invoke-Native { & claude plugin list 2>&1 | Out-String }
-            if ($listing -match [regex]::Escape($PluginRef)) {
-                Write-Info "Removing the marketplace install, which would shadow the link."
-                Invoke-Native { & claude plugin uninstall $PluginRef 2>&1 | ForEach-Object { Write-Info $_ } }
-            }
-            $markets = Invoke-Native { & claude plugin marketplace list 2>&1 | Out-String }
-            if ($markets -match [regex]::Escape($MarketplaceName)) {
-                Write-Info "Removing the marketplace registration, which reserves the name."
-                Invoke-Native { & claude plugin marketplace remove $MarketplaceName 2>&1 | ForEach-Object { Write-Info $_ } }
-            }
+        # Clears them rather than printing advice - see Clear-MarketplaceRoute.
+        Clear-MarketplaceRoute
+
+        if (Get-Command claude -ErrorAction SilentlyContinue) {
             $after = Invoke-Native { & claude plugin list 2>&1 | Out-String }
-            if ($after -match 'reaper-for-claude@skills-dir') { Write-Ok "Loaded in place; edits are live." }
+            if ($after -match "$PluginName@skills-dir") { Write-Ok "Loaded in place; edits are live." }
             else { Write-Warn2 "Not loaded yet - restart Claude Code or run /reload-plugins." }
         }
     } else {
         $claude = Get-Command claude -ErrorAction SilentlyContinue
 
         if (Test-Path $LinkPath) {
+            # A link and a marketplace install cannot both work, so this route
+            # stops here rather than registering over the top of one.
+            #
+            # It used to say "everything loads twice" and ask for the link to be
+            # deleted, then install the marketplace regardless. Both halves were
+            # wrong. They do not load twice - Claude Code prefers the
+            # marketplace and the link loads NOTHING - and installing anyway
+            # broke a live-edit setup somebody had deliberately made, reported
+            # "Installed", then left the health check failing on a clash this
+            # script had created one step earlier. The run ended up printing two
+            # opposite remedies: rmdir the link here, remove the marketplace
+            # there.
+            #
+            # The link wins because it is the more specific state and the one
+            # that took a deliberate act to create. Switching the other way is
+            # one command, and it is offered rather than performed.
             Write-Warn2 "A developer link exists at $LinkPath"
-            Add-Problem "Remove it, or everything loads twice: rmdir `"$LinkPath`""
-        }
 
-        if (-not $claude) {
+            if (Test-MarketplaceInstalled) {
+                # Both routes are here, and this run made neither of them. It
+                # reports and stops.
+                #
+                # It used to remove the marketplace, on the reasoning that a
+                # link "took a deliberate act to create". So does adding a
+                # marketplace through Claude's own Settings > Plugins, and that
+                # act is usually the more recent one - so a plain re-run of [1]
+                # silently deleted a plugin entry the user had just added by
+                # hand, and it vanished from their plugin list with nothing
+                # said. Choosing between two things the user set up deliberately
+                # is not this script's decision to make quietly.
+                Write-Info  "The marketplace copy is installed too, and Claude prefers it, so"
+                Write-Info  "that is the one loading - this link is inert while it is there."
+                Write-Info  "Both are left exactly as they are. To pick one:"
+                Write-Info  "  keep the marketplace copy (the one Settings > Plugins lists):"
+                Write-Info  "    rmdir `"$LinkPath`""
+                Write-Info  "  or load this folder live instead, for editing:"
+                Write-Info  "    install\configure-plugin.ps1 -Only claude -Link"
+                Add-Problem "Two plugin routes are installed and the marketplace one is loading. Pick one with the commands above - nothing was changed."
+            } else {
+                Write-Info  "Keeping it - it loads this repository in place, so edits here are live."
+                Write-Info  "Not registering the marketplace: the two share a plugin name, and"
+                Write-Info  "Claude Code would silently prefer the marketplace, leaving the link dead."
+                Write-Info  "To use the marketplace copy instead, delete the link and re-run [1]:"
+                Write-Info  "  rmdir `"$LinkPath`""
+            }
+        } elseif (-not $claude) {
             Write-Warn2 "The claude CLI is not on PATH; registering by hand instead."
             Write-Info  "In Claude Code, run:"
             Write-Info  "  /plugin marketplace add `"$PluginRoot`""
