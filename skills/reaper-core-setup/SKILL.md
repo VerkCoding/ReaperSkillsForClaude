@@ -11,7 +11,7 @@ description: >-
   the differences between Claude Code, Claude Desktop and claude.ai.
 ---
 
-# REAPER for Claude — core setup
+# REAPER for Claude: core setup
 
 This plugin ships three skills. This one is the ground floor: it gets the
 connection working, and it says which of the other two a request belongs to.
@@ -21,8 +21,8 @@ connection working, and it says which of the other two a request belongs to.
 | Skill | Owns | Reach for it when |
 | --- | --- | --- |
 | **reaper-core-setup** (this one) | Installation, the health check, repair, and which surface you are on | Nothing works yet, or you cannot tell which layer is at fault |
-| **reaper-mcp** | The channel — MCP tools, the Lua bridge, what silently lies, what hangs | You need to *reach* REAPER, or a call failed, hung, or returned something suspicious |
-| **reaper-audio-engineer** | The craft — what to measure, what it means, which move follows | You have a working route and the question is *what to do* |
+| **reaper-mcp** | The channel: MCP tools, the Lua bridge, what silently lies, what hangs | You need to *reach* REAPER, or a call failed, hung, or returned something suspicious |
+| **reaper-audio-engineer** | The craft: what to measure, what it means, which move follows | You have a working route and the question is *what to do* |
 
 The split that matters: **reaper-mcp answers "did the command land?", and
 reaper-audio-engineer answers "was it the right command?"** A silent render is
@@ -35,8 +35,8 @@ Crossing between them is normal and safe in this order:
 3. **reaper-audio-engineer**, to decide and to interpret.
 4. Back to **reaper-mcp** to apply the change and read it back.
 
-If a measurement looks impossible — a bus reading silence, every source
-reporting the same level, a parameter that will not move — stop treating it as
+If a measurement looks impossible (a bus reading silence, every source
+reporting the same level, a parameter that will not move), stop treating it as
 an engineering result and go back to step 2. Those are transport failures
 wearing an engineering costume, and reaper-mcp lists the specific ones.
 
@@ -65,7 +65,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/insta
 ```
 
 Every line is `[ok]`, `[warn]` or `[FAIL]`, and each failure carries a `->` fix.
-Read its output before guessing — it checks all four requirements plus where the
+Read its output before guessing. It checks all four requirements plus where the
 plugin is installed.
 
 ## 1. The Python environment
@@ -93,7 +93,7 @@ an unrelated project gets broken, and the launcher would not necessarily pick
 that interpreter anyway.
 
 If the install fails because no wheel exists for their Python version, bootstrap
-with a different interpreter — the launcher will find the venv regardless of
+with a different interpreter. The launcher will find the venv regardless of
 which Python built it:
 
 ```bash
@@ -110,7 +110,7 @@ somewhere the server never looks.
 loads a Python shared library and runs ReaScripts inside its own process, so it
 uses the *base* installation and cannot see a virtualenv. `reapy` therefore has
 to be importable by the base Python as well, or `activate_reapy_server` fails
-and the distant API never starts — which presents as "everything installed,
+and the distant API never starts, which presents as "everything installed,
 nothing connects". `bootstrap.py` handles this, installing only `python-reapy`
 there. If it ever needs doing by hand:
 
@@ -125,12 +125,12 @@ Two interpreters, two different requirements:
 
 | Job | Requirement |
 | --- | --- |
-| Running the MCP server | any Python where the imports work — 3.14 is fine |
+| Running the MCP server | any Python where the imports work; 3.14 is fine |
 | Configuring REAPER (`enable_reapy.py`) | **3.12 or older** |
 
 reapy 0.10.0 crashes partway through rewriting `reaper.ini` on Python 3.13+,
 because `configparser` gained unnamed sections and reapy calls `.lower()` on the
-sentinel. The crash leaves `reaper.ini` **empty** — every REAPER preference
+sentinel. The crash leaves `reaper.ini` **empty**. Every REAPER preference
 gone, with nothing in the error naming the file.
 
 `enable_reapy.py` refuses to run there, backs the file up first and restores it
@@ -155,7 +155,7 @@ sign of the problem.
 To force a specific interpreter permanently, set `REAPER_MCP_PYTHON` to its full
 path in the environment Claude starts in.
 
-## 2–3. REAPER and the distant API
+## 2-3. REAPER and the distant API
 
 Connecting from outside REAPER needs four things, all handled by
 `reapy.config.configure_reaper()` and all idempotent:
@@ -190,7 +190,7 @@ then restart REAPER.
 
 `claude_bridge.lua` goes in `<REAPER resource path>/Scripts/`, and
 `__startup.lua` gets a one-line `dofile()` so REAPER loads it at launch. The
-installer appends that line and backs up an existing `__startup.lua` — it never
+installer appends that line and backs up an existing `__startup.lua`, and it never
 overwrites one, because plenty of people already have a startup script and
 losing it silently would be unrecoverable.
 
@@ -208,7 +208,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/insta
 ```
 
 It bootstraps Python, installs the REAPER-side files, configures the distant
-API, and runs the health check. It is idempotent — re-running after a failure is
+API, and runs the health check. It is idempotent, so re-running after a failure is
 safe. Close REAPER before running it.
 
 On macOS and Linux the REAPER-side steps are manual: copy
@@ -226,13 +226,13 @@ The answer changes what is even possible, so establish it before diagnosing.
 | **claude.ai (web)** | No | No | No local machine to reach. The skills load and are useful as reference; the tools cannot exist. |
 
 If a user on the web app is asking why REAPER tools are missing, that is the
-answer — nothing is broken, and pointing them at the health check wastes their
+answer. Nothing is broken, and pointing them at the health check wastes their
 time. Tell them to use Claude Desktop or Claude Code on the machine REAPER runs
 on.
 
 ## After any change
 
 1. **Restart REAPER** if `reaper.ini` was touched.
-2. **Restart Claude**, or run `/reload-plugins` in Claude Code — changes to
+2. **Restart Claude**, or run `/reload-plugins` in Claude Code, since changes to
    `SKILL.md` apply immediately, but MCP server config does not.
 3. Verify with: *"Check the current REAPER project info."*

@@ -1,4 +1,4 @@
-# REAPER for Claude — documentation
+# REAPER for Claude: documentation
 
 Everything past the [quick start](README.md#install): the full install, what the
 setup does to your machine, how the pieces fit, and the reference tables.
@@ -47,17 +47,17 @@ Claude's local history. Nothing here is worth that.
 | Thing | Where |
 | --- | --- |
 | Dependency virtualenv | `%USERPROFILE%\.reaper-for-claude\venv` |
-| `python-reapy` only | your base Python's user site-packages — [why](#two-interpreters) |
+| `python-reapy` only | your base Python's user site-packages ([why](#two-interpreters)) |
 | `claude_bridge.lua`, `enable_reapy.py` | `<REAPER>\Scripts\` |
-| `__startup.lua` | `<REAPER>\Scripts\` — one `dofile()` **appended, never overwritten** |
+| `__startup.lua` | `<REAPER>\Scripts\`, one `dofile()` **appended, never overwritten** |
 | Distant API settings | `reaper.ini`, `reaper-kb.ini`, `reaper-extstate.ini` |
-| MCP server entry | `claude_desktop_config.json` — backed up before each write |
+| MCP server entry | `claude_desktop_config.json`, backed up before each write |
 | Snapshots and logs | `%USERPROFILE%\.reaper-for-claude\` |
 
 ### What it asks of you
 
 **Save your work first.** `[1]` closes REAPER and Claude, because both hold
-their settings in memory and write them back on exit — anything written
+their settings in memory and write them back on exit. Anything written
 underneath a running instance is silently discarded.
 
 It asks the way the X button does, so REAPER's *"save changes?"* prompt still
@@ -65,7 +65,7 @@ appears. **Your own session is never force-quit.** The one exception is the
 first-run step, where the installer opened the application itself seconds
 earlier and there is nothing to lose.
 
-**Signing in to Claude is required**, not optional — a freshly installed Claude
+**Signing in to Claude is required**, not optional. A freshly installed Claude
 has no account, and without one it cannot load the plugin. Leaving without one
 takes typing `SKIP`.
 
@@ -74,7 +74,7 @@ takes typing `SKIP`.
 | Press Enter without closing REAPER | The REAPER step is **skipped, not attempted**. Reported at the end; close it and re-run `[1]`. |
 | Press Enter without closing Claude | Continues, and warns Claude may revert the MCP entry. Re-run `[1]` if the tools are missing. |
 | Close Claude without signing in | It reopens and keeps waiting. |
-| Never sign in | Bounded — after six tries it continues and says loudly what is missing. |
+| Never sign in | Bounded: after six tries it continues and says loudly what is missing. |
 | Run this from a terminal inside Claude | Detected; it refuses to close its own host and says so. |
 
 Everything unfinished is listed at the end, and re-running `[1]` is safe.
@@ -92,12 +92,12 @@ Handled by `[1]`; this is what it is arranging.
 
 `[1]` snapshots every file it can touch before its first write, into
 `%USERPROFILE%\.reaper-for-claude\backups\original\`. Files that existed are
-copied; files that did **not** are noted as absent — so reverting deletes
+copied; files that did **not** are noted as absent, so reverting deletes
 exactly what the setup created and nothing else.
 
 The snapshot is written **once and never overwritten**. Eight different failure
 messages tell people to re-run `[1]`, and a second snapshot would photograph a
-machine the first run had already changed — so "revert" would restore the
+machine the first run had already changed, so "revert" would restore the
 half-finished state instead of the original.
 
 `[2]` restores those files, removes the virtualenv, and unregisters the plugin.
@@ -106,7 +106,7 @@ It **does not uninstall REAPER, Claude, Python or Git**; it reports which ones
 conversations are never touched.
 
 **One narrow exception.** If `[1]` installed Claude and Claude was never signed
-into, `[2]` moves its profile aside — restoring config files cannot fix a Claude
+into, `[2]` moves its profile aside. Restoring config files cannot fix a Claude
 that will not start, and the state that strands people is a profile interrupted
 while being created. Both conditions come from the snapshot and both are
 required, so the directory provably holds nothing you made. It is **renamed, not
@@ -129,47 +129,47 @@ surfaces, and whether an older install is still loading in parallel.
 
 | Symptom | Cause |
 | --- | --- |
-| No REAPER tools at all | On claude.ai, expected. Otherwise the server did not start — run the health check. |
+| No REAPER tools at all | On claude.ai, expected. Otherwise the server did not start; run the health check. |
 | Tools fail with a socket error | REAPER is not running, or the distant API was never configured. A *persistent* failure means configuration. |
 | Bridge times out | REAPER is not running `claude_bridge.lua`. Check `status.txt` in the bridge directory. |
 | `PARSE_ERROR` on byte one | Lua reached the bridge with a UTF-8 BOM. Use `--code`, or `--lua-file` so it is stripped. |
-| Renders are silent | The `offlineinact` preference — see [rendering.md](skills/reaper-mcp/references/rendering.md). |
+| Renders are silent | The `offlineinact` preference. See [rendering.md](skills/reaper-mcp/references/rendering.md). |
 | Everything appears twice | An older install is still loading from `~\.claude\skills\`. Delete `reaper-mcp` and `reaper-ai-engineer-skill`. |
 | Edits here do nothing | You installed from the marketplace, which is a copy. See [Editing](#editing-the-plugin). |
 
-**"ReaScript task control" dialog on first run** — choose **New instance**, never
+**"ReaScript task control" dialog on first run**: choose **New instance**, never
 **Terminate instances**. The dialog is modal, so while it is open REAPER runs no
 background scripts at all; terminating stops the reapy server *and* the Lua
 bridge. The server was only asked to start twice. The setup now waits for REAPER
 to publish its port instead of asking again, so it should not appear.
 
-**`No module named 'mcp.server.fastmcp'`** — `mcp` 2.0+ got installed and removed
+**`No module named 'mcp.server.fastmcp'`**. `mcp` 2.0+ got installed and removed
 the FastMCP API. `requirements.txt` pins `mcp<2.0.0`; an older environment needs
 `python scripts\bootstrap.py --recreate`.
 
-**`import reapy` fails** — rebuild, optionally on a different Python:
+**`import reapy` fails**. Rebuild, optionally on a different Python:
 `py -3.12 scripts\bootstrap.py --recreate`.
 
-**Socket error / `WinError 10053`** — run `python reaper\enable_reapy.py --check`.
+**Socket error / `WinError 10053`**. Run `python reaper\enable_reapy.py --check`.
 A web interface on **2306** is the problem: `--repair`, then restart REAPER.
 
-**Claude Desktop reverted to an old MCP entry** — Desktop holds
+**Claude Desktop reverted to an old MCP entry**. Desktop holds
 `claude_desktop_config.json` in memory and rewrites it from its own state, the
 way REAPER does with `reaper.ini`. Quit it fully including the tray icon, run
 `configure-plugin.ps1 -Only claude`, then start it again.
 
-**The marketplace stopped resolving** — a local marketplace stores an absolute
+**The marketplace stopped resolving**. A local marketplace stores an absolute
 path, so moving this folder breaks it. Re-add:
 `claude plugin marketplace add <new path>`.
 
-**The dependency install is very slow** — expected, and it is the size: **477 MB
+**The dependency install is very slow**. Expected, and it is the size: **477 MB
 across 12,212 files**, of which `librosa`'s chain is 345 MB. A Sandbox makes it
-worse three ways — no pip cache to reuse, Defender scanning every extracted
+worse three ways: no pip cache to reuse, Defender scanning every extracted
 file, and a virtual disk at its worst with many small files. It runs once; the
 virtualenv lives outside the plugin and survives updates.
 
-If it is **stuck** rather than slow, look for `Building wheel for llvmlite` —
-that means pip is compiling LLVM, which takes about an hour and usually fails.
+If it is **stuck** rather than slow, look for `Building wheel for llvmlite`.
+That means pip is compiling LLVM, which takes about an hour and usually fails.
 Bootstrap passes `--only-binary=:all:` to prevent it. The fix is an older
 interpreter: `py -3.12 scripts\bootstrap.py --recreate`.
 
@@ -221,7 +221,7 @@ So two interpreters must import `reapy`, and only one is ours:
 
 Miss the second and the setup looks complete while nothing connects. So
 `bootstrap.py` also installs `python-reapy` into the base Python's user
-site-packages — a deliberate, narrow exception. It needs only `psutil` and
+site-packages, a deliberate and narrow exception. It needs only `psutil` and
 `typing-extensions`; the compiled numeric stack that makes a global install
 worth avoiding stays in the virtualenv.
 
@@ -230,16 +230,16 @@ here wants the *default* interpreter: the server uses the virtualenv by absolute
 path, REAPER uses `pythonlibpath64` from `reaper.ini`, and the configure step
 uses `py -3.12`, which ignores `PATH` order. `launch_server.py` is deliberately
 written in the Python 2/3 intersection so even a 2.7 `python` can parse it and
-hand over — one f-string there would fail before reaching the check that
+hand over. One f-string there would fail before reaching the check that
 explains why.
 
 ### Starting the server
 
-`plugin.json` runs `scripts/launch_server.py` with whatever `python` is on PATH —
+`plugin.json` runs `scripts/launch_server.py` with whatever `python` is on PATH,
 frequently the wrong one. A stdio server that dies during startup surfaces only
 as *"server failed to connect"*, so the launcher:
 
-1. **Probes for an interpreter that can import the dependencies** — in order:
+1. **Probes for an interpreter that can import the dependencies**, in order:
    `REAPER_MCP_PYTHON`, the managed virtualenv, the current interpreter, then
    `py -3.12` and friends. It tests the imports rather than comparing versions.
 2. **Re-launches itself** under that interpreter.
@@ -249,21 +249,21 @@ as *"server failed to connect"*, so the launcher:
 A probe that **times out** is treated differently from one that fails. A missing
 module answers in milliseconds; a cold first import of numpy, mcp and reapy can
 exceed the timeout on a fresh machine. The managed virtualenv is kept when its
-probe merely times out — `bootstrap.py` built and verified it, so slow is the
+probe merely times out. `bootstrap.py` built and verified it, so slow is the
 only thing that can mean.
 
 Dependencies are never installed at startup: a cold install takes minutes, and a
 server that misses its initialize timeout is dropped as failed.
 
 The virtualenv sits at a fixed path rather than under the host's plugin data
-directory, which only exists when Claude launches the server — a venv built by
+directory, which only exists when Claude launches the server. A venv built by
 the installer from a terminal would land somewhere the server never looks.
 
 ### Reaching REAPER
 
 Two independent routes, so losing one leaves the other working.
 
-- **The MCP server** connects through reapy's distant API — Python ReaScript on,
+- **The MCP server** connects through reapy's distant API: Python ReaScript on,
   a web interface on port **2307**, the `activate_reapy_server` action
   registered, and its id recorded. All four are handled by
   `reaper/enable_reapy.py`, all idempotent.
@@ -286,7 +286,7 @@ produces `WinError 10053`. `--repair` removes it, and the installer runs that
 before configuring.
 
 Before importing reapy, the server **waits for REAPER to publish its server
-port** rather than letting reapy find it missing and perform the action again —
+port** rather than letting reapy find it missing and perform the action again,
 which is what produced the task-control dialog. The wait is a plain read with no
 side effects, and it is skipped entirely when REAPER is not running, because
 then reapy raises instead of prompting and there is nothing to prevent.
@@ -300,26 +300,26 @@ install from disk anyway. The second run costs nothing.
 That is why `winget install` is not what runs: it downloads into its own temp
 directory and deletes it, so a machine that gets wiped and re-run re-downloaded
 everything every time. `winget download` is the same fetch from the same source,
-kept, with the manifest beside it — which is also how the installer knows the
+kept, with the manifest beside it, which is also how the installer knows the
 silent switches without guessing.
 
 - **Files you already have are used where they lie.** Name and place are matched
   loosely on purpose: nobody renames the winget bundle, and the folder shared
   into a Sandbox is usually the one *containing* the clone. Four directories are
-  searched, nearest first — `downloadCache\`, the plugin folder, its parent, and
+  searched, nearest first: `downloadCache\`, the plugin folder, its parent, and
   a `downloadCache\` there. Read-only; downloads are written to `downloadCache\`
   and nowhere else.
 - **It is only ever an optimisation.** Absent, empty or unreadable, `[1]`
   behaves exactly as it would have and downloads what it needs.
 - **Only for what is missing.** An installed application is never replaced by a
   cached copy, which could as easily be a downgrade.
-- **Claude Code is the exception** — winget extracts it rather than running an
+- **Claude Code is the exception**. winget extracts it rather than running an
   installer. It is downloaded once, found unusable from disk, and its manifest
   kept as a note so later runs skip it.
 - **Gitignored**, and safe to delete at any time.
 
 Repeating a 200 MB fetch from the same host often enough is how an address gets
-rate-limited and then blocked. That is not hypothetical — it is what this exists
+rate-limited and then blocked. That is not hypothetical. It is what this exists
 to stop.
 
 ### Logs
@@ -334,9 +334,9 @@ level-tagged plain ASCII, so it greps and pastes anywhere:
 21:54:21  FAIL  Claude Code: winget exited 1.
 ```
 
-`[1]` writes two. `setup-<time>.log` is that structured trace — *what did the
+`[1]` writes two. `setup-<time>.log` is that structured trace: *what did the
 setup do*. `transcript-<time>.log` is the raw capture including winget's and
-pip's own output — *what did everything else say*. Read the first.
+pip's own output: *what did everything else say*. Read the first.
 
 ---
 
@@ -377,9 +377,9 @@ can disagree about what "working" means are worse than one.
 | | |
 | --- | --- |
 | **Python** | `3.12` |
-| **winget** | `v1.8.1911` — `microsoft/winget-cli`, 252 MB |
-| **UI.Xaml** | `v2.8.6` — `microsoft/microsoft-ui-xaml`, 5 MB |
-| **VCLibs** | `14.00 Desktop` — `aka.ms/Microsoft.VCLibs.<arch>.14.00.Desktop.appx`, 7 MB |
+| **winget** | `v1.8.1911`: `microsoft/winget-cli`, 252 MB |
+| **UI.Xaml** | `v2.8.6`: `microsoft/microsoft-ui-xaml`, 5 MB |
+| **VCLibs** | `14.00 Desktop`: `aka.ms/Microsoft.VCLibs.<arch>.14.00.Desktop.appx`, 7 MB |
 
 > [!WARNING]
 > **reapy 0.10.0 empties `reaper.ini` on Python 3.13+.** Python 3.13 added
@@ -393,14 +393,14 @@ can disagree about what "working" means are worse than one.
 > 3.12-or-older interpreter for that step alone. The server itself runs fine on
 > 3.14, which is why the two are chosen separately.
 
-**Python 3.12 rather than the newest** also because `numba` and `llvmlite` —
-which `librosa` needs — routinely take months to publish wheels for a new
+**Python 3.12 rather than the newest** also because `numba` and `llvmlite`,
+which `librosa` needs, routinely take months to publish wheels for a new
 release.
 
 **winget is pinned because 1.9+ added a dependency 1.8 does not have.** The
 current release declares `Microsoft.WindowsAppRuntime.1.8`, which means either a
 102 MB setup executable or a framework package Microsoft does not publish
-standalone — and getting it wrong is a `0x80073CF3` that reads like a corrupt
+standalone, and getting it wrong is a `0x80073CF3` that reads like a corrupt
 download. 1.8.1911 predates it: bundle plus two appx files, one
 `Add-AppxPackage` call.
 
@@ -413,15 +413,15 @@ complete-but-undeployable.
 It ships with App Installer, absent on a fresh Windows Server, on images built
 without the Store, and inside Windows Sandbox. `[1]` installs it:
 
-1. **Register an App Installer that is already provisioned** — instant, offline.
-2. **Deploy the packages directly** — register VCLibs and UI.Xaml, then the
+1. **Register an App Installer that is already provisioned**: instant, offline.
+2. **Deploy the packages directly**: register VCLibs and UI.Xaml, then the
    bundle with both as `-DependencyPath`. Needs nothing but HTTPS, and nothing at
    all once cached.
 3. **PowerShell Gallery bootstrap**, as the fallback for a machine where step 2
    is refused by policy.
 
 Downloads use `curl.exe` (in Windows since 1803) with `Invoke-WebRequest` behind
-it, `--fail` so an HTTP error cannot be saved as the package, and a size floor —
+it, `--fail` so an HTTP error cannot be saved as the package, and a size floor,
 which catches what `--fail` cannot, since a captive portal and a retired `aka.ms`
 link both answer `200`.
 
@@ -443,7 +443,7 @@ That creates a junction at `~\.claude\skills\reaper-for-claude` pointing here,
 which loads in place.
 
 **Use one route or the other.** They share a plugin name, Claude Code resolves it
-in favour of the marketplace, and it skips the link silently — so with both
+in favour of the marketplace, and it skips the link silently, so with both
 present you edit and nothing happens, with no error. Uninstalling is not enough
 either; the marketplace **entry** reserves the name:
 
@@ -469,12 +469,12 @@ Changes to a `SKILL.md` apply immediately. Changes to `plugin.json` need
 Desktop and the web app fetch marketplaces from a **git host**, not a local path,
 so the Plugins UI needs this pushed somewhere first. Until then the installer
 writes the MCP server straight into `claude_desktop_config.json`, which gives
-Desktop the tools immediately — just not the skills.
+Desktop the tools immediately, just not the skills.
 
 ### Porting
 
 Only `RunThisToStart.bat` and `install/*.ps1` are Windows-specific. The server,
 `launch_server.py`, `bootstrap.py`, `doctor.py`, `bridge.py`, `enable_reapy.py`
 and the Lua listener are cross-platform, so macOS or Linux support means writing
-an installer and changing `command` in `plugin.json` from `python` to `python3` —
+an installer and changing `command` in `plugin.json` from `python` to `python3`,
 not touching any of the logic.

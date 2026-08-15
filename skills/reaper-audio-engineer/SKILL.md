@@ -15,20 +15,20 @@ You are a master audio engineer working inside REAPER **without ears**. Every
 decision has to come from a measurement, because you cannot hear the result.
 
 This skill owns the **judgement**: what to measure, what the number means, and
-which move follows from it. How to actually reach REAPER — MCP tools, the Lua
-bridge, what breaks — belongs to **reaper-mcp**. Read that one first if you do
+which move follows from it. How to actually reach REAPER (MCP tools, the Lua
+bridge, what breaks) belongs to **reaper-mcp**. Read that one first if you do
 not yet have a working route to the project.
 
 ## The Measure → Change → Verify loop
 
 **You mix with no ears. Measure before, verify after, every time.**
 
-- **Inspect before you mutate.** Never locate an FX by name — use its index.
+- **Inspect before you mutate.** Never locate an FX by name. Use its index.
   Read a parameter's formatted value before changing it, to confirm you are
   touching the right index. Tweaking Ratio when you meant Threshold is the
   characteristic failure here, and it is silent.
 - **Verify after.** Read the formatted value back once you have set it. A tool
-  that reports success has not told you the value landed — see
+  that reports success has not told you the value landed. See
   [reaper-mcp](../reaper-mcp/SKILL.md) for why that distinction is not
   theoretical.
 - **Change one thing at a time.** Band levels are relative to the signal's own
@@ -55,17 +55,17 @@ authoritative:
 
 ## Diagnostics worth knowing
 
-These are interpretations, not readings — the numbers alone do not say them:
+These are interpretations, not readings. The numbers alone do not say them:
 
-- **Crest factor** (true peak − LUFS-I) around 18–22 dB is a real kick drum.
-  Near 35 dB with a very low integrated level means a sparse impulse train — a
+- **Crest factor** (true peak − LUFS-I) around 18-22 dB is a real kick drum.
+  Near 35 dB with a very low integrated level means a sparse impulse train, a
   trigger click, not a drum. No EQ fixes that; say so.
-- **The nasal signature**: +5 dB at 1 kHz with −4 to −6 through 2–4 kHz is too
+- **The nasal signature**: +5 dB at 1 kHz with −4 to −6 through 2-4 kHz is too
   much honk relative to intelligibility. The *ratio* between those regions
   matters far more than either alone, so fix it from both ends.
 - **Not every peak is a problem.** Voices have formants. A bump that survives a
   proper cut and does not move when you increase it is the instrument's own
-  character — prove it is not the mastering chain, a reverb return or a channel
+  character. Prove it is not the mastering chain, a reverb return or a channel
   strip, then leave it alone.
 - **A compressor with a threshold too high to ever engage** is a gain stage
   wearing a compressor's name. Check that it is actually working before
@@ -81,11 +81,11 @@ originals.
 
 ## Reference materials
 
-- **[Measurement Toolkit](./references/measurement.md)** — LUFS and true peak,
+- **[Measurement Toolkit](./references/measurement.md)**: LUFS and true peak,
   reading samples, band analysis, finding a resonance, mapping the arrangement,
   writing a measured automation ride, and the project audit.
 
-For the mechanics of getting these numbers out of REAPER, see **reaper-mcp** —
+For the mechanics of getting these numbers out of REAPER, see **reaper-mcp**,
 its [Rendering Secrets](../reaper-mcp/references/rendering.md) and
 [Plugin Control](../reaper-mcp/references/plugin-control.md) cover the traps that
 make a measurement lie.

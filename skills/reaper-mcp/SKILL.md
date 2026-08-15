@@ -1,7 +1,7 @@
 ---
 name: reaper-mcp
 description: >-
-  How Claude actually reaches REAPER and makes it do things — the `reaper` MCP
+  How Claude actually reaches REAPER and makes it do things: the `reaper` MCP
   tool surface and the Lua file bridge. Use when calling REAPER tools, when a
   tool fails or returns something that looks wrong, when a call hangs, when a
   render comes out silent or empty, when setting a plugin parameter that no tool
@@ -13,7 +13,7 @@ description: >-
 # Reaching REAPER
 
 This skill owns the **channel**: getting a command into REAPER and a trustworthy
-answer back. It does not decide what the command should be — that is
+answer back. It does not decide what the command should be. That is
 **reaper-audio-engineer**.
 
 ## Two routes, and how to tell which you have
@@ -30,7 +30,7 @@ reach. Say so plainly and use these skills as reference knowledge instead of
 pretending to touch the project.
 
 If REAPER tools are missing where you expected them, call `reaper_setup_status`
-if it exists — it is the diagnostic stub the MCP server leaves behind when it
+if it exists. It is the diagnostic stub the MCP server leaves behind when it
 cannot start, and it names the exact fix. Otherwise use **reaper-core-setup**.
 
 ### Use the MCP server for structure
@@ -40,16 +40,16 @@ colour; FX; MIDI items, chords, drum patterns; sends, buses, rendering, stems.
 
 ### Use the bridge for what the API cannot express
 
-- **Offline DSP measurement** — reading samples, band analysis, arrangement maps.
-- **Dynamic parameter search** — setting a parameter by its *formatted* value
+- **Offline DSP measurement**: reading samples, band analysis, arrangement maps.
+- **Dynamic parameter search**: setting a parameter by its *formatted* value
   (`"110 ms"`, `"-12 dB"`) when no tool maps it. Binary-search it.
-- **Batching** — one bridge round trip returning a table beats forty MCP calls.
+- **Batching**: one bridge round trip returning a table beats forty MCP calls.
   See [what a call costs](./references/python-reaper-tools.md#what-a-call-costs).
 
 ## Running Lua through the bridge
 
-Pass the Lua directly. Do **not** write a temp file and point the client at it —
-that was the old workflow and it fails on Windows, where PowerShell 5.1 writes a
+Pass the Lua directly. Do **not** write a temp file and point the client at it.
+That was the old workflow and it fails on Windows, where PowerShell 5.1 writes a
 UTF-8 BOM and the bridge answers `PARSE_ERROR` on byte one.
 
 ```bash
@@ -72,7 +72,7 @@ Rules that matter:
   answers `OK`, which tells you it ran and nothing else.
 - **Raise `--timeout` for renders.** They block REAPER for minutes. The client
   waits for `out.txt` to actually change rather than sleeping, so it will never
-  hand you the previous command's output — a timeout means slow, not failed.
+  hand you the previous command's output; a timeout means slow, not failed.
 - **`PARSE_ERROR` and `RUNTIME_ERROR` also set a non-zero exit code.** Treat
   either as a hard failure and read the message rather than retrying blind.
 
@@ -84,7 +84,7 @@ absolute path.
 ## Never trust a write you have not read back
 
 The single most expensive lesson in this codebase. reapy accepts writes that
-never reach REAPER — `fx.params[0].normalized_value = 0.6` and `track.armed =
+never reach REAPER. `fx.params[0].normalized_value = 0.6` and `track.armed =
 True` both succeed in Python, return no error, and change nothing, because the
 attribute does not exist and Python is happy to invent it.
 
@@ -98,7 +98,7 @@ of verified traps is in
 If MCP calls stop returning **and** the bridge times out, with no error
 anywhere: **a modal dialog is open in REAPER**. It halts every deferred script,
 which is both the reapy server and the Lua bridge. Nothing failed, so nothing is
-logged — it is still waiting.
+logged. It is still waiting.
 
 Look at REAPER's window. The four dialogs that come up in ordinary use, and
 which are safe to dismiss, are in
@@ -110,12 +110,12 @@ track before starting the transport, and never set `RENDER_BOUNDSFLAG` to 0.
 
 Read the relevant one before attempting a complex task:
 
-- **[Driving REAPER from Python](./references/python-reaper-tools.md)** — reapy's
+- **[Driving REAPER from Python](./references/python-reaper-tools.md)**: reapy's
   silent no-ops, modal dialogs, unbounded-loop traps, per-call latency, and the
   tool benchmark.
-- **[Rendering Secrets](./references/rendering.md)** — the silent-render trap
+- **[Rendering Secrets](./references/rendering.md)**: the silent-render trap
   (`offlineinact`), bounds flags, and measuring the result.
-- **[Plugin Control](./references/plugin-control.md)** — binary-searching
+- **[Plugin Control](./references/plugin-control.md)**: binary-searching
   parameters by formatted value, known index traps (FabFilter Pro-Q 4, Pro-C 3).
 
 ## Verifying the tool surface
@@ -128,7 +128,7 @@ python scripts/benchmark_tools.py
 ```
 
 Run it after changing any tool module. When adding a case, assert on a value
-read back **independently** — not on `success`, and not on the setter's own
+read back **independently**, not on `success`, and not on the setter's own
 report, since that is exactly how the silent no-ops survived.
 
 ## When things are broken
@@ -141,7 +141,7 @@ Use **reaper-core-setup**. It owns installation, the health check and repair.
 | A tool reports success but nothing changed | A reapy attribute assignment that never reached REAPER. Read it back. |
 | No REAPER tools at all | The MCP server did not start. Call `reaper_setup_status`, or run the health check. On claude.ai there is no local server by design. |
 | MCP tools fail with a socket error | REAPER is not running, or the distant API was never configured. The server reconnects by itself when REAPER restarts, so a *persistent* failure means configuration, not a stale connection. |
-| Bridge times out | REAPER is not running `claude_bridge.lua`. Check `status.txt` in the bridge directory — a stale heartbeat means the listener stopped. |
+| Bridge times out | REAPER is not running `claude_bridge.lua`. Check `status.txt` in the bridge directory; a stale heartbeat means the listener stopped. |
 | `PARSE_ERROR` on byte one | The Lua reached the bridge with a UTF-8 BOM. Pass `--code`, or `--lua-file` so it gets stripped. |
 | Renders are silent | The `offlineinact` preference. See the rendering reference. |
 | A render "succeeds" with 0 bytes | `RENDER_FILE` was given a full path while `RENDER_PATTERN` held a filename, so REAPER made a *directory* of that name. Check `is_file()`, never `exists()`. |

@@ -32,12 +32,12 @@ This project is released under the **MIT Licence**. The full text is in
 > Copyright (c) 2026 <your name>
 > ```
 >
-> This is deliberately left as-is rather than changed on your behalf — who holds
+> This is deliberately left as-is rather than changed on your behalf. Who holds
 > copyright is not a decision for a tool to make.
 
 ## Third-party components
 
-### Derived from — code
+### Derived from: code
 
 | Project | Licence | Relationship |
 | --- | --- | --- |
@@ -46,15 +46,15 @@ This project is released under the **MIT Licence**. The full text is in
 MIT requires its copyright notice to be kept in derivative works, which is why
 the line discussed [above](#licence) stays in `LICENSE`.
 
-### Acknowledged influence — no code taken
+### Acknowledged influence, no code taken
 
 Credited in the [shout-outs](README.md#shout-outs). Listed here so the boundary
 is on the record: these shaped the design, and no source was copied from either.
 
 | Project | Licence | Relationship |
 | --- | --- | --- |
-| [xDarkzx/Reaper-MCP](https://github.com/xDarkzx/Reaper-MCP) | Apache-2.0 | Ideology — the case for a broad tool surface rather than a few calls. |
-| [DevWesC/Reaper-Claude-MCP](https://github.com/DevWesC/Reaper-Claude-MCP) | MIT | Inspiration — the Claude-and-REAPER pairing, and installing it with PowerShell. |
+| [xDarkzx/Reaper-MCP](https://github.com/xDarkzx/Reaper-MCP) | Apache-2.0 | Ideology: the case for a broad tool surface rather than a few calls. |
+| [DevWesC/Reaper-Claude-MCP](https://github.com/DevWesC/Reaper-Claude-MCP) | MIT | Inspiration: the Claude-and-REAPER pairing, and installing it with PowerShell. |
 
 Ideas are not copyrightable, so influence alone carries no licence obligation
 and neither project's terms attach to this one. Worth knowing where that line
@@ -94,7 +94,7 @@ Prepare Offline Files` fetches the same set without installing anything.
 
 | What | From |
 | --- | --- |
-| Python, Git, REAPER, Claude Desktop, Claude Code | the **winget community source**, which resolves to each vendor's own installer — `python.org`, `git-scm.com`, `reaper.fm`, `claude.ai` |
+| Python, Git, REAPER, Claude Desktop, Claude Code | the **winget community source**, which resolves to each vendor's own installer: `python.org`, `git-scm.com`, `reaper.fm`, `claude.ai` |
 | winget itself, if absent | `github.com/microsoft/winget-cli` releases |
 | UI.Xaml | `github.com/microsoft/microsoft-ui-xaml` releases |
 | VCLibs | `aka.ms` → `download.microsoft.com` |
@@ -107,7 +107,7 @@ Two safeguards on every download:
 
 - **`curl --fail`**, so an HTTP error cannot be written to the output file and
   reported as a success.
-- **A size floor**, which catches what `--fail` cannot — a captive portal's
+- **A size floor**, which catches what `--fail` cannot. A captive portal's
   login page and a retired `aka.ms` link both answer `200` with something that
   is not the package.
 
@@ -116,11 +116,11 @@ deployed, so a package that is not the one Microsoft signed does not install.
 
 ## What it reads on your machine
 
-The installer is invasive by nature — it has to be, to configure REAPER and
+The installer is invasive by nature. It has to be, to configure REAPER and
 Claude. What it reads, and what it deliberately does not:
 
 - **Claude's sign-in is checked for *presence only*.** The setup reads
-  `config.json` to answer "is an account attached?" — it never reads, prints,
+  `config.json` to answer "is an account attached?", and it never reads, prints,
   stores or transmits a token value.
 - **Nothing is sent anywhere.** There is no telemetry, no analytics, and no
   network call except the downloads listed above.
@@ -147,7 +147,7 @@ You need your own licences for REAPER and Claude. This project provides neither.
 ## No warranty
 
 MIT, in plain terms: this is provided **as is**, with **no warranty**, and the
-authors are **not liable** for anything that comes of using it — see [LICENSE](LICENSE)
+authors are **not liable** for anything that comes of using it. See [LICENSE](LICENSE)
 for the binding text.
 
 Worth stating plainly, because this software edits configuration files that
@@ -156,7 +156,7 @@ matter:
 - It writes to `reaper.ini`, `reaper-kb.ini`, `reaper-extstate.ini`,
   `__startup.lua` and `claude_desktop_config.json`.
 - It takes a snapshot first and can restore it, and it guards `reaper.ini`
-  against the known reapy failure that empties it — see the warning in
+  against the known reapy failure that empties it. See the warning in
   [DOCS.md](DOCS.md#pinned-versions).
 - Neither of those is a substitute for your own backup of a REAPER
   configuration you care about.

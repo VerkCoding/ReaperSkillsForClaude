@@ -2,7 +2,7 @@
 
 The MCP tools reach REAPER through **reapy**, and reapy is a thin, uneven wrapper
 over the ReaScript API. It is convenient where it works and quietly wrong where
-it does not, and the failures do not look like failures — they look like success.
+it does not, and the failures do not look like failures. They look like success.
 
 Everything below was established by running all 58 MCP tools against REAPER 7.78
 with reapy 0.10.0 under Python 3.12 and checking what REAPER actually held
@@ -62,17 +62,17 @@ state back.
 
 | What looks right | What actually happens | Use instead |
 |---|---|---|
-| `idx = track.add_fx(name)` then `if idx < 0` | Returns an **`FX` object**, not an int. Comparing raises `'<' not supported between instances of 'FX' and 'int'` | `fx = track.add_fx(name)`, then `fx.index`. A missing plugin raises `ValueError`, it never returns -1 — catch it |
+| `idx = track.add_fx(name)` then `if idx < 0` | Returns an **`FX` object**, not an int. Comparing raises `'<' not supported between instances of 'FX' and 'int'` | `fx = track.add_fx(name)`, then `fx.index`. A missing plugin raises `ValueError`, it never returns -1, so catch it |
 | `param.normalized_value` / `param.formatted_value` | `AttributeError` on read; **silent no-op** on write | `param.normalized` / `param.formatted` to read; `RPR.TrackFX_SetParamNormalized` to write |
 | `fx.params[i].normalized = v` | reapy's own setter reads `parent_fx.id`, which `FX` does not have → `AttributeError` | `RPR.TrackFX_SetParamNormalized(track.id, fx_index, i, v)` |
 | `track.armed = True` | Silent no-op. `I_RECARM` stays 0, so recording starts with nothing armed and REAPER opens a modal warning | `RPR.SetMediaTrackInfo_Value(track.id, "I_RECARM", 1)`, then read it back before starting the transport |
-| `project.time_signature` | Returns **`(bpm, bpi)`** — tempo and numerator. Formatting it as `n/d` reports a 120 BPM 4/4 project as `"120.0/4.0"` | `RPR.TimeMap_GetTimeSigAtTime(0, 0.0, 0, 0, 0)`; numerator and denominator are at indices 2 and 3 |
-| `project.time_signature = (n, d)` | Read-only property → `AttributeError` | `RPR.SetTempoTimeSigMarker` — see below |
+| `project.time_signature` | Returns **`(bpm, bpi)`**, tempo and numerator. Formatting it as `n/d` reports a 120 BPM 4/4 project as `"120.0/4.0"` | `RPR.TimeMap_GetTimeSigAtTime(0, 0.0, 0, 0, 0)`; numerator and denominator are at indices 2 and 3 |
+| `project.time_signature = (n, d)` | Read-only property → `AttributeError` | `RPR.SetTempoTimeSigMarker`, see below |
 | `project.save(path)` | Its only argument is `force_save_as`, a **bool**. A path lands where an int is expected → `'str' object cannot be interpreted as an integer` | `RPR.Main_SaveProjectEx(0, path, 0)`. It writes the file but leaves the project dirty; follow with `RPR.Main_SaveProject(0, False)` to clear the flag |
 | `project.bpm = x` | Correct **only while no tempo marker sits at position 0**. With one there it changes nothing and inserts a duplicate marker | Rewrite the marker (see below) |
-| `item.fade_in_length` / `item.fade_out_length` | **Silent no-op.** The fade stays 0.0 and the call reports success — and the payload returns position and length, so nothing in the reply could contradict it | `RPR.SetMediaItemInfo_Value(item.id, "D_FADEINLEN" / "D_FADEOUTLEN", seconds)` |
+| `item.fade_in_length` / `item.fade_out_length` | **Silent no-op.** The fade stays 0.0 and the call reports success, and the payload returns position and length, so nothing in the reply could contradict it | `RPR.SetMediaItemInfo_Value(item.id, "D_FADEINLEN" / "D_FADEOUTLEN", seconds)` |
 | `take.start_offset = x` | Read-only property → `AttributeError`, which took the whole `start_trim` branch with it | `RPR.SetMediaItemTakeInfo_Value(take.id, "D_STARTOFFS", value)` |
-| `fx.preset_name = name` | **Silent no-op**, and it accepts a name no plugin has — so "preset loaded" was reported for presets that do not exist | `RPR.TrackFX_SetPreset(track.id, fx, name)`, then read `TrackFX_GetPreset(...)[3]` back and compare |
+| `fx.preset_name = name` | **Silent no-op**, and it accepts a name no plugin has, so "preset loaded" was reported for presets that do not exist | `RPR.TrackFX_SetPreset(track.id, fx, name)`, then read `TrackFX_GetPreset(...)[3]` back and compare |
 | `item.position` / `item.length` / `fx.is_enabled` | **These do work.** Listed so the next sweep does not "fix" them on suspicion of matching the pattern | Leave them alone |
 
 ## Null pointers are strings, and strings are true
@@ -80,7 +80,7 @@ state back.
 The trap under [Never loop unbounded](#never-loop-unbounded-against-reaper) is
 not only about loops, and `EnumProjects` is not the only call that springs it.
 **Every** ReaScript function returning a pointer returns it as a *string*, so a
-null one arrives as `'(TrackEnvelope*)0x0000000000000000'` — twenty-eight
+null one arrives as `'(TrackEnvelope*)0x0000000000000000'`, twenty-eight
 non-empty characters, and therefore true.
 
 ```python
@@ -90,7 +90,7 @@ if not envelope:        # NEVER fires, whatever REAPER returned
 
 Both automation tools were written with that guard, so the "show the envelope
 first" error they carried could not be reached. They inserted a point into a
-null envelope — which does nothing, and returns 0 — and reported success. The
+null envelope, which does nothing and returns 0, and reported success. The
 guard has to look at the value:
 
 ```python
@@ -111,7 +111,7 @@ This is the failure mode worth internalising, because nothing in Python reports
 it and the symptom is indistinguishable from a hang.
 
 `activate_reapy_server.py` is a **deferred** ReaScript. A modal dialog stops
-REAPER running deferred scripts — all of them. So while a dialog waits:
+REAPER running deferred scripts, all of them. So while a dialog waits:
 
 - the reapy server stops answering, and every MCP tool call blocks forever;
 - the Lua bridge stops answering too, so your fallback route is gone as well;
@@ -122,10 +122,10 @@ applies to every modal REAPER can raise, and four turned up in ordinary use:
 
 | Dialog | Text | Provoked by | Safe to dismiss? |
 |---|---|---|---|
-| `Render Error` | "Nothing to render!" | `RENDER_BOUNDSFLAG = 0` — the custom range is empty | **Yes**, OK is the only button |
+| `Render Error` | "Nothing to render!" | `RENDER_BOUNDSFLAG = 0`, the custom range is empty | **Yes**, OK is the only button |
 | `Record Warning` | "No tracks are armed for recording" | Starting the transport with nothing armed | Cancel aborts the record; Continue starts a recording nobody asked for |
-| `REAPER Query` | "Save unsaved project before closing?" | `load_project` / `create_project` on a dirty project | **No** — three buttons, and one discards the user's work |
-| `ReaScript task control` | "…is running in the background" | reapy re-running the server action | **No** — "Terminate instances" kills the bridge too |
+| `REAPER Query` | "Save unsaved project before closing?" | `load_project` / `create_project` on a dirty project | **No**: three buttons, and one discards the user's work |
+| `ReaScript task control` | "…is running in the background" | reapy re-running the server action | **No**: "Terminate instances" kills the bridge too |
 
 ### Do not provoke them
 
@@ -133,7 +133,7 @@ Prevention beats detection, and each of these has a cheap guard:
 
 ```python
 if RPR.IsProjectDirty(0):
-    return {"success": False, "error": "save first — otherwise REAPER opens a modal prompt "
+    return {"success": False, "error": "save first, otherwise REAPER opens a modal prompt "
                                        "and no tool can reach it until someone clicks it"}
 ```
 
@@ -143,7 +143,7 @@ before recording, and to setting `RENDER_BOUNDSFLAG` to 1 or 2 but never 0.
 
 ### Detect them when it is too late
 
-Enumerate REAPER's windows by process id — matching on titles you already know
+Enumerate REAPER's windows by process id. Matching on titles you already know
 means the one dialog you have never seen is the one you cannot report:
 
 ```python
@@ -160,7 +160,7 @@ told you nothing, which is what the first version of that code did.
 
 Never call REAPER on a thread you cannot abandon. Run the call on its own thread
 with a timeout, and if it does not return, report what is on screen rather than
-waiting. Cancelling an `asyncio` task does not help — the block is inside REAPER,
+waiting. Cancelling an `asyncio` task does not help, because the block is inside REAPER,
 not inside the event loop, so the loop stays wedged for every call after it.
 
 ## Never loop unbounded against REAPER
@@ -172,8 +172,8 @@ while RPR.EnumProjects(i, "", 0)[0]:        # NEVER terminates
     i += 1
 ```
 
-`EnumProjects` returns a pointer *string* past the end of the list —
-`'(ReaProject*)0x0000000000000000'` — which is truthy. Compare against the null
+`EnumProjects` returns a pointer *string* past the end of the list,
+`'(ReaProject*)0x0000000000000000'`, which is truthy. Compare against the null
 pointer and bound the loop:
 
 ```python
@@ -235,7 +235,7 @@ RPR.UpdateTimeline()
 timepos at 3, numerator at 7, denominator at 8.
 
 Setting a time signature therefore leaves a visible marker in the user's project.
-That is how REAPER represents it — it is not litter — but say so rather than
+That is how REAPER represents it, and it is not litter, but say so rather than
 letting them find it.
 
 ## Render settings are project state
@@ -244,7 +244,7 @@ letting them find it.
 to the user's project. Every analysis tool renders, so a `analyze_loudness` call
 that leaves those pointing at a temp file has quietly reconfigured their export.
 
-**Save them, set them, put them back** — a context manager is the natural shape.
+**Save them, set them, put them back**: a context manager is the natural shape.
 Read strings with a buffer big enough for the answer, since the string you pass
 in is the buffer REAPER writes into:
 
@@ -261,7 +261,7 @@ tools until this was checked:
 - `RENDER_FILE` is a **directory**; `RENDER_PATTERN` is the filename stem. Passing
   a full path to `RENDER_FILE` makes REAPER create a *directory* named
   `mixdown.wav` and write the pattern-named file inside it. `os.path.exists`
-  returns true for that directory and `os.path.getsize` returns 0 — which is how
+  returns true for that directory and `os.path.getsize` returns 0, which is how
   a render tool reports success with a file size of zero.
 
 Check `Path(target).is_file()`, never `os.path.exists`.
@@ -275,17 +275,17 @@ as the useful part.
 | Call | Median |
 |---|---|
 | `play_project`, `stop_transport` (no round trip) | ~30 ms |
-| most mutating calls (`set_track_volume`, `add_fx`) | ~150–190 ms |
+| most mutating calls (`set_track_volume`, `add_fx`) | ~150-190 ms |
 | `get_project_info` | ~310 ms |
 | `get_track_info` | ~375 ms |
 | `list_tracks` (3 tracks) | ~595 ms |
 | a render of a 3-second project | ~1.9 s |
-| an analysis tool (renders, then measures) | ~1.9–3.5 s |
+| an analysis tool (renders, then measures) | ~1.9-3.5 s |
 
 Every tool pays one `get_project()` round trip plus an `n_tracks` probe that
 forces it to be real. `list_tracks` then pays four more ReaScript reads per
 track, which is why it is the slowest read by a wide margin. **Batch through the
-Lua bridge when you need many values at once** — one bridge round trip that
+Lua bridge when you need many values at once**: one bridge round trip that
 returns a table beats forty MCP calls.
 
 ## The bench
@@ -313,7 +313,7 @@ first.
 
 ### Asserting on the right thing
 
-`expect=` is handed **the tool's own payload** — the tool's word for what it
+`expect=` is handed **the tool's own payload**, the tool's word for what it
 did. `b.confirm(probe, expected, label)` is handed REAPER's, read straight
 through `reascript_api`, and demotes the call just recorded when the two
 disagree:
@@ -327,16 +327,16 @@ b.confirm(lambda: (int(RPR.GetMediaTrackInfo_Value(_track_id(ix), "I_CUSTOMCOLOR
 
 Both reads go inside the probe, because a REAPER call made outside it is one
 more thing that can hang. `confirm` stays silent when the recorded call already
-failed — a tool that failed changed nothing, and a second row would say the same
+failed. A tool that failed changed nothing, and a second row would say the same
 thing twice.
 
 Twenty-one tools once had no `expect=` at all and passed on "did not throw".
 Adding `confirm` to them found four defects in one run, three of which reported
 `success: true`. So: **a new case without an independent read-back is not a
-test.** And a probe that has never been seen to fail is not one either — invert
+test.** And a probe that has never been seen to fail is not one either: invert
 it once and watch it go red before trusting it.
 
 `--include-destructive` leaves an extra project tab behind, because REAPER's New
 Project opens a tab rather than replacing the current one. The bench reports it
-instead of closing it — closing a tab with unsaved changes asks a question this
+instead of closing it, because closing a tab with unsaved changes asks a question this
 skill is not entitled to answer.

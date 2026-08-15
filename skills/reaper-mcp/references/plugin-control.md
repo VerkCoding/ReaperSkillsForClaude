@@ -1,6 +1,6 @@
 # Controlling plugin parameters
 
-Every plugin parameter is a normalised 0–1 float, and every plugin maps that range
+Every plugin parameter is a normalised 0-1 float, and every plugin maps that range
 differently. There are two ways to hit a real value, and knowing which to use saves a lot of
 round trips.
 
@@ -27,7 +27,7 @@ end
 ```
 
 Never locate an FX by plugin name either. Renamed FX are normal in an organised template, and
-name-based lookup silently finds the wrong slot — or, with `TrackFX_AddByName`, adds a
+name-based lookup silently finds the wrong slot, or, with `TrackFX_AddByName`, adds a
 duplicate. Enumerate the chain and match on position and expected role.
 
 Big plugins pad their parameter list with a hundred MIDI CC entries. Cap your dump.
@@ -81,7 +81,7 @@ band *n* starts at `(n-1) * 23`:
 
 | Offset | Parameter |
 |---|---|
-| +0 | Used — set 0 to remove the band |
+| +0 | Used: set 0 to remove the band |
 | +1 | Enabled |
 | +2 | Frequency |
 | +3 | Gain |
@@ -89,7 +89,7 @@ band *n* starts at `(n-1) * 23`:
 | +5 | Shape |
 | +6 | Slope |
 
-The mappings are exact — verified by round trip — so no search is needed:
+The mappings are exact, verified by round trip, so no search is needed:
 
 ```lua
 local function fnorm(f) return math.log(f/10, 10) / 3.4771213 end   -- 10 Hz .. 30 kHz, log
@@ -104,7 +104,7 @@ Shape is `index/9`:
 `6` Band Pass · `7` Tilt Shelf · `8` Flat Tilt · `9` All Pass
 
 **Reading a chain back is misleading.** All 24 bands report `Used` and `Enabled` whether or
-not they are in use. An unused band is identifiable only by its parked defaults — 1000.0 Hz
+not they are in use. An unused band is identifiable only by its parked defaults: 1000.0 Hz
 at 0.00 dB. When you rewrite a curve, explicitly write `0` to offset +0 for every band past
 the last one you set, or leftovers from the previous curve stay active.
 
@@ -121,26 +121,26 @@ Style is `index/12`:
 `7` Classic · `8` Opto · `9` Vocal · `10` Mastering · `11` Bus · `12` Pumping
 
 Threshold spans −60 to 0 dB. A threshold near 0 cannot compress, so if a chain has one sitting
-at 0 with makeup gain applied, that plugin is a gain stage wearing a compressor's name — worth
+at 0 with makeup gain applied, that plugin is a gain stage wearing a compressor's name, worth
 flagging to the user rather than silently "fixing", since it may have been deliberate.
 
 ## Known index traps
 
 Verified the hard way. Dump before you write, but these in particular are easy to get wrong:
 
-**bx_townhouse Buss Compressor** — `0` Bank, `1` Comp In, `2` Key In, `3` AutoFade,
+**bx_townhouse Buss Compressor**: `0` Bank, `1` Comp In, `2` Key In, `3` AutoFade,
 **`4` Thresh**, `5` Ratio, `6` Attack, `7` Release, `8` MakeUp, `10` Mix. Assuming Thresh is
 at 5 means you drive Ratio instead and knock Release off `auto`. Release reads `auto` at
 norm ≥ 0.90.
 
-**SPL Transient Designer Plus** — `0` Attack, `1` Sustain, `2` Output, `3` Mix.
+**SPL Transient Designer Plus**: `0` Attack, `1` Sustain, `2` Output, `3` Mix.
 
-**bx_subsynth** — `7` 24–36 Hz, `8` 36–56 Hz, `9` 56–80 Hz, `10` Subharmonics, `11` Low End,
+**bx_subsynth**: `7` 24-36 Hz, `8` 36-56 Hz, `9` 56-80 Hz, `10` Subharmonics, `11` Low End,
 `14` Squeeze, `16` Drive. Genuinely generates a fundamental, so it is the tool of last resort
 when a kick source has no low end of its own.
 
-**soothe2** — `4` depth, `5` sharpness, `9`–`13` low cut group, then four bands of six
-parameters from `14` (on / freq / sens / q / balance / mode), `38`–`42` high cut group,
+**soothe2**: `4` depth, `5` sharpness, `9`-`13` low cut group, then four bands of six
+parameters from `14` (on / freq / sens / q / balance / mode), `38`-`42` high cut group,
 `51` sidechain. The per-band `sens` biases where it works hardest; pointing it at a measured
 resonance is far more musical than a static cut, because it only acts when the resonance is
 actually ringing.
@@ -156,7 +156,7 @@ reaper.TrackFX_SetOffline(tr, fx, true)
 ```
 
 Sum `pdc` across a chain and report it in ms at the project rate. This is worth checking any
-time the user mentions monitoring or tracking latency — and worth fixing before you spend
+time the user mentions monitoring or tracking latency, and worth fixing before you spend
 time on anything else, since it is usually one plugin.
 
 ## Sidechain routing
@@ -174,6 +174,6 @@ reaper.TrackFX_GetPinMappings(tr, fx, 0, 2)            -- expect 0x4 for pin 2
 reaper.TrackFX_GetPinMappings(tr, fx, 0, 3)            -- expect 0x8 for pin 3
 ```
 
-Check all three before concluding a sidechain is working — pin mapping is the one people
+Check all three before concluding a sidechain is working, since pin mapping is the one people
 forget, and the plugin will happily report its sidechain as enabled while listening to
 silence.

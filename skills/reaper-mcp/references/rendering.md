@@ -52,12 +52,12 @@ wr("DONE")
 ```
 
 `RENDER_FILE` is a directory. Giving it a path with a filename stem creates a folder of that
-name and puts the render inside — harmless but confusing when you go looking for the file.
+name and puts the render inside. Harmless but confusing when you go looking for the file.
 
 ## Why renders come out silent
 
-REAPER's preference **`offlineinact = 1`** — "set media items offline when application is not
-active" — takes every media item offline whenever REAPER loses focus. Driving it from a
+REAPER's preference **`offlineinact = 1`**, "set media items offline when application is not
+active", takes every media item offline whenever REAPER loses focus. Driving it from a
 background process means REAPER never has focus. Items contribute nothing, and you get a
 file of exactly the right length containing silence.
 
@@ -67,7 +67,7 @@ Confirm the preference:
 local ok, v = reaper.get_config_var_string("offlineinact")   -- "1" means the trap is armed
 ```
 
-Detect the state at any moment — this is the reliable signal:
+Detect the state at any moment. This is the reliable signal:
 
 ```lua
 local src = reaper.GetMediaItemTake_Source(reaper.GetActiveTake(reaper.GetMediaItem(0, 0)))
@@ -84,7 +84,7 @@ Actions, verified by measuring source length either side of each:
 Getting these backwards makes everything silent, so if you are unsure, call one and check the
 source length rather than trusting memory.
 
-Offer the user the permanent fix — turning `offlineinact` off in Preferences → Media — but
+Offer the user the permanent fix, turning `offlineinact` off in Preferences → Media, but
 treat it as their setting to change, and keep calling `40101` regardless so the skill works on
 an unmodified machine.
 
@@ -94,9 +94,9 @@ an unmodified machine.
 
 | Value | Meaning | Works via API? |
 |---|---|---|
-| 0 | custom time range | **No** — silently ignores `RENDER_STARTPOS`/`RENDER_ENDPOS` |
+| 0 | custom time range | **No**: silently ignores `RENDER_STARTPOS`/`RENDER_ENDPOS` |
 | 1 | entire project | Yes |
-| 2 | time selection | Yes — set it with `GetSet_LoopTimeRange` |
+| 2 | time selection | Yes: set it with `GetSet_LoopTimeRange` |
 
 Use 2 for section checks and 1 for the final measurement. Save and restore the user's time
 selection; they very likely have one they care about.
@@ -142,15 +142,15 @@ Occasionally `GetMediaSourceLength` returns 0 on a file REAPER has only just fin
 Re-create the source in a subsequent command rather than concluding the render failed.
 
 Do **not** write your own WAV parser in PowerShell to double-check. In PowerShell,
-`[byte] -bor [int]` returns a **byte**, so 24-bit samples truncate to 0–255 and every file —
-including known-good ones — measures a peak of exactly −90.34 dBFS. If you ever see that
+`[byte] -bor [int]` returns a **byte**, so 24-bit samples truncate to 0-255 and every file,
+including known-good ones, measures a peak of exactly −90.34 dBFS. If you ever see that
 number on more than one file, the parser is lying, not the audio. Cast with `[int]` first if
 you really need an independent check.
 
 ## Rendering one bus in isolation
 
 Useful for checking what a chain actually did to a source. Solo the **group or bus** track,
-not a tier that feeds downstream purely through explicit sends — REAPER's solo does not
+not a tier that feeds downstream purely through explicit sends. REAPER's solo does not
 propagate along send chains in every routing topology, and you will render silence.
 
 To measure a chain without the mastering chain colouring the result, disable the FX chains
@@ -173,7 +173,7 @@ Measured on a 62-track project with roughly 90 plugins, 44.1 kHz:
 |---|---|
 | 2 s | ~2 s |
 | 8 s | ~5 s |
-| 21 s | ~12–14 s |
+| 21 s | ~12-14 s |
 | 195 s (full song) | ~100 s |
 
 Roughly 2× real time. Budget for it: prefer one 20 s chorus render for iteration and reserve
@@ -190,9 +190,9 @@ In order, because each step rules out a whole class of cause:
 4. **Does the routing reach the master?** Walk one source-to-master path printing `D_VOL`,
    `B_MAINSEND` and every send's destination and level.
 5. **Render with all FX chains disabled.** If that is silent too, the problem is upstream of
-   the plugins — routing or media. If it has audio, bisect the chains.
+   the plugins: routing or media. If it has audio, bisect the chains.
 6. **Only then** suspect a plugin.
 
 A render that measures around −90 dBFS rather than true digital silence is usually the analog
-noise floor of the mix-bus plugins with no input reaching them — which points at media or
+noise floor of the mix-bus plugins with no input reaching them, which points at media or
 routing, not at the plugins themselves.

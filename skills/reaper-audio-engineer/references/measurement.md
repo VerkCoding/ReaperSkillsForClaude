@@ -39,11 +39,11 @@ local fn = reaper.GetMediaSourceFileName(reaper.GetMediaItemTake_Source(take), "
 local src = reaper.PCM_Source_CreateFromFile(fn)
 ```
 
-`GetMediaSourceFileName` returns the filename directly as its only return value — a
+`GetMediaSourceFileName` returns the filename directly as its only return value, a
 `select(2, ...)` around it yields nil.
 
-**Crest factor (true peak − LUFS-I) is diagnostic.** A real kick drum sits around 18–22 dB. A
-value near 35 dB with a very low integrated level means a sparse impulse train — a trigger
+**Crest factor (true peak − LUFS-I) is diagnostic.** A real kick drum sits around 18-22 dB. A
+value near 35 dB with a very low integrated level means a sparse impulse train, a trigger
 click, not a drum. That is a source problem no EQ will solve, and worth saying out loud.
 
 ## Reading samples
@@ -60,7 +60,7 @@ reaper.GetAudioAccessorSamples(acc, SR, 1, startTime, N, buf)
 reaper.DestroyAudioAccessor(acc)
 ```
 
-Request a **lower samplerate** when you only need low-frequency content or an RMS envelope —
+Request a **lower samplerate** when you only need low-frequency content or an RMS envelope.
 4000 Hz for an arrangement map cuts the work by 11×.
 
 **Track audio accessors are not a way to measure a bus.** They only cover items on that
@@ -90,15 +90,15 @@ end
 ```
 
 For an octave-ish overview use `Q = f0/(f2-f1)` with band edges; a serviceable set is
-sub 30–60, low 60–120, lomid 120–300, mid 300–800, upmid 800–2500, pres 2500–6000,
-air 6000–10000.
+sub 30-60, low 60-120, lomid 120-300, mid 300-800, upmid 800-2500, pres 2500-6000,
+air 6000-10000.
 
 **Gate before you average.** Skip any window whose RMS is below a floor, or a long silence
 between phrases will drag the result. A window is worth using if its mean square exceeds
 about `1e-9`; for sparse material, take the loudest windows rather than evenly spaced ones.
 
 **Sanity check on interpretation.** These numbers are relative to the signal's own mean, so a
-band moving does not always mean you changed that band — cutting several other bands raises
+band moving does not always mean you changed that band, since cutting several other bands raises
 everything else by comparison. When you want to know what a specific move did, change one
 thing and re-measure.
 
@@ -112,14 +112,14 @@ Broad bands tell you the tilt; 1/3-octave tells you where the problem actually i
 ```
 
 Read the *shape*, not single numbers. A vocal that reads +5 at 1 kHz with −4 to −6 through
-2–4 kHz is the classic nasal signature: too much of the honk band relative to the
+2-4 kHz is the classic nasal signature: too much of the honk band relative to the
 intelligibility band. The ratio between those regions matters far more than either alone, so
-fix it from both ends — cut the peak and widen the presence boost to fill the hole.
+fix it from both ends: cut the peak and widen the presence boost to fill the hole.
 
 Not every peak should be flattened. Voices have formants; a residual bump that survives a
 proper cut and does not move when you increase it is the instrument's own character. Prove it
-is not something else — bypass the mastering chain, mute the reverb returns, check the channel
-strip EQ is really at zero — and then leave it alone.
+is not something else. Bypass the mastering chain, mute the reverb returns, check the channel
+strip EQ is really at zero, then leave it alone.
 
 ## Mapping the arrangement
 
@@ -176,7 +176,7 @@ compressor, so the compressor receives an already-even signal and does less work
 send to the next tier is post-fader, the envelope applies to it.
 
 Report the gate, target and resulting range. If the ride is pinned at its clamp for long
-stretches, the gate is too loose and you are lifting breaths — tighten it and rerun.
+stretches, the gate is too loose and you are lifting breaths, so tighten it and rerun.
 
 ## Auditing the project
 
@@ -188,7 +188,7 @@ Worth asserting:
 - Track count matches the start (a temporary analysis track left behind is easy to miss)
 - No track soloed or muted, no `I_FXEN == 0`, master FX chain enabled
 - The expected plugin really is in the slot you edited, on every strip you touched
-- No compressor with a threshold too high to ever engage — a "compressor" doing nothing while
+- No compressor with a threshold too high to ever engage, a "compressor" doing nothing while
   its makeup gain is up is just a gain stage, and it is a very common way for a chain to look
   right and do nothing
 - Envelope point count and range are sane
