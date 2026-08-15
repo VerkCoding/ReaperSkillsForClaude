@@ -1,4 +1,4 @@
-# REAPER for Claude
+# REAPER for Claude - WIP
 
 Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX,
 rendering, and real DSP measurement.
@@ -71,21 +71,15 @@ real and known.
 
 **Before a wider release**
 
-- [ ] Confirm the cold-start ReaScript dialog fix on a genuinely cold machine.
-      The fix is in and unit-tested, but only a first-ever launch exercises it.
-- [ ] Move the test suite into the repository. Everything is currently verified
-      with throwaway harnesses; a project this size needs them checked in.
-- [ ] Push to a git host, so Claude Desktop and claude.ai can add the
-      marketplace. Until then Desktop gets the tools but not the skills.
+- [ ] Finish Reaper-MCP skills
+- [ ] Finish Reaper-Audio-Engineer skills
+- [ ] Links Everything with Reaper-Core-Setup skills
 
 **Wanted**
 
-- [ ] macOS and Linux installers. Only `RunThisToStart.bat` and `install/*.ps1`
-      are Windows-specific — the server, launcher, bootstrap, health check,
-      bridge and Lua listener are already cross-platform.
-- [ ] ARM64 verification. The code paths exist and are architecture-aware, but
-      have never run on one.
-- [ ] A first-run walkthrough for people who have never used an MCP server.
+- [ ] Make Tutorial Video
+- [ ] ON GOD FIX EVERY BUG
+- [ ] Linux && MacOS
 
 **Known and deliberate**
 
