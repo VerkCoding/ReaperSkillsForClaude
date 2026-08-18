@@ -317,6 +317,12 @@ silent switches without guessing.
   installer. It is downloaded once, found unusable from disk, and its manifest
   kept as a note so later runs skip it.
 - **Gitignored**, and safe to delete at any time.
+- **Every download is checked twice.** `curl --fail` so an HTTP error cannot
+  be written to the output file and reported as a success, and a size floor
+  for what `--fail` cannot catch: a captive portal's login page and a retired
+  `aka.ms` link both answer `200` with something that is not the package.
+  Windows then validates the MSIX signature chain when the winget packages
+  are deployed.
 
 Repeating a 200 MB fetch from the same host often enough is how an address gets
 rate-limited and then blocked. That is not hypothetical. It is what this exists
@@ -452,7 +458,11 @@ claude plugin uninstall reaper-for-claude@reaper-skills-for-claude
 claude plugin marketplace remove reaper-skills-for-claude
 ```
 
-`-Link` does both for you, and the health check flags the shadowed state.
+`-Link` runs both of those for you. A plain `[1]` does not: when it finds a
+link and a marketplace install together it reports which one is loading and
+changes neither, because removing a marketplace entry you added by hand is not
+its decision. The health check warns about the same state and prints the
+command for either direction.
 
 Changes to a `SKILL.md` apply immediately. Changes to `plugin.json` need
 `/reload-plugins` or a restart.
@@ -466,10 +476,16 @@ Changes to a `SKILL.md` apply immediately. Changes to `plugin.json` need
 | **Claude Code** | `/plugin marketplace add <this folder>` then `/plugin install reaper-for-claude@reaper-skills-for-claude` |
 | **Claude Desktop / claude.ai** | Customize → Plugins → Personal plugins → **+** → Add marketplace |
 
-Desktop and the web app fetch marketplaces from a **git host**, not a local path,
-so the Plugins UI needs this pushed somewhere first. Until then the installer
-writes the MCP server straight into `claude_desktop_config.json`, which gives
-Desktop the tools immediately, just not the skills.
+Desktop and the web app fetch marketplaces from a **git host**, not a local
+path, so point them at the repository URL rather than at this folder:
+
+```
+https://github.com/VerkCoding/ReaperSkillsForClaude.git
+```
+
+The installer also writes the MCP server straight into
+`claude_desktop_config.json`, so Desktop has the tools whether or not the
+marketplace is added. Adding the marketplace is what brings the skills.
 
 ### Porting
 
