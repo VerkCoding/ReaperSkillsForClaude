@@ -81,9 +81,25 @@ originals.
 
 ## Reference materials
 
-- **[Measurement Toolkit](./references/measurement.md)**: LUFS and true peak,
-  reading samples, band analysis, finding a resonance, mapping the arrangement,
-  writing a measured automation ride, and the project audit.
+- **[Measurement Toolkit](./references/audio-measurement.md)**: LUFS and true
+  peak, reading samples, band analysis, finding a resonance, mapping the
+  arrangement, writing a measured automation ride, and the project audit.
+
+The three below are a sequence, and each hands the next a written summary. Start
+at the stage the material is actually at rather than at the top.
+
+- **[Recording and intake](./references/audio-recording.md)**: taking in a
+  session or a set of raw files, checking them for clipping, noise floor, phase
+  and timing offsets between microphones, and wrong sample rates, then writing
+  the intake record and brief that mixing starts from.
+- **[Mixing](./references/audio-mixing.md)**: levels, EQ, compression, gating,
+  pan, sends, automation, bus building, phase and timing repair, and frequency
+  masking, decided from measurements rather than by ear. Also how to trace a
+  listening note back to a number.
+- **[Mastering](./references/audio-mastering.md)**: mix bus and master bus work,
+  spectral matching against a reference, limiting, LUFS and true peak targets
+  for streaming and broadcast, mid/side, bit depth, dither, stems and the final
+  deliverables.
 
 For the mechanics of getting these numbers out of REAPER, see **reaper-mcp**,
 its [Rendering Secrets](../reaper-mcp/references/rendering.md) and
