@@ -1,6 +1,6 @@
 # REAPER for Claude - WIP
 
-Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX,
+Claude works inside REAPER as an audio engineer assistant: mixing, mastering, MIDI, FX,
 rendering, and real DSP measurement.
 
 One Claude plugin: three skills and an MCP server with 58 REAPER tools,
