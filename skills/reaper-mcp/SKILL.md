@@ -24,17 +24,27 @@ On claude.ai in the browser, neither route is available. State this limitation a
 
 If REAPER tools are unavailable, call `reaper_setup_status` to identify the diagnostic status. Otherwise, use reaper-core-setup.
 
-### MCP server
+## Choosing a route
 
-Use the MCP server for structured tasks: projects, tempo, time signature, tracks, naming, volume, pan, solo, mute, colour, FX, MIDI items, chords, drum patterns, sends, buses, rendering, and stems.
+**Default to the MCP tools.** They validate their inputs, refuse impossible values, restore the settings they borrow, and return a structured result. Reach for the bridge when one of the conditions below holds, not as a matter of taste.
 
-### File bridge
+| Situation | Route | Why |
+| --- | --- | --- |
+| A tool covers the task | **MCP tool** | Validation, error messages and state restoration are already written and tested. Reimplementing them in Lua repeats debugged work. |
+| Structured project work | **MCP tool** | Projects, tempo, time signature, tracks, naming, volume, pan, solo, mute, colour, FX, MIDI items, chords, drum patterns, sends, buses, rendering, stems. |
+| Rendering to a file | **MCP tool** | `render_project`, `render_time_selection` and `render_stems` save and restore the `RENDER_*` project settings. Hand-written Lua leaves the user's render settings changed. |
+| An operation that must be refused when wrong | **MCP tool** | The tools reject negative indices, out-of-range values and trims that would consume an item. Raw Lua applies whatever it is given. |
+| More than about three operations in one step | **Bridge** | A tool call costs 150-600 ms; one bridge call costs roughly 300 ms however many API calls it contains. Ten reads is one bridge call, not ten tool calls. |
+| Confirming what a tool reported | **Bridge** | The bridge reads REAPER directly, so it is the independent witness. A tool's response is a claim about its work, not evidence of it. |
+| Reading state no tool returns | **Bridge** | Selection, play position, envelope scaling mode, take offsets, source lengths, render settings, item and marker layout. |
+| Setting a parameter in display units | **Bridge** | Binary-searching a plugin's formatted value when no tool maps that parameter. See [Plugin Control](./references/plugin-control.md). |
+| Offline DSP measurement | **Bridge** | Reading samples, band analysis, arrangement maps. |
+| Anything reapy gets wrong | **Bridge** | The bridge runs native ReaScript inside REAPER and skips the reapy wrapper layer entirely, along with its silent no-ops. |
 
-Use the bridge for unsupported API functions:
+Two habits follow:
 
-- **Offline DSP measurement**: Reading samples, band analysis, arrangement maps.
-- **Dynamic parameter search**: Setting a parameter by its formatted value (`"110 ms"`, `"-12 dB"`) using binary search when no tool maps it.
-- **Batching**: Combining multiple operations into one bridge call to reduce overhead. Refer to [what a call costs](./references/python-reaper-tools.md#what-a-call-costs).
+- **Batch through the bridge, act through the tools.** Gather what you need to know in one Lua call, decide, then make the change with the tool built for it.
+- **Verify across routes.** After a tool reports success on something that matters, read the value back through the bridge. When both agree, the change is real. This is how the tool defects in [Driving REAPER from Python](./references/python-reaper-tools.md) were found: three tools reported success on every call while changing nothing.
 
 ## Running Lua through the bridge
 
@@ -55,8 +65,12 @@ For multiline scripts, write the Lua code to a file using a file-writing tool an
 Rules for Lua bridge execution:
 
 - Always `return` a string from the chunk. A chunk returning nothing results in `OK`, indicating execution without data.
-- Increase `--timeout` for renders. Renders block REAPER. The client monitors `out.txt` for changes rather than sleeping. A timeout indicates the process is slow, not necessarily failed.
-- `PARSE_ERROR` and `RUNTIME_ERROR` set a non-zero exit code. Treat these as failures and read the error message.
+- **Only the first return value survives.** `return 7, 8, 9` yields `7`. Pack several values into a table, or build the string yourself.
+- A returned table renders one line per array element, then any remaining keys as `k = v`, with nested tables shown compactly as `{1, 2}`. An empty table returns `{}`.
+- **Globals persist between calls.** `_G.x` set in one chunk is readable in the next, which is useful for staging state across calls and worth clearing when finished.
+- Each command runs inside an undo block named "Claude bridge command". A read-only command adds no undo point.
+- Increase `--timeout` for renders. Renders block REAPER. The client monitors `out.txt` for changes rather than sleeping. A timeout indicates the process is slow, not necessarily failed; REAPER keeps executing the chunk after the client gives up.
+- `PARSE_ERROR` and `RUNTIME_ERROR` set a non-zero exit code. Treat these as failures and read the error message. Line numbers refer to your code as written.
 
 If `${CLAUDE_PLUGIN_ROOT}` is not substituted, locate the plugin directory manually (e.g., `scripts/bridge.py` under `~/.claude/plugins/` or the repository) and use the absolute path.
 

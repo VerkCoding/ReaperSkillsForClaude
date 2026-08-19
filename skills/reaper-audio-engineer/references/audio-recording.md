@@ -190,7 +190,17 @@ If executing `start_recording`, verify the following conditions:
 5. **File nomenclature**: Assign track names prior to recording to set output file names.
 6. **Test recording**: Record a brief test segment and execute checks 4.2 through 4.5.
 
+`start_recording` arms the track and starts the transport. It refuses when a recording is already running, because the record command toggles: issued twice it ends the take rather than starting one. The track stays record-armed after `stop_transport`, matching REAPER's own behaviour, so disarm it when the take is finished.
+
+Stopping a recording can occupy REAPER for several seconds while the file is finalised, long enough for a tool call to time out on a stop that in fact succeeded. `stop_transport` returns `play_state`; read it rather than assuming a timeout left the transport running.
+
 Execute the full intake record on all newly recorded material.
+
+Editing recorded material:
+
+- `import_audio_file` returns the index of the item it actually inserted. That is not the last item when the file lands earlier in the timeline, so use the returned `item_index` rather than counting items.
+- `edit_audio_item` refuses trims that would consume the item. An over-long trim previously pushed the take offset past the end of the source, leaving an item of plausible length that played silence.
+- `adjust_pitch` and `adjust_playback_rate` write to the take and report REAPER's own reading back.
 
 ## 8. Project brief
 

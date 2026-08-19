@@ -32,11 +32,23 @@ script=$root/scripts/bridge.py
     exit 1
 }
 
-for py in "${REAPER_MCP_PYTHON:-}" python3 python py; do
+# The plugin virtual environment is preferred, matching scripts/launch_server.py.
+#
+# Each candidate is run before it is used. On Windows, python3 resolves to the
+# Microsoft Store App Execution Alias, which exists on PATH and satisfies
+# command -v, then refuses to run and exits 49 with "Python was not found".
+# Selecting an interpreter on presence alone made the wrapper unusable there
+# unless REAPER_MCP_PYTHON was set by hand.
+for py in \
+    "${REAPER_MCP_PYTHON:-}" \
+    "$HOME/.reaper-for-claude/venv/Scripts/python.exe" \
+    "$HOME/.reaper-for-claude/venv/bin/python" \
+    python3 python py
+do
     [ -n "$py" ] || continue
-    if command -v "$py" >/dev/null 2>&1; then
-        exec "$py" "$script" "$@"
-    fi
+    command -v "$py" >/dev/null 2>&1 || continue
+    "$py" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 7) else 1)' >/dev/null 2>&1 || continue
+    exec "$py" "$script" "$@"
 done
 
 echo "Error: Python interpreter not found." >&2

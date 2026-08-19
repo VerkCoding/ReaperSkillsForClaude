@@ -2,9 +2,12 @@
 
 Rendering is required to measure a bus, the mix, or the master. The following information defines the rendering process.
 
+For an ordinary render to a file, use the `render_project`, `render_time_selection` and `render_stems` tools instead. They save and restore every `RENDER_*` field they touch, validate the format and bit depth, and refuse an empty project. Render from the bridge when you need something those tools do not offer: a partial range around a specific bar, a chain disabled for the duration, or measurement inside the same command.
+
 ## Contents
 
 - [The recipe](#the-recipe)
+- [Choosing the output format](#choosing-the-output-format)
 - [Why renders come out silent](#why-renders-come-out-silent)
 - [Bounds flags](#bounds-flags)
 - [Polling instead of sleeping](#polling-instead-of-sleeping)
@@ -50,6 +53,32 @@ wr("DONE")
 ```
 
 `RENDER_FILE` takes a directory. Providing a file path creates a folder with that name containing the render.
+
+The recipe above saves the fields it changes. Add any other field you touch to that list, and note which ones are strings: `RENDER_FORMAT`, `RENDER_FILE` and `RENDER_PATTERN` are read and written with `GetSetProjectInfo_String`, the rest with `GetSetProjectInfo`.
+
+## Choosing the output format
+
+`RENDER_FORMAT` is a **string** holding a base64 configuration blob. Writing it as a number does nothing and reads back as `0.0`, and so does `RENDER_FORMAT2` for bit depth. A render then silently comes out in whatever format the project already had: a request for FLAC produces `name.wav`, and every bit depth request produces the project's existing depth.
+
+The blob is a reversed four character code followed by format-specific settings. Verified by rendering and reading the resulting file headers:
+
+| Format | Blob | Result |
+|---|---|---|
+| WAV | `evaw` + `depth, 0, 1` | depth 8 → PCM_U8, 16 → PCM_16, 24 → PCM_24, 32 → 32-bit float |
+| FLAC | `calf` | PCM_16 at default compression |
+| FLAC | `calf` + `<uint32 depth><uint32 compression>` | depth 16 or 24, compression 0-8 |
+| MP3 | `l3pm` | MPEG Layer III |
+| OGG | `vggo` | Vorbis |
+
+```lua
+-- 16-bit WAV. string.char builds the blob; the client encodes it as base64.
+local blob = "evaw" .. string.char(16, 0, 1)
+reaper.GetSetProjectInfo_String(0, "RENDER_FORMAT", base64_encode(blob), true)
+```
+
+The default 24-bit WAV blob is `ZXZhdxgAAQ==`, which decodes to `evaw\24\0\1`. To learn any other format's blob, set it once in REAPER's render dialog and read `RENDER_FORMAT` back.
+
+`RENDER_SRATE` and `RENDER_CHANNELS` are numeric and behave as expected.
 
 ## Why renders come out silent
 
@@ -105,7 +134,7 @@ for ($i=0; $i -lt 40; $i++) {
 }
 ```
 
-`scripts/bridge.py` watches the `out.txt` timestamp to avoid returning previous command output. Increase the `--timeout` parameter for renders instead of manual polling, unless the render duration exceeds the maximum acceptable timeout.
+`scripts/bridge.py` watches the `out.txt` timestamp and matches a request id, so it returns neither the previous command's output nor another client's. Increase the `--timeout` parameter for renders instead of manual polling, unless the render duration exceeds the maximum acceptable timeout. A timeout only means the client stopped waiting; REAPER carries on rendering, and the file still appears.
 
 ## Measuring the result
 
@@ -114,10 +143,13 @@ Measurement can be done inside the Lua command using REAPER's API:
 ```lua
 local src = reaper.PCM_Source_CreateFromFile(path)
 local len = reaper.GetMediaSourceLength(src)
-local function m(md) return -20 * math.log(reaper.CalculateNormalization(src, md, 1.0, 0, len), 10) end
+-- Target is in dB. Passing 1.0 makes every reading exactly 1 dB low.
+local function m(md) return -20 * math.log(reaper.CalculateNormalization(src, md, 0.0, 0, len), 10) end
 local I, S, T = m(0), m(5), m(3)
 reaper.PCM_Source_Destroy(src)
 ```
+
+Mode 3 is a real oversampled true peak and reads higher than the sample peak on limited material. See [Loudness of a file](../../reaper-audio-engineer/references/audio-measurement.md#loudness-of-a-file).
 
 If `GetMediaSourceLength` returns 0 on a newly written file, recreate the source in a subsequent command.
 
@@ -151,7 +183,9 @@ Performance is approximately 2× real time. Use partial renders for iteration an
 
 ## Diagnosing a silent render
 
-Check the following properties:
+First separate "silent" from "absent". An empty project writes **no file at all**, and does so without raising a dialog: REAPER simply renders nothing and the render error you may be looking for never appears. Check `GetProjectLength(0)` before blaming routing or a modal.
+
+For a file that exists but is silent, check the following properties:
 
 1. Check `I_SOLO` on every track.
 2. Check `GetMediaSourceLength` on a take source. A value of 0.0 indicates offline media.

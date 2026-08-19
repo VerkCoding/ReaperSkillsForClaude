@@ -4,6 +4,8 @@ These methods execute without playback and bypass the audio device, providing da
 
 ## Contents
 
+- [Choosing a measurement route](#choosing-a-measurement-route)
+- [Traps that produce confident wrong numbers](#traps-that-produce-confident-wrong-numbers)
 - [Loudness of a file](#loudness-of-a-file)
 - [Reading samples](#reading-samples)
 - [Band analysis](#band-analysis)
@@ -12,17 +14,50 @@ These methods execute without playback and bypass the audio device, providing da
 - [Writing a measured automation ride](#writing-a-measured-automation-ride)
 - [Auditing the project](#auditing-the-project)
 
+## Choosing a measurement route
+
+| Need | Route |
+|---|---|
+| Loudness, true peak, clipping, dynamics, spectrum, stereo field of the whole project | `analyze_loudness`, `detect_clipping`, `analyze_dynamics`, `analyze_frequency_spectrum`, `analyze_stereo_field`. Each renders the project and measures the file. |
+| The same for one file already on disk | `CalculateNormalization` through the bridge, below. No render required. |
+| A bus, a section, or a chain in isolation | Render it, then measure. See [Rendering from the bridge](../../reaper-mcp/references/rendering.md). |
+| Per-bar structure, band balance, resonance hunting, automation rides | The bridge. No tool covers these. |
+
+The analysis tools return calibrated figures: band levels are RMS in dBFS that sum to the overall signal RMS, true peak is oversampled, and dynamics are measured across channels. They refuse an empty project rather than reporting silence. What they cannot do is measure part of a project, so anything narrower than "the whole mix" means rendering or reading samples yourself.
+
+## Traps that produce confident wrong numbers
+
+Each of these was found producing a plausible, wrong reading. They apply to any measurement code, including your own.
+
+**Do not sum to mono before measuring level.** Averaging the channels cancels out-of-phase content: a -6 dBFS anti-phase mix measures as -120 dB silence. Take the peak as the maximum absolute sample across channels, and the RMS across all channels' samples.
+
+**A sample peak is not a true peak.** The waveform rises between samples. Measure with an oversampled method (REAPER's mode 3, or four times upsampling) and report two decimals.
+
+**A measurement window longer than the material measures nothing.** A dynamic-range score over 3-second windows finds zero windows in a 2-second render. Returning `0.0` then reads as "no dynamic range" rather than "not measured". Report the window actually used, and fall back to the whole signal when it is shorter.
+
+**Raw FFT magnitudes are not levels.** Averaging `abs(stft)` across a band puts a -6 dBFS tone at +31 dB and makes the answer depend on how many bins the band spans. Scale to component amplitude, sum power across the band, and divide by the window's equivalent noise bandwidth (1.5 for Hann). The check that catches this: all bands summed must reproduce the signal's overall RMS.
+
+**Guard the degenerate cases.** Correlation of a silent channel is `NaN`, which is not valid JSON; a stereo width ratio divided by a small guard constant returned 3,543,678,557 for fully out-of-phase audio. Report "silent" or "out of phase" instead of a number that looks measured.
+
 ## Loudness of a file
 
-`CalculateNormalization` outputs the required gain to reach a specified target. When target is 1.0, the measurement is computed as `-20*log10(gain)`.
+`CalculateNormalization` outputs the required gain to reach a specified target. The measurement is then `-20*log10(gain)`.
+
+**The target argument is in dB, not linear.** Passing `1.0` asks for a +1 dB target and makes every reading exactly 1 dB low. Pass `0.0`.
 
 ```lua
 local src = reaper.PCM_Source_CreateFromFile(path)
 local len = reaper.GetMediaSourceLength(src)
-local function m(md) return -20 * math.log(reaper.CalculateNormalization(src, md, 1.0, 0, len), 10) end
+local function m(md) return -20 * math.log(reaper.CalculateNormalization(src, md, 0.0, 0, len), 10) end
 -- Support for various measurement formats: 0 = LUFS-I, 1 = RMS, 2 = peak, 3 = true peak, 5 = LUFS-S max
 reaper.PCM_Source_Destroy(src)
 ```
+
+Verified against files of known content: a 1 kHz sine written at -6.00 dBFS reads `peak = -6.00` and `truepeak = -5.99` with a target of `0.0`, and `-7.00` / `-6.99` with a target of `1.0`.
+
+Mode 3 is a genuine oversampled true peak, not the sample peak relabelled. On a hard-clipped file whose sample peak reads `-0.00`, mode 3 returns `+0.04`, matching an independent four times oversampled measurement. That inter-sample overshoot is the point of the reading, so keep two decimals: at one decimal it rounds to `0.0` and a ceiling check passes when it should not.
+
+REAPER's LUFS-I agrees with other implementations to within a few tenths of a dB, not exactly. The same sine measured `-6.37` here against `-6.04` under pyloudnorm. Do not treat a 0.3 dB difference between tools as a fault.
 
 Provide an accurate length parameter. Supplying `0, 0` yields exactly 1.0, resulting in an output of `-0.00 dB` for all sources.
 

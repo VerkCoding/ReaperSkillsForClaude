@@ -23,6 +23,13 @@ local POLL_INTERVAL      = 0.15  -- Dictates script responsiveness to incoming f
 local HEARTBEAT_INTERVAL = 5.0   -- Provides liveliness signal for external monitoring.
 local MAX_LOG_BYTES      = 2 * 1024 * 1024
 
+-- Running the startup action again would otherwise leave two listeners polling the
+-- same command file: whichever read it first would consume it, both would write
+-- results, and a caller could read the wrong one. Each instance claims the newest
+-- generation number, and any older instance retires the next time it wakes up.
+CLAUDE_BRIDGE_GENERATION = (CLAUDE_BRIDGE_GENERATION or 0) + 1
+local MY_GENERATION = CLAUDE_BRIDGE_GENERATION
+
 reaper.RecursiveCreateDirectory(DIR, 0)
 
 local function read_file(path)
@@ -49,13 +56,61 @@ local function file_size(path)
   return n or 0
 end
 
+-- Renders a nested value on one line, so a table inside a table is readable
+-- instead of appearing as "table: 0x...". Depth and cycles are bounded.
+local function compact(v, depth, seen)
+  if type(v) ~= "table" then return tostring(v) end
+  if depth > 3 then return "{...}" end
+  if seen[v] then return "<cycle>" end
+  seen[v] = true
+
+  local parts, n = {}, 0
+  for _, val in ipairs(v) do
+    n = n + 1
+    parts[#parts + 1] = compact(val, depth + 1, seen)
+  end
+  local keys = {}
+  for k in pairs(v) do
+    if not (type(k) == "number" and k % 1 == 0 and k >= 1 and k <= n) then
+      keys[#keys + 1] = k
+    end
+  end
+  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+  for _, k in ipairs(keys) do
+    parts[#parts + 1] = tostring(k) .. " = " .. compact(v[k], depth + 1, seen)
+  end
+
+  seen[v] = nil
+  return "{" .. table.concat(parts, ", ") .. "}"
+end
+
 -- Text format is required for external process consumption.
+-- One line per array element, then any remaining keys. Keys outside the array
+-- part used to be discarded whenever the table also held array entries, so a
+-- returned table could silently lose half its contents.
 local function serialize(v)
   if type(v) ~= "table" then return tostring(v) end
-  local lines = {}
-  for _, val in ipairs(v) do lines[#lines + 1] = tostring(val) end
-  if #lines > 0 then return table.concat(lines, "\n") end
-  for k, val in pairs(v) do lines[#lines + 1] = tostring(k) .. " = " .. tostring(val) end
+  local seen = {}
+  local lines, n = {}, 0
+
+  for _, val in ipairs(v) do
+    n = n + 1
+    lines[#lines + 1] = compact(val, 1, seen)
+  end
+
+  local keys = {}
+  for k in pairs(v) do
+    if not (type(k) == "number" and k % 1 == 0 and k >= 1 and k <= n) then
+      keys[#keys + 1] = k
+    end
+  end
+  -- Sorted so repeated calls return the same order; pairs() order is arbitrary.
+  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+  for _, k in ipairs(keys) do
+    lines[#lines + 1] = tostring(k) .. " = " .. compact(v[k], 1, seen)
+  end
+
+  if #lines == 0 then return "{}" end
   return table.concat(lines, "\n")
 end
 
@@ -85,6 +140,9 @@ local function heartbeat(state)
 end
 
 local function loop()
+  -- A newer instance has taken over; stop rescheduling and let this one end.
+  if MY_GENERATION ~= CLAUDE_BRIDGE_GENERATION then return end
+
   local now = reaper.time_precise()
 
   if now - last_beat >= HEARTBEAT_INTERVAL then
@@ -97,9 +155,20 @@ local function loop()
     local code = read_file(FIN)
     if code and code:match("%S") then
       os.remove(FIN)
+
+      -- A client may append its own request id. Echoing it back lets that client
+      -- recognise its own result. Without it, a second client arriving while the
+      -- first command is still running reads the first command's output and both
+      -- callers end up with the same answer.
+      local id = code:match("@claude%-bridge%-id:(%w+)")
+
       heartbeat("busy")
       local result = run(code)
-      write_file(FOUT, result)
+      if id then
+        write_file(FOUT, "@id:" .. id .. "\n" .. result)
+      else
+        write_file(FOUT, result)
+      end
 
       -- Truncation prevents excessive disk space consumption during prolonged usage.
       local mode = "ab"

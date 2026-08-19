@@ -1,5 +1,7 @@
+import base64
 import os
 import logging
+import struct
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -11,20 +13,66 @@ from reaper_mcp.units import set_solo
 
 logger = logging.getLogger("reaper_mcp.render_tools")
 
-# Constant mapping for REAPER's render format enumeration.
-FORMAT_CODES = {
-    "wav":  0,
-    "mp3":  3,
-    "ogg":  4,
-    "flac": 5,
+# REAPER stores the render format as a base64 configuration blob under the string
+# setting RENDER_FORMAT, not as a number. The blob opens with a reversed four
+# character code naming the format, followed by settings belonging to that format.
+# Writing RENDER_FORMAT and RENDER_FORMAT2 as numbers changed nothing: every render
+# came out as a 24 bit WAV whatever was requested, and a request for flac or mp3
+# produced a .wav file while the tool reported the file it expected as missing.
+FORMAT_FOURCC = {
+    "wav":  b"evaw",
+    "flac": b"calf",
+    "mp3":  b"l3pm",
+    "ogg":  b"vggo",
 }
 
-# Constant mapping for REAPER's WAV bit depth enumeration.
-BIT_DEPTH_CODES = {
-    16: 0,
-    24: 2,
-    32: 4,
-}
+# Bit depth travels inside the blob. For WAV, 32 selects 32 bit float, which is how
+# REAPER represents that depth. FLAC carries its depth and compression level as two
+# little endian integers.
+WAV_BIT_DEPTHS = (8, 16, 24, 32)
+FLAC_BIT_DEPTHS = (16, 24)
+FLAC_COMPRESSION = 5
+
+# Suffixes that may be replaced when resolving an output path. Anything else is left
+# alone, because Path.with_suffix would truncate a name such as "mix v1.2".
+_AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".ogg", ".aif", ".aiff"}
+
+
+def _render_format_cookie(format: str, bit_depth: int) -> str:
+    """Build the RENDER_FORMAT blob for a format and bit depth."""
+    fourcc = FORMAT_FOURCC[format.lower()]
+    if fourcc == b"evaw":
+        blob = fourcc + bytes([bit_depth, 0, 1])
+    elif fourcc == b"calf":
+        blob = fourcc + struct.pack("<II", bit_depth, FLAC_COMPRESSION)
+    else:
+        blob = fourcc
+    return base64.b64encode(blob).decode("ascii")
+
+
+def _unsupported(format: str, bit_depth: int) -> str:
+    """Return a message describing an unrenderable request, or "".
+
+    An unknown format silently fell back to WAV, so the caller received a file in a
+    format they had not asked for, under a name suggesting they had.
+    """
+    key = format.lower()
+    if key not in FORMAT_FOURCC:
+        return "Unsupported format '%s'. Available: %s" % (
+            format, ", ".join(sorted(FORMAT_FOURCC)))
+    if key == "wav" and bit_depth not in WAV_BIT_DEPTHS:
+        return "WAV bit depth must be one of %s, got %s" % (
+            ", ".join(str(d) for d in WAV_BIT_DEPTHS), bit_depth)
+    if key == "flac" and bit_depth not in FLAC_BIT_DEPTHS:
+        return "FLAC bit depth must be 16 or 24, got %s" % bit_depth
+    return ""
+
+
+def _nothing_to_render() -> dict:
+    """Return an error dict when the project holds no audio, otherwise None."""
+    if RPR.GetProjectLength(0) <= 0:
+        return {"success": False, "error": "The project is empty. There is nothing to render."}
+    return None
 
 # RENDER_BOUNDSFLAG values.
 # Value 0 (custom time range) requires RENDER_STARTPOS and RENDER_ENDPOS to be set.
@@ -35,11 +83,8 @@ BOUNDS_TIME_SELECTION = 2
 
 # Render settings are temporarily modified and restored.
 # State preservation prevents automated render operations from modifying the user's project settings permanently.
-_SAVED_STRINGS = ("RENDER_FILE", "RENDER_PATTERN")
-_SAVED_NUMBERS = (
-    "RENDER_FORMAT", "RENDER_FORMAT2", "RENDER_SRATE",
-    "RENDER_CHANNELS", "RENDER_BOUNDSFLAG",
-)
+_SAVED_STRINGS = ("RENDER_FILE", "RENDER_PATTERN", "RENDER_FORMAT")
+_SAVED_NUMBERS = ("RENDER_SRATE", "RENDER_CHANNELS", "RENDER_BOUNDSFLAG")
 
 
 def _get_string(key: str) -> str:
@@ -57,7 +102,13 @@ def _resolve_output(output_path: str, format: str) -> Path:
     The extension is overridden by the selected format to ensure consistency.
     """
     target = Path(output_path).expanduser().resolve()
-    return target.with_suffix("." + format.lower())
+    extension = "." + format.lower()
+    if target.suffix.lower() == extension:
+        return target
+    if target.suffix.lower() in _AUDIO_SUFFIXES:
+        return target.with_suffix(extension)
+    # with_suffix would drop everything after the last dot of a name like "mix v1.2".
+    return target.with_name(target.name + extension)
 
 
 @contextmanager
@@ -81,8 +132,9 @@ def _render_settings(
     try:
         RPR.GetSetProjectInfo_String(0, "RENDER_FILE", str(target.parent), True)
         RPR.GetSetProjectInfo_String(0, "RENDER_PATTERN", target.stem, True)
-        RPR.GetSetProjectInfo(0, "RENDER_FORMAT", FORMAT_CODES.get(format.lower(), 0), True)
-        RPR.GetSetProjectInfo(0, "RENDER_FORMAT2", BIT_DEPTH_CODES.get(bit_depth, 2), True)
+        RPR.GetSetProjectInfo_String(
+            0, "RENDER_FORMAT", _render_format_cookie(format, bit_depth), True
+        )
         RPR.GetSetProjectInfo(0, "RENDER_SRATE", float(sample_rate), True)
         RPR.GetSetProjectInfo(0, "RENDER_CHANNELS", float(channels), True)
         RPR.GetSetProjectInfo(0, "RENDER_BOUNDSFLAG", float(bounds), True)
@@ -155,6 +207,12 @@ def register_tools(mcp):
         channels: 1 (mono) or 2 (stereo).
         """
         try:
+            problem = _unsupported(format, bit_depth)
+            if problem:
+                return {"success": False, "error": problem}
+            empty = _nothing_to_render()
+            if empty:
+                return empty
             with _render_settings(output_path, format, sample_rate, bit_depth, channels,
                                   bounds=BOUNDS_ENTIRE_PROJECT) as target:
                 _render_now()
@@ -187,6 +245,9 @@ def register_tools(mcp):
         try:
             if end <= start:
                 return {"success": False, "error": f"Invalid range: end ({end}) must be greater than start ({start})."}
+            problem = _unsupported(format, bit_depth)
+            if problem:
+                return {"success": False, "error": problem}
             project = get_project()
             project.time_selection = (start, end)
             with _render_settings(output_path, format, sample_rate, bit_depth, channels,
@@ -219,6 +280,12 @@ def register_tools(mcp):
         Files are named after the track names in the output directory.
         """
         try:
+            problem = _unsupported(format, bit_depth)
+            if problem:
+                return {"success": False, "error": problem}
+            empty = _nothing_to_render()
+            if empty:
+                return empty
             output_directory = str(Path(output_directory).expanduser().resolve())
             os.makedirs(output_directory, exist_ok=True)
             project = get_project()

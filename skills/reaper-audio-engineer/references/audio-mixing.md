@@ -78,7 +78,7 @@ Four tasks.
 
 **Naming.** Name tracks prior to rendering to ensure correct stem file names.
 
-**Buses.** Group sources (e.g., drums, bass, guitars). Execute `create_bus` and document routing with `list_tracks` and `list_sends`.
+**Buses.** Group sources (e.g., drums, bass, guitars). Execute `create_bus` and document routing with `list_tracks` and `list_sends`. `list_sends` reports `dest_track_index` and `volume_db` per send, which is what makes routing checkable against intent; a list of send indices alone is not.
 
 **Gain staging.** Establish operating ranges for processing and maintain headroom on the master sum. Execute `detect_clipping` on the master after all tracks are active.
 
@@ -190,6 +190,8 @@ If correlation is negative after delay compensation, invert polarity and remeasu
 2. Define target level values per section.
 3. Generate envelope points (`add_volume_automation`) based on the delta between measured and target levels.
 4. Apply rate limiting to envelope changes.
+
+The envelope must be visible in REAPER before points can be written; the tool returns an error naming the right-click item when it is not. `add_volume_automation` takes decibels and converts into the envelope's own scaling. Writing points yourself through the bridge means doing that conversion, since a volume envelope stores fader-scaled values and a raw linear gain lands near silence. See [Measurement Toolkit](./audio-measurement.md#writing-a-measured-automation-ride).
 
 **Macro automation.** Adjust bus or master levels between sections based on the brief.
 

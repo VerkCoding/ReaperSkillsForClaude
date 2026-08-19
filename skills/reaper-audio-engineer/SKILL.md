@@ -18,7 +18,8 @@ This profile handles the analysis of measurements and the required changes. Refe
 Measure audio data prior to making changes. Verify audio data after making changes.
 
 - **Confirm parameters prior to modification.** Locate an FX instance by index instead of name. Read a parameter's formatted value before modifying it to ensure the correct index is targeted. 
-- **Verify parameters after modification.** Read the formatted value again after setting it. A reported success from a tool does not guarantee the value was applied. Refer to [reaper-mcp](../reaper-mcp/SKILL.md) for details.
+- **Verify parameters after modification.** Read the formatted value again after setting it. A reported success from a tool does not guarantee the value was applied: three tools were found reporting the requested value back while leaving REAPER untouched, and others accepted out-of-range input that REAPER silently truncated. Refer to [reaper-mcp](../reaper-mcp/SKILL.md) for details.
+- **Measure in the right units.** A sample peak is not a true peak, an FFT magnitude is not a band level, and a mono sum is not a stereo measurement. Each of these has produced a confident wrong number. Refer to [Measurement Toolkit](./references/audio-measurement.md#traps-that-produce-confident-wrong-numbers).
 - **Perform single modifications.** Band levels are relative. Applying a cut to multiple bands simultaneously alters the overall balance. Execute one change and measure again to isolate the effect.
 - **Output numerical values.** Report data such as "-14.2 LUFS-I, true peak -1.1 dBTP". Do not use qualitative descriptions.
 - **State ambiguities.** If a measurement is unclear or a parameter mapping is undefined, state this fact. Do not provide information without certainty.

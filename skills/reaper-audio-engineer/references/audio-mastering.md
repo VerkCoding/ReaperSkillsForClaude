@@ -105,12 +105,16 @@ Exceptions:
 
 Identify delivery target from the brief, set target level, document reasoning, and measure.
 
+`normalize_project(target_lufs)` measures the project, applies the difference to the master volume, and reports `projected_true_peak_dbtp` for the result. It warns when that projection exceeds full scale, which is the case a loudness target reaches before a limiter is in place. Take the warning as instruction to limit or lower the target, not as a reason to render and see.
+
 ### 5.3 True peak ceiling
 
 Standard ceiling is -1.0 dBTP to accommodate lossy codecs (AAC, MP3, Opus).
 For high loudness masters, a ceiling of -1.5 to -2 dBTP applies (Tier 3).
-`detect_clipping` measures sample peak. True peak requires `analyze_loudness`.
-Verify true peak mode by measuring the rendered output.
+
+`detect_clipping` measures sample peak. True peak requires `analyze_loudness`, which returns `true_peak_dbtp` (four times oversampled) alongside `sample_peak_dbfs`, both to two decimals. The two differ by exactly the amount that matters here: a master whose sample peak read `-0.00 dBFS` measured `+0.04 dBTP`. Judge the ceiling on `true_peak_dbtp`.
+
+The second decimal is load-bearing. At one decimal an overshoot of +0.04 dBTP prints as `0.0` and a ceiling check passes on a master that is over.
 
 ## 6. Limiter application
 
@@ -120,7 +124,17 @@ Procedure:
 3. Monitor gain reduction.
 4. Execute final measurements (section 7).
 
-`apply_limiter` inserts ReaLimit. Use `get_fx_parameters` and `set_master_fx_parameter`. Read formatted values to confirm.
+`apply_limiter(threshold_db, release_ms)` inserts ReaLimit **and applies both values**, reporting what the plugin accepted. It does not set the ceiling, so step 1 is a separate write.
+
+ReaLimit's parameters are linear in decibels but over different ranges, and using the wrong one silently misses the target by several dB:
+
+| Parameter | Index | Range | Normalised value |
+|---|---|---|---|
+| Threshold | 0 | -60 to +12 dB | `(dB + 60) / 72` |
+| Ceiling | 1 | -24 to 0 dB | `(dB + 24) / 24` |
+| Release | 2 | `inf` down to 6 ms | inverted; solve by search |
+
+A -1.0 dBTP ceiling is `set_master_fx_parameter(fx, 1, 0.9583)`. Applying the Threshold formula to the Ceiling instead lands on -4.33 dB. Read the formatted value back after either write.
 Gain reduction exceeding 3-4 dB average indicates conflict between dynamic range and loudness target. Options:
 - Apply bus compression.
 - Return to mix for macro dynamic automation.
@@ -143,6 +157,14 @@ Record a before-and-after table.
 | Onset count | `analyze_transients` | Limiter transient attenuation |
 
 Document the crest factor change.
+
+Reading these results:
+
+- `true_peak_dbtp` is the ceiling figure; `sample_peak_dbfs` sits beside it and will read lower.
+- `analyze_dynamics` reports `dr_measured_over`. On material shorter than one 3-second window the score covers the whole render instead, which is a weaker statement about sustained dynamics than a full-length measurement.
+- Spectrum band levels are RMS in dBFS and sum to the overall signal RMS, so they can be compared between two masters directly rather than only against each other.
+- `stereo_width_ratio` of `null` with a `width_note` means the mid channel is silent: the material is out of phase, not merely wide. `lr_correlation` of `null` means a channel never changes.
+- All five analysis tools refuse an empty project rather than reporting silence, so an "empty project" error means the render had nothing in it, not that the mix is quiet.
 
 ## 8. Bit depth, sample rate, dither
 
