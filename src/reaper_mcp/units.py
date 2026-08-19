@@ -47,3 +47,15 @@ def track_state(track) -> dict:
         "muted": bool(RPR.GetMediaTrackInfo_Value(track.id, "B_MUTE")),
         "soloed": bool(RPR.GetMediaTrackInfo_Value(track.id, "I_SOLO")),
     }
+
+
+def project_tempo() -> float:
+    """Read the project tempo in quarter-note BPM.
+
+    Reapy's Project.bpm reads GetProjectTimeSignature2, which returns the project
+    BPM *setting*. REAPER scales that value by the time signature denominator, so a
+    120 BPM project reports 240 in 7/8 and 60 in 3/2. Master_GetTempo returns
+    quarter-note BPM regardless of denominator, matching the unit that
+    SetTempoTimeSigMarker, SetCurrentBPM, and the .rpp TEMPO field all use.
+    """
+    return float(RPR.Master_GetTempo())

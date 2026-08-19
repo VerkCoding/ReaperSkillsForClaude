@@ -8,6 +8,20 @@ from reaper_mcp.connection import get_project
 logger = logging.getLogger("reaper_mcp.fx_tools")
 
 
+def _negative_index(**values) -> str:
+    """Return a message naming the first negative index, or "".
+
+    Reapy resolves a negative index the Python way, to the last element, while the
+    ReaScript calls in this module reject it and do nothing. Tools that read a name
+    through reapy and then act through ReaScript reported the last plugin's name
+    while changing nothing at all.
+    """
+    for name, value in values.items():
+        if value < 0:
+            return "%s must be 0 or greater, got %s" % (name, value)
+    return ""
+
+
 def register_tools(mcp):
 
     @mcp.tool()
@@ -16,6 +30,9 @@ def register_tools(mcp):
         Add an FX plugin to a track.
         """
         try:
+            invalid = _negative_index(track_index=track_index)
+            if invalid:
+                return {"success": False, "error": invalid}
             project = get_project()
             track = project.tracks[track_index]
             # reapy returns an FX object instead of the index and raises ValueError if the name is not found.
@@ -42,10 +59,20 @@ def register_tools(mcp):
     def remove_fx(track_index: int, fx_index: int) -> dict:
         """Remove an FX plugin from a track by its index."""
         try:
+            invalid = _negative_index(track_index=track_index, fx_index=fx_index)
+            if invalid:
+                return {"success": False, "error": invalid}
             project = get_project()
             track = project.tracks[track_index]
             fx_name = track.fxs[fx_index].name
-            RPR.TrackFX_Delete(track.id, fx_index)
+
+            # TrackFX_Delete reports whether the plugin was actually removed. Without
+            # this check a refused delete still returned the name as though it had been.
+            if not RPR.TrackFX_Delete(track.id, fx_index):
+                return {
+                    "success": False,
+                    "error": f"REAPER did not remove fx {fx_index} from track {track_index}",
+                }
             return {"success": True, "track_index": track_index, "removed": fx_name}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -60,6 +87,11 @@ def register_tools(mcp):
         try:
             if not 0.0 <= value <= 1.0:
                 return {"success": False, "error": f"value must be 0.0-1.0, got {value}"}
+            invalid = _negative_index(
+                track_index=track_index, fx_index=fx_index, param_index=param_index
+            )
+            if invalid:
+                return {"success": False, "error": invalid}
             project = get_project()
             track = project.tracks[track_index]
             fx = track.fxs[fx_index]
@@ -68,6 +100,17 @@ def register_tools(mcp):
             # ReaScript is used directly because reapy's FXParam attribute assignment does not persist to REAPER.
             RPR.TrackFX_SetParamNormalized(track.id, fx_index, param_index, value)
             applied = RPR.TrackFX_GetParamNormalized(track.id, fx_index, param_index)
+
+            # REAPER returns -1 from the readback when it refused the write. Reporting
+            # that as the applied value presented a failed write as a successful one.
+            if applied < 0.0:
+                return {
+                    "success": False,
+                    "error": (
+                        f"REAPER refused the write to param {param_index} "
+                        f"of fx {fx_index} on track {track_index}"
+                    ),
+                }
 
             return {
                 "success": True,
@@ -85,6 +128,9 @@ def register_tools(mcp):
     def get_fx_parameters(track_index: int, fx_index: int) -> dict:
         """Get parameters for an FX plugin."""
         try:
+            invalid = _negative_index(track_index=track_index, fx_index=fx_index)
+            if invalid:
+                return {"success": False, "error": invalid}
             project = get_project()
             track = project.tracks[track_index]
             fx = track.fxs[fx_index]
@@ -112,6 +158,9 @@ def register_tools(mcp):
     def list_track_fx(track_index: int) -> dict:
         """List FX plugins on a track."""
         try:
+            invalid = _negative_index(track_index=track_index)
+            if invalid:
+                return {"success": False, "error": invalid}
             project = get_project()
             track = project.tracks[track_index]
             fx_list = []
@@ -131,6 +180,9 @@ def register_tools(mcp):
     def bypass_fx(track_index: int, fx_index: int, bypassed: bool) -> dict:
         """Enable or disable an FX plugin on a track."""
         try:
+            invalid = _negative_index(track_index=track_index, fx_index=fx_index)
+            if invalid:
+                return {"success": False, "error": invalid}
             project = get_project()
             track = project.tracks[track_index]
             fx = track.fxs[fx_index]
@@ -149,6 +201,9 @@ def register_tools(mcp):
     def load_fx_preset(track_index: int, fx_index: int, preset_name: str) -> dict:
         """Load a saved preset by name for an FX plugin."""
         try:
+            invalid = _negative_index(track_index=track_index, fx_index=fx_index)
+            if invalid:
+                return {"success": False, "error": invalid}
             project = get_project()
             track = project.tracks[track_index]
             fx = track.fxs[fx_index]

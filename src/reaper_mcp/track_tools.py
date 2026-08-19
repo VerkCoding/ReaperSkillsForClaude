@@ -135,11 +135,16 @@ def register_tools(mcp):
             items = []
             for i in range(track.n_items):
                 item = track.items[i]
+                # Reapy's Item exposes no name attribute. The name REAPER shows for an
+                # item belongs to its active take, and an item can carry no takes at
+                # all. Reading item.name raised AttributeError for every track holding
+                # media, which made this tool unusable on any populated project.
+                take = item.active_take if item.n_takes else None
                 items.append({
                     "index": i,
                     "position": item.position,
                     "length": item.length,
-                    "name": item.name,
+                    "name": take.name if take is not None else "",
                 })
 
             return {

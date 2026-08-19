@@ -4,6 +4,7 @@ import reapy
 from reapy import reascript_api as RPR
 
 from reaper_mcp.connection import get_project
+from reaper_mcp.units import project_tempo
 
 logger = logging.getLogger("reaper_mcp.midi_tools")
 
@@ -45,7 +46,12 @@ NOTE_TO_NUMBER = {
 
 
 def _parse_chord(chord_str: str):
-    """Returns intervals and root semitone to calculate MIDI note numbers from a chord string."""
+    """Returns intervals and root semitone to calculate MIDI note numbers from a chord string.
+
+    Raises ValueError when the root or the chord type is unrecognised. Falling back
+    to a default turns a typo into a C major triad that sounds plausible and is
+    silently wrong.
+    """
     chord_str = chord_str.strip()
     if len(chord_str) >= 2 and chord_str[1] in ("#", "b"):
         root = chord_str[:2]
@@ -53,9 +59,38 @@ def _parse_chord(chord_str: str):
     else:
         root = chord_str[:1]
         chord_type = chord_str[1:] or "maj"
-    intervals = CHORD_TYPES.get(chord_type, CHORD_TYPES["maj"])
-    root_num = NOTE_TO_NUMBER.get(root, 0)
-    return intervals, root_num
+    if root not in NOTE_TO_NUMBER:
+        raise ValueError("unknown root note '%s'" % root)
+    if chord_type not in CHORD_TYPES:
+        raise ValueError("unknown chord type '%s'" % chord_type)
+    return CHORD_TYPES[chord_type], NOTE_TO_NUMBER[root]
+
+
+def _item_index(track, item) -> int:
+    """Return the index REAPER uses for an item on its track.
+
+    Items are ordered by position, so a newly added item is last only when it starts
+    after every existing one. Reporting n_items - 1 otherwise names a different item,
+    and notes addressed to that index land in the wrong place.
+    """
+    for i in range(track.n_items):
+        if track.items[i].id == item.id:
+            return i
+    return track.n_items - 1
+
+
+def _out_of_range(**values) -> str:
+    """Return a message naming the first value outside its MIDI range, or "".
+
+    MIDI stores these fields in seven bits, so REAPER silently keeps the low bits of
+    anything larger: a pitch of 200 becomes 72 and a velocity of 300 becomes 44.
+    """
+    limits = {"pitch": (0, 127), "velocity": (0, 127), "channel": (0, 15)}
+    for name, value in values.items():
+        low, high = limits[name]
+        if not low <= value <= high:
+            return "%s must be %d-%d, got %s" % (name, low, high, value)
+    return ""
 
 
 def register_tools(mcp):
@@ -64,14 +99,15 @@ def register_tools(mcp):
     def create_midi_item(track_index: int, start_position: float, length: float) -> dict:
         """Creates an empty MIDI item to provide a container for MIDI note insertion."""
         try:
+            if length <= 0:
+                return {"success": False, "error": f"length must be positive, got {length}"}
             project = get_project()
             track = project.tracks[track_index]
             item = track.add_midi_item(start_position, start_position + length)
-            take = item.active_take
             return {
                 "success": True,
                 "item_id": item.id,
-                "item_index": track.n_items - 1,
+                "item_index": _item_index(track, item),
                 "position": item.position,
                 "length": item.length,
                 "track_index": track_index,
@@ -92,6 +128,11 @@ def register_tools(mcp):
     ) -> dict:
         """Inserts a MIDI note event into a specified item. Provides direct access to individual note properties."""
         try:
+            invalid = _out_of_range(pitch=pitch, velocity=velocity, channel=channel)
+            if invalid:
+                return {"success": False, "error": invalid}
+            if length <= 0:
+                return {"success": False, "error": f"length must be positive, got {length}"}
             project = get_project()
             track = project.tracks[track_index]
             item = track.items[item_index]
@@ -130,8 +171,29 @@ def register_tools(mcp):
         try:
             project = get_project()
             track = project.tracks[track_index]
-            chord_list = [c.strip() for c in chords.split(",")]
-            seconds_per_beat = 60.0 / project.bpm
+
+            if beats_per_chord <= 0:
+                return {
+                    "success": False,
+                    "error": f"beats_per_chord must be positive, got {beats_per_chord}",
+                }
+            chord_list = [c.strip() for c in chords.split(",") if c.strip()]
+            if not chord_list:
+                return {"success": False, "error": "chords must name at least one chord"}
+
+            # Every chord is parsed before the item exists. Parsing inside the write
+            # loop left a half-filled item behind when a name did not resolve.
+            parsed = []
+            for chord_str in chord_list:
+                try:
+                    intervals, root_num = _parse_chord(chord_str)
+                except ValueError as e:
+                    return {"success": False, "error": f"chord '{chord_str}': {e}"}
+                parsed.append((chord_str, intervals, root_num))
+
+            # project_tempo reads quarter-note BPM. Reapy's Project.bpm reports the
+            # denominator-scaled setting, which halved every duration in x/8.
+            seconds_per_beat = 60.0 / project_tempo()
             chord_length = seconds_per_beat * beats_per_chord
             total_length = chord_length * len(chord_list)
 
@@ -139,30 +201,27 @@ def register_tools(mcp):
             take = item.active_take
             added_chords = []
 
-            for i, chord_str in enumerate(chord_list):
-                try:
-                    intervals, root_num = _parse_chord(chord_str)
-                    chord_start = i * chord_length
-                    for interval in intervals:
-                        note_num = 60 + root_num + interval
-                        take.add_note(
-                            start=chord_start,
-                            end=chord_start + chord_length * 0.95,
-                            pitch=note_num,
-                            velocity=80,
-                            channel=0,
-                        )
-                    added_chords.append({
-                        "chord": chord_str,
-                        "position": chord_start,
-                        "length": chord_length,
-                    })
-                except Exception as e:
-                    logger.warning(f"Skipping chord '{chord_str}': {e}")
+            for i, (chord_str, intervals, root_num) in enumerate(parsed):
+                chord_start = i * chord_length
+                for interval in intervals:
+                    note_num = 60 + root_num + interval
+                    take.add_note(
+                        start=chord_start,
+                        end=chord_start + chord_length * 0.95,
+                        pitch=note_num,
+                        velocity=80,
+                        channel=0,
+                    )
+                added_chords.append({
+                    "chord": chord_str,
+                    "position": chord_start,
+                    "length": chord_length,
+                })
 
             return {
                 "success": True,
                 "item_id": item.id,
+                "item_index": _item_index(track, item),
                 "chords": added_chords,
                 "start_position": start_position,
                 "total_length": total_length,
@@ -183,13 +242,26 @@ def register_tools(mcp):
         try:
             project = get_project()
             track = project.tracks[track_index]
-            seconds_per_beat = 60.0 / project.bpm
+
+            # Validated before the item is created. An empty pattern previously
+            # divided by zero after the item had already been added to the track.
+            if not pattern:
+                return {"success": False, "error": "pattern must contain at least one step"}
+            if beats <= 0:
+                return {"success": False, "error": f"beats must be positive, got {beats}"}
+            if repeats < 1:
+                return {"success": False, "error": f"repeats must be at least 1, got {repeats}"}
+
+            # project_tempo reads quarter-note BPM. Reapy's Project.bpm reports the
+            # denominator-scaled setting, which halved every duration in x/8.
+            seconds_per_beat = 60.0 / project_tempo()
             pattern_length = seconds_per_beat * beats
             total_length = pattern_length * repeats
 
             item = track.add_midi_item(start_position, start_position + total_length)
             take = item.active_take
             time_per_step = pattern_length / len(pattern)
+            notes_placed = 0
 
             for repeat in range(repeats):
                 offset = repeat * pattern_length
@@ -203,10 +275,13 @@ def register_tools(mcp):
                             velocity=100,
                             channel=9,
                         )
+                        notes_placed += 1
 
             return {
                 "success": True,
                 "item_id": item.id,
+                "item_index": _item_index(track, item),
+                "notes_placed": notes_placed,
                 "pattern": pattern,
                 "repeats": repeats,
                 "start_position": start_position,
