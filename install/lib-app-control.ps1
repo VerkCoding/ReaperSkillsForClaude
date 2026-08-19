@@ -238,7 +238,7 @@ function Request-AppClosed {
                 if ($sweep -eq 1) {
                     Write-Warn2 "$Label did not close. Terminating ($($doomed.Count) process(es))."
                 } else {
-                    Write-Info "Sweep $sweep: $($doomed.Count) processes running."
+                    Write-Info "Sweep ${sweep}: $($doomed.Count) processes running."
                 }
 
                 foreach ($p in $doomed) {
@@ -355,7 +355,10 @@ function Get-AppList {
 
     @(
         # Microsoft.VCRedist is required because python extensions (e.g., soxr via librosa) require the C++ runtime.
-        [pscustomobject]@{ Id = 'Microsoft.VCRedist.2015+.x64'; Name = 'Visual C++ runtime'; Safe = $true; Custom = $null }
+        # Listed first so the runtime is present before Python and before the server self-test that loads those extensions.
+        [pscustomobject]@{ Id = 'Microsoft.VCRedist.2015+.x64'; Name = 'Visual C++ runtime (x64)'; Safe = $true; Custom = $null }
+        # The x86 runtime is retained for potential 32-bit integrations. It is inexpensive and keeps the offline cache complete.
+        [pscustomobject]@{ Id = 'Microsoft.VCRedist.2015+.x86'; Name = 'Visual C++ runtime (x86)'; Safe = $true; Custom = $null }
         [pscustomobject]@{ Id = 'Python.Python.3.12';   Name = 'Python 3.12';     Safe = $false; Custom = $PythonCustom }
         [pscustomobject]@{ Id = 'Git.Git';              Name = 'Git';             Safe = $false; Custom = $null }
         [pscustomobject]@{ Id = 'Cockos.REAPER';        Name = 'REAPER';          Safe = $true;  Custom = $null }
@@ -377,6 +380,10 @@ function Test-AppPresent {
         'Microsoft.VCRedist.2015+.x64' {
             # Validates the presence of msvcp140.dll, as the runtime may be installed via various methods.
             return (Test-Path (Join-Path $env:SystemRoot 'System32\msvcp140.dll'))
+        }
+        'Microsoft.VCRedist.2015+.x86' {
+            # The 32-bit runtime lands in SysWOW64 on 64-bit Windows.
+            return (Test-Path (Join-Path $env:SystemRoot 'SysWOW64\msvcp140.dll'))
         }
         'Cockos.REAPER'  { return [bool](Get-ReaperExe) }
         'Git.Git'        { return [bool](Get-Command git -ErrorAction SilentlyContinue) }

@@ -1,5 +1,7 @@
 @echo off
-setlocal
+rem  Delayed expansion keeps stray quotes in pasted input from breaking the
+rem  menu comparisons below. No literal ! or ^ appears in this file.
+setlocal EnableDelayedExpansion
 chcp 65001 >nul
 title REAPER for Claude
 
@@ -64,13 +66,14 @@ if not defined CHOICE goto no_input
 set "EMPTIES=0"
 
 rem  Prevents syntax errors during evaluation by discarding unexpected input
-rem  length or trailing characters from pasted input.
-set "CHOICE=%CHOICE:~0,1%"
+rem  length or trailing characters from pasted input. Delayed expansion is used
+rem  so that a pasted quote is compared as data rather than parsed as syntax.
+set "CHOICE=!CHOICE:~0,1!"
 
-if "%CHOICE%"=="1" goto install
-if "%CHOICE%"=="2" goto revert
-if "%CHOICE%"=="3" goto cache
-if "%CHOICE%"=="0" goto quit
+if "!CHOICE!"=="1" goto install
+if "!CHOICE!"=="2" goto revert
+if "!CHOICE!"=="3" goto cache
+if "!CHOICE!"=="0" goto quit
 goto menu
 
 :no_input
@@ -111,25 +114,11 @@ rem  Prevents displaying a success message if the underlying PowerShell script
 rem  encountered failures.
 set "RC=%ERRORLEVEL%"
 
-rem ---------------------------------------------------------------------------
-rem  Installs the Visual C++ runtime to fulfill dependencies for compiled
-rem  Python wheels (e.g., librosa, soxr), which require msvcp140.dll.
-rem  Windows does not include this DLL by default.
-rem  Both x64 and x86 architectures are included to support existing 64-bit
-rem  requirements and potential future 32-bit integrations.
-rem  Execution is placed after capturing the previous script's exit code to
-rem  preserve the error state. It includes a winget availability check to
-rem  prevent execution errors if the package manager installation failed.
-rem ---------------------------------------------------------------------------
-where winget >nul 2>&1
-if errorlevel 1 goto after_vcredist
-
-echo.
-echo   Visual C++ runtime (x64 and x86)...
-winget install -e --id Microsoft.VCRedist.2015+.x64 --source winget --accept-package-agreements --accept-source-agreements
-winget install -e --id Microsoft.VCRedist.2015+.x86 --source winget --accept-package-agreements --accept-source-agreements
-
-:after_vcredist
+rem  The Visual C++ runtime (x64 and x86) is installed by install-everything.ps1
+rem  as the first entry of Get-AppList, ahead of Python and ahead of the server
+rem  self-test that loads the compiled wheels needing msvcp140.dll. Installing it
+rem  here as well would run too late to help that self-test, and its exit code
+rem  would fall outside the RC captured above.
 
 echo.
 if "%RC%"=="0" goto install_ok

@@ -7,10 +7,13 @@
 # (!/bin/sh) is correctly interpreted in Bash environments without \r characters.
 bin/reaper-bridge text eol=lf
 
-# Enforces CRLF line endings for batch files. LF-only endings can cause cmd.exe 
-# to misinterpret labels and goto statements, leading to execution failures.
-*.bat text eol=crlf
-*.cmd text eol=crlf
+# Batch files are stored with CRLF bytes and excluded from normalization (-text)
+# rather than declared "text eol=crlf". LF-only endings can cause cmd.exe to
+# misinterpret labels and goto statements, and "eol=crlf" only applies on
+# checkout: git archive, which produces GitHub's "Download ZIP", ignores it and
+# would ship an LF-only launcher. Storing the CRLF bytes protects both routes.
+*.bat -text
+*.cmd -text
 
 # Enforces CRLF line endings for PowerShell scripts to align with Windows defaults
 # and maintain uniform diffs across contributors.

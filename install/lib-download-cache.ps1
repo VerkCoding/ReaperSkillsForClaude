@@ -113,12 +113,6 @@ function Save-ToCache {
     }
 }
 
-function Get-BootstrapSpec {
-    <# Retrieves a bootstrap file definition by name to supply parameters for individual downloads. #>
-    param([string]$Name)
-    $RfcBootstrapFiles | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
-}
-
 function Get-RemoteFile {
     <# Downloads a file and validates its size. Includes retry logic for network instability. Prefers curl.exe over Invoke-WebRequest for performance reasons. Fails if the file is smaller than MinMB to prevent caching error pages. #>
     param([string]$Url, [string]$Path, [double]$MinMB, [int]$Attempts = 3, [int]$TimeoutSec = 600)
