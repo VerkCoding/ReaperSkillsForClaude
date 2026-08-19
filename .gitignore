@@ -7,19 +7,16 @@ dist/
 .venv/
 venv/
 
-# Claude / editor
+# Claude / editor / AIs
 *.bak
 .vscode/
 .idea/
+.agents/
 
-# Claude Code writes machine-specific state here, and rewrites settings.json
-# itself when plugin or marketplace commands run - so nothing in it is safe to
-# ship. Install routes are documented in README.md instead.
+# Excludes Claude Code machine-specific state and auto-generated settings modifications.
 .claude/
 
-# Installer downloads, kept so a re-run does not fetch 300 MB again.
-# Hundreds of megabytes of vendor binaries - never ours to commit, and the
-# whole point is that it is machine-local. install\lib-download-cache.ps1 owns it.
+# Excludes the installer download cache to avoid committing large vendor binaries.
 downloadCache/
 
 # OS

@@ -1,246 +1,240 @@
 # Recording and intake
 
-## 1. Where this document sits
+## 1. Document sequence
 
-Three documents run in sequence. Each has an entry condition and a written handoff:
+Three documents are executed sequentially. Each requires an entry condition and a written output:
 
-| Document | Answers | Hands off |
+| Document | Input | Output |
 |---|---|---|
-| **audio-recording** (this one) | Can this material be mixed, and what is the mix aiming at? | Intake record and brief |
-| **[audio-mixing](./audio-mixing.md)** | Given that material, how is the mix built? | A mix plus its headroom spec |
-| **[audio-mastering](./audio-mastering.md)** | How does that mix become a deliverable? | Master file and deliverable set |
+| **audio-recording** (current) | Assessment of source material and mix requirements | Intake record and project brief |
+| **[audio-mixing](./audio-mixing.md)** | Source material | Mixed audio file and headroom specification |
+| **[audio-mastering](./audio-mastering.md)** | Mixed audio file | Mastered file and deliverable set |
 
-This document does not repeat the transport layer. Calling REAPER, running Lua through the file bridge, reading samples, and avoiding a silent render all live in the `reaper-mcp` skill. Read that when you need to operate something. Read this when you need to know **what to measure and what the number means**.
+This document omits transport layer functions. Instructions for executing REAPER functions, using Lua via the file bridge, reading sample data, and preventing silent renders are located in the `reaper-mcp` skill documentation. Refer to this document for measurement parameters and data interpretation.
 
-### Three evidence tiers
+### Evidence tiers
 
-- **Tier 1**: published specifications, industry standards, verifiable arithmetic, repeatable measurements.
-- **Tier 2**: reasoning built on Tier 1. Most of the diagnostic procedure here is this tier. Nobody proved these; they are simply usable.
-- **Tier 3**: trade convention, numbers passed around the industry, personal taste.
+- **Tier 1**: Published specifications, industry standards, verifiable arithmetic, repeatable measurements.
+- **Tier 2**: Analytical reasoning derived from Tier 1.
+- **Tier 3**: Industry convention, reference values, subjective assessment.
 
-Every numeric threshold below carries its tier. A Tier 3 threshold is a starting point, not a pass/fail standard.
+Every numeric threshold below includes its associated tier. Tier 3 thresholds are baseline values, not definitive standards.
 
-## 2. First principles
+## 2. Operating principles
 
-**Mix quality is capped by source quality.** This is a constraint, not advice. Four kinds of damage survive any mix move: real clipping already written into the file, a noise floor above the quietest musical passage, phase broken at the moment of recording, and a bad performance. Catching them at intake costs minutes. Catching them at mastering costs the session.
+Source quality determines maximum possible mix quality. The following defects remain after mix processing: clipping recorded into the file, noise floor exceeding the minimum signal level, phase cancellation recorded at the source, and performance errors. Identifying these defects during intake requires less time than identifying them during mastering.
 
-**You do not have ears.** Three consequences, all mandatory:
+Subjective auditory assessment is not possible. The following constraints apply:
 
-1. Never write that you heard something. Write what you measured.
-2. Every conclusion traces back to a specific measurement, along with how it was taken.
-3. When the user offers a listening note, that is the most valuable data in the session. Do not nod along. Go find it in the numbers.
+1. Record measured data, not perceived audio.
+2. Base conclusions on specific measurements and the methodology used.
+3. Verify user notes by locating the corresponding metric data.
 
-**Diagnose first, treat second.** Open no plugin before you know what you are treating. An EQ placed because "vocals usually need it" is decoration, not engineering.
+Diagnostic measurement precedes processing. Do not apply processing plugins before identifying the target metric.
 
-## 3. What the measurement tools actually do
+## 3. Measurement tool functionality
 
-This section matters more than it looks. The `analyze_*` tools share a property that leads straight to wrong conclusions:
+The `analyze_*` tools function by rendering the entire project and measuring the master output. They do not measure individual tracks directly.
 
-**Every `analyze_*` tool renders the whole project and measures the master output.** None of them measures a single track. Consequences:
+- To measure a single source: Use `set_track_solo` on the target track, execute the measurement, and remove the solo state. Document original solo and mute states prior to modification, and restore them upon completion.
+- Alternatively, use `render_stems` and measure the resulting files. This tool solos one track per render; the resulting stem includes track-level effects but excludes bus and master processing.
+- Measurement values represent post-FX and post-fader signals. To measure raw audio, bypass track effects prior to measurement and restore them upon completion.
 
-- To measure one source: `set_track_solo` on it, measure, then unsolo. Record the original solo and mute state before touching anything, and put it back exactly.
-- Or `render_stems` and measure each file. Note that this tool solos one track at a time, so a stem carries that track's own FX but **not** bus or master processing.
-- Numbers are always post-FX and post-fader. To measure raw material, bypass the track's FX first, and restore afterwards.
+Tool constraints:
 
-Per-tool limits:
-
-| Tool | Gives | Limit worth knowing |
+| Tool | Output | Functional Limit |
 |---|---|---|
-| `analyze_loudness` | LUFS-I and dBTP per ITU-R BS.1770 | A whole-programme number. Says nothing about which section is loud. |
-| `analyze_frequency_spectrum` | RMS across 7 fixed bands | Too coarse to find a narrow resonance. Use it for overall balance, never to pick an EQ frequency. |
-| `analyze_dynamics` | RMS, peak, crest factor, a reduced DR figure | Crest depends on the measurement window. Comparisons only mean something when the window matches. |
-| `analyze_stereo_field` | mid/side balance, width, L/R correlation | Averaged over the whole programme. A short out-of-phase passage can be averaged away. |
-| `analyze_transients` | up to 100 onsets | Hard ceiling of 100. For a full song, measure over a time selection. |
-| `detect_clipping` | samples at or over 0 dBFS | Sample peak, not true peak. Blind to inter-sample peaks. |
+| `analyze_loudness` | LUFS-I and dBTP per ITU-R BS.1770 | Integrated value for the full programme. Does not identify specific high-amplitude sections. |
+| `analyze_frequency_spectrum` | RMS across 7 fixed bands | Resolution is insufficient for identifying narrow resonances. Use for broad spectral balance assessment. |
+| `analyze_dynamics` | RMS, peak, crest factor, dynamic range | Crest factor is dependent on the measurement window. Comparisons require identical window lengths. |
+| `analyze_stereo_field` | mid/side balance, width, L/R correlation | Averaged over the programme duration. Brief out-of-phase segments may not affect the average significantly. |
+| `analyze_transients` | Up to 100 onsets | Maximum limit of 100 onsets. For extended audio, measure using a specific time selection. |
+| `detect_clipping` | Samples at or exceeding 0 dBFS | Detects sample peaks, not true peaks. Does not detect inter-sample peaks. |
 
-When you need real frequency resolution, a 1/3 octave resonance sweep for instance, use the Lua toolkit in `./audio-measurement.md`. Seven bands cannot locate a resonance peak.
+For high-resolution frequency measurement, such as a 1/3 octave resonance sweep, utilize the Lua toolkit documented in `./audio-measurement.md`.
 
-## 4. The intake record
+## 4. Intake record
 
-Run all eight checks below before anything else. Write the result as a table, one row per source, with a status column: **pass**, **warning**, **blocker**.
+Execute the following checks sequentially. Output a table with one row per source, including a status column with the values: **pass**, **warning**, or **blocker**.
 
 ### 4.1 Technical inventory
 
-Read `get_project_info` and `list_tracks`. For each source file, record sample rate, bit depth, channel count and length.
+Execute `get_project_info` and `list_tracks`. Document the sample rate, bit depth, channel count, and length for each source file.
 
-Three things must agree across the session: sample rate, start point, and speed. A file at the wrong sample rate that the DAW silently converts will play at the right pitch through a sample rate conversion nobody asked for. A file with the wrong start point looks right on screen and is wrong in the audio.
+Sample rate, start point, and playback speed must match across the session. A sample rate mismatch converted silently by the DAW results in altered pitch. An incorrect start point results in asynchronous audio playback.
 
-How to spot a misread sample rate: the length is off by exactly the ratio. A 44.1 kHz file read as 48 kHz is about 8.8 percent shorter and about 1.4 semitones sharp. (Tier 1, this is division.)
+To identify a misread sample rate, calculate the length ratio. A 44.1 kHz file processed as 48 kHz will be approximately 8.8 percent shorter and 1.4 semitones higher in pitch (Tier 1).
 
 ### 4.2 Clipping
 
-`detect_clipping` with each source soloed, or on each rendered stem.
+Execute `detect_clipping` with each source soloed, or on each rendered stem.
 
-Read the result in two layers:
+- **Zero samples at 0 dBFS**: Inconclusive. The signal may have clipped prior to digital conversion and subsequently been reduced in gain, resulting in flat-topped waveforms below 0 dBFS.
+- **More than zero samples at 0 dBFS**: Digital clipping is present. Document the number of consecutive samples at 0 dBFS. Runs of tens of samples indicate unrecoverable flat-topped waveforms.
 
-- **Zero samples at 0 dBFS**: proves nothing yet. The file may have clipped at the preamp or the converter and then been turned down, in which case the peak sits below 0 while the waveform is already flat-topped.
-- **More than zero samples at 0 dBFS**: digital clipping is present. Count consecutive samples. A few isolated ones are usually harmless; runs of tens of samples are flat-topped waveform and do not come back.
-
-To catch clipping that was turned down afterwards, compare crest factor against the typical range for that source type (section 4.5). A kick drum with 6 dB of crest was almost certainly clipped somewhere before it reached the file. (Tier 2.)
+To identify gain-reduced clipping, compare the crest factor against the reference range for the source type (section 4.5). For example, a kick drum with a 6 dB crest factor indicates prior clipping (Tier 2).
 
 ### 4.3 Peak and true peak
 
-`analyze_loudness` gives dBTP. On raw material this is not a pass/fail criterion. It is input to the headroom budget.
+`analyze_loudness` provides the dBTP value. For raw material, this value is used to calculate the headroom budget.
 
-Worth stating: **true peak above sample peak is normal and not a fault.** A large gap, a few dB, tells you the signal carries a lot of high frequency content and will need more care at the final limiter. (Tier 1 for the definition, Tier 2 for reading it.)
+True peak values exceeding sample peak values are standard. A difference of several dB indicates high-frequency content requiring management at the final limiter stage (Tier 1, Tier 2).
 
 ### 4.4 Noise floor
 
-Pick a window where the source is not playing, set a time selection, and measure. The number you want is the RMS of that silent window.
+Set a time selection over a section containing no primary signal, and measure the RMS value. This value represents the noise floor RMS.
 
-The usable dynamic range of a source is playing RMS minus silent RMS. This number decides what compression and automation are allowed to do: every move that lifts the quiet parts lifts the noise floor with them, and that ratio does not change.
+The usable dynamic range equals the signal RMS minus the noise floor RMS. This value dictates allowable compression and upward automation limits, as increasing signal gain increases noise floor gain proportionally.
 
-Orienting thresholds (Tier 3, depends on genre and arrangement):
+Reference thresholds (Tier 3):
 
-- Above 60 dB: the noise floor is barely a consideration.
-- 40 to 60 dB: usable, but aggressive upward automation will expose the floor.
-- Below 40 dB: the noise floor is a real constraint. Tell the user before mixing, rather than letting it surface at mastering.
+- Above 60 dB: Noise floor impact is negligible.
+- 40 to 60 dB: Usable dynamic range. Upward automation will increase noise floor audibility.
+- Below 40 dB: Noise floor restricts processing. Notify the user prior to mixing.
 
-Classify the noise too, because the treatments differ: broadband hiss from a preamp, sharp peaks at the mains frequency and its harmonics (hum, 50 or 60 Hz), or bleed from another source. `analyze_frequency_spectrum` on the silent window separates the second group, because it concentrates energy in the bass bands.
+Identify the noise type to determine treatment: broadband hiss, discrete harmonics (e.g., 50 or 60 Hz hum), or cross-talk (bleed). Execute `analyze_frequency_spectrum` on the silent section to identify low-frequency harmonic concentration.
 
 ### 4.5 Crest factor
 
-`analyze_dynamics` on each soloed source, measured over a representative passage rather than the whole song.
+Execute `analyze_dynamics` on each soloed source over a representative section.
 
-The ranges below are **Tier 3**. They are orienting numbers that swing widely with microphone, distance, room and performance. Use them to spot anomalies, never to grade:
+The following ranges are reference values (Tier 3), dependent on hardware, environment, and performance.
 
-| Source | Typical crest | Lower means | Higher means |
+| Source | Typical crest | Lower value indicates | Higher value indicates |
 |---|---|---|---|
-| Close-miked kick, snare | 15-20 dB | compressed or clipped before the file | distant miking, or an overzealous gate |
-| Overheads, room | 12-18 dB | already compressed | dead room, or close placement |
-| Sustained vocal | 10-15 dB | compressed on the way in | very wide performance range, needs heavy automation |
-| Bass DI | 8-14 dB | compressed or limited | uneven picking |
-| Amplified guitar | 8-14 dB | the amp compresses by nature | recorded direct, no amp |
-| Unmastered mix | 12-18 dB | a limiter is already on the master | sparse arrangement |
+| Close-miked kick, snare | 15-20 dB | Prior compression or clipping | Distant microphone placement, aggressive gating |
+| Overheads, room | 12-18 dB | Prior compression | Non-reflective room, close microphone placement |
+| Sustained vocal | 10-15 dB | Prior compression | Wide dynamic range |
+| Bass DI | 8-14 dB | Prior compression or limiting | Inconsistent amplitude |
+| Amplified guitar | 8-14 dB | Amplifier compression | Direct injection recording |
+| Unmastered mix | 12-18 dB | Master bus limiting | Sparse arrangement |
 
-A measurement outside the range is a question to answer, not a fault to fix. Log it with a hypothesis.
+Document values outside these ranges and formulate a hypothesis regarding the cause.
 
-### 4.6 Phase correlation between microphones on one source
+### 4.6 Phase correlation between multiple microphones on a single source
 
-Applies wherever one source was captured by more than one microphone: a drum kit, a guitar with two mics, DI plus amp, an overhead pair.
+This applies to sources recorded with multiple microphones.
 
-Solo exactly the two tracks in question, run `analyze_stereo_field`, and read L/R correlation:
+Solo the relevant tracks, execute `analyze_stereo_field`, and document the L/R correlation:
 
-- Near **+1**: the two signals are nearly identical. For a stereo pair that means a narrow image; for two mics on one source it is usually normal.
-- Near **0**: uncorrelated. For an overhead pair this is a wide image and fine.
-- **Negative**: the signals cancel. Stop here. Sustained negative correlation in the bass means the mix loses its low end when summed to mono.
+- **Near +1**: Signals are highly correlated. Standard for multiple microphones on a single source; indicates a narrow stereo image for a stereo pair.
+- **Near 0**: Uncorrelated signals. Standard for spaced overhead pairs.
+- **Negative**: Signals are inversely correlated, causing phase cancellation. Sustained negative correlation in low frequencies results in bass frequency reduction when summed to mono.
 
-Mind the tool's limit: the number is an average over the passage. A short out-of-phase section can be averaged away. When in doubt, measure several short time selections instead of one pass over the whole song.
+The measurement is an average over the selection. Measure multiple short time selections to prevent averaging out brief negative correlation periods.
 
-A cheap and effective cross-check: measure the combined level with both tracks up, then compare against each track alone. Two in-phase signals sum toward +6 dB; two out-of-phase signals produce a level below either one alone. (Tier 1, this is amplitude addition.)
+To verify, measure the combined RMS level of both tracks, and compare to the RMS of each track individually. Positively correlated signals sum toward +6 dB; negatively correlated signals sum to a level below the individual tracks (Tier 1).
 
 ### 4.7 Timing offset
 
-When two microphones capture one source at different distances, they are offset by the path difference divided by the speed of sound. At 20 degrees C sound travels about 343 m per second, so **1 ms corresponds to about 34.3 cm**. (Tier 1.)
+Multiple microphones on a single source will have a timing offset equal to the distance difference divided by the speed of sound. At 20 degrees Celsius, sound velocity is approximately 343 m/s, yielding a 1 ms offset per 34.3 cm (Tier 1).
 
-That offset produces comb filtering when the two are summed: for delay t, the nulls sit at f = (2n+1) / (2t). A 1 ms offset puts the first null at 500 Hz. (Tier 1.)
+This offset causes comb filtering when summed. For delay time t, nulls occur at f = (2n+1) / (2t). A 1 ms offset produces a primary null at 500 Hz (Tier 1).
 
-How to measure the offset without listening: run `analyze_transients` on each soloed track and compare the onset time of the same hit across the two. The difference is the offset to compensate. For finer resolution, run a cross-correlation over the samples through the file bridge; the method is in the Lua toolkit.
+To measure timing offset: Execute `analyze_transients` on each soloed track and calculate the difference in onset time for a shared transient. For higher precision, utilize the cross-correlation function via the file bridge (refer to the Lua toolkit).
 
-Time alignment itself belongs to [audio-mixing](./audio-mixing.md), in the repair section. Here you only measure it and write the number down.
+Document the offset value. Alignment procedures are detailed in [audio-mixing](./audio-mixing.md).
 
 ### 4.8 DC offset, bleed, head and tail silence
 
-Three remaining checks, one line each:
-
-- **DC offset**: a sample mean meaningfully away from zero. It eats headroom and makes a limiter work asymmetrically. Measure through the file bridge; no MCP tool covers it.
-- **Bleed**: measure a track's level during the passages where its own instrument is not playing. Bleed is not a fault, but it decides whether a gate is usable at all, and it limits EQ freedom, because EQ on a track also EQs the bleed.
-- **Head and tail silence**: record it, because it affects the start point and the fades at delivery.
+- **DC offset**: A sample mean non-zero value. It reduces available headroom and causes asymmetrical limiting. Measure using the file bridge.
+- **Bleed**: Track RMS level during sections where the primary source is inactive. Limits gate functionality and ties EQ changes to the bleed signal.
+- **Head and tail silence**: Document durations to determine start points and delivery fade lengths.
 
 ### 4.9 Record format
 
-Output a table, one row per source. The last column is a verdict, one of three: **pass**, **warning with the concrete consequence**, **blocker with the reason and the action needed**.
+Output a table with one row per source. Include a status column indicating **pass**, **warning (with consequence)**, or **blocker (with required action)**.
 
-One presentation rule: **do not list a number that does not lead to a decision.** A three line record of warnings is worth more than three pages of unremarkable measurements.
+Omit measurements that do not require an action or decision.
 
-## 5. Fixable and not fixable
+## 5. Correction limits
 
-This table exists so you can say no. Most of the time wasted in a session goes into treating something that should have been sent back. (Whole table is Tier 2.)
+The following table categorizes defects by correctability (Tier 2).
 
-| Measured symptom | Fixable in the mix? | The right move |
+| Measured condition | Correctable in mix | Required action |
 |---|---|---|
-| A few isolated samples at 0 dBFS | Yes | Lower clip gain, note it, move on |
-| Long runs of flat-topped samples | No | Report it and ask for a re-record or another take |
-| Unusually low crest on a close-miked source | Partly | The material arrived compressed. More compression will clamp it further. Reset expectations. |
-| Usable dynamic range below 40 dB | Partly | Say up front that upward automation will expose the noise floor |
-| Hum at the mains frequency and its harmonics | Yes | Narrow notch in the repair pass, before anything else |
-| Persistent negative correlation in the bass | Usually | Flip polarity or compensate delay. If it stays negative, it is a mic placement fault and does not fix. |
-| Timing offset between mics on one source | Yes | Compensate by the number measured in 4.7 |
-| Wrong pitch or timing in the performance | Out of scope | This is a human decision, not an algorithmic one. Ask. |
-| A source that is not what it claims, for instance a kick with its energy at 3 kHz and 35 dB of crest | No | That is a trigger click, not a drum. Say so plainly and describe the alternative. |
+| Isolated samples at 0 dBFS | Yes | Reduce clip gain, document, proceed |
+| Consecutive flat-topped samples | No | Report defect, request rerecording |
+| Low crest factor on close-miked source | Partial | Document prior compression, adjust processing expectations |
+| Usable dynamic range below 40 dB | Partial | Report noise floor limits on upward automation |
+| Hum at mains frequency and harmonics | Yes | Apply narrow notch EQ |
+| Persistent negative correlation in bass frequencies | Usually | Invert polarity or adjust delay. If negative correlation persists, defect is uncorrectable. |
+| Timing offset between microphones | Yes | Apply delay compensation based on section 4.7 data |
+| Pitch or timing performance errors | N/A | Request user instruction |
+| Source characteristics do not match label (e.g., high frequency transient labeled as drum body) | No | Report discrepancy and describe actual characteristics |
 
-The last row is the general rule: **when a measurement proves something cannot be fixed with a knob, say so rather than quietly pretending to have treated it.**
+Report uncorrectable defects instead of attempting ineffective processing.
 
-## 6. Gain staging while recording, in a floating-point engine
+## 6. Gain staging in floating-point systems
 
-This is where received wisdom and technical reality diverge most, so it needs stating precisely.
+REAPER utilizes a floating-point mix engine. Amplitude values exceeding 0 dBFS within the engine are retained; reducing the fader level restores the waveform. The 32-bit float range exceeds standard audio dynamic range limits (Tier 1).
 
-**What is unlimited is not the problem.** REAPER's mix engine runs in floating point. A channel exceeding 0 dBFS inside the engine is not destroyed; pull the fader down and the signal returns intact. The representable range of 32 bit float is wider than any musical situation. (Tier 1.)
+Clipping occurs at specific points:
 
-**What is limited is the problem.** Three places still clip for real:
+1. **Analog components and ADCs**: Preamplifiers and analog-to-digital converters have fixed maximum input levels. Clipping at this stage is permanently recorded.
+2. **Fixed-point and analog-modeled plugins**: Certain plugins operate with a calibrated reference level (e.g., equivalent to 0 VU). Input signals exceeding this level will generate distortion.
+3. **Integer format rendering**: Output rendering to integer formats will apply hard clipping at 0 dBFS.
 
-1. **Preamp and converter.** These are analog and conversion circuits with hard ceilings. No file format rescues a signal that clipped before it became numbers. A 32 bit float recorder is no exception: the float part sits after the ADC, and the ADC and preamp still have ceilings.
-2. **Fixed-point plugins, and plugins modelling analog gear.** Many of these have a calibrated operating point around the equivalent of 0 VU, and feeding them much hotter produces distortion you did not choose.
-3. **Rendering to an integer format.** This is where everything above 0 dBFS clips for real.
+Set input gain to optimize signal-to-noise ratio within the analog hardware's operating range. Calibration standards typically set the analog reference at -18 to -20 dBFS (Tier 1). Target peak levels of -18 to -12 dBFS are reference values (Tier 3) dependent on specific hardware calibration.
 
-**The practical conclusion**: the target level while recording is not about preserving headroom in the file, it is about placing the signal in the good operating range of the analog hardware. The number usually quoted is a peak around -18 to -12 dBFS, and it descends from calibration standards that place the analog reference at -18 or -20 dBFS. The calibration standard itself is Tier 1; "record at -18" as a rule of thumb is **Tier 3**, and it moves with how a specific device is calibrated.
+Measure peak levels during the highest amplitude section and set gain to prevent 0 dBFS exceedance at the ADC (Tier 1).
 
-What is actually worth doing, and this is Tier 1: **measure, do not guess.** Have the source play its loudest passage, read the peak, and set gain so the loudest part still clears 0 dBFS by enough for one surprise.
+## 7. Recording procedure
 
-## 7. When you are actually driving the recording
+If executing `start_recording`, verify the following conditions:
 
-If the session really uses `start_recording`, run this list first, because each item is a familiar way to lose a take:
+1. **Signal path**: Verify track input assignment and record-arm status using `get_track_info`.
+2. **Format**: Verify project sample rate and bit depth match delivery specifications to avoid unnecessary conversion.
+3. **Solo state**: Verify all tracks are unsoloed.
+4. **Monitoring latency**: Delay exceeding 10 ms (Tier 3) may impede performance. Bypass or offline plugins causing latency. Bypassing retains delay compensation; offlining removes it.
+5. **File nomenclature**: Assign track names prior to recording to set output file names.
+6. **Test recording**: Record a brief test segment and execute checks 4.2 through 4.5.
 
-1. **Signal path**: confirm the track input points at the right port and the track is record armed. Check with `get_track_info`, not by assumption.
-2. **Project sample rate and bit depth** already match the final delivery target. Changing after recording adds an unnecessary conversion.
-3. **No track left soloed** from an earlier session. This is the number one cause of "everything is silent".
-4. **Monitoring latency**: the threshold at which performers stop being able to play is usually quoted around 10 ms. That number is **Tier 3**, trade convention rather than established research, and a drummer is far more sensitive than a pad player. If the monitoring chain carries plugins with large compensation, bypass or offline them before recording. Bypass keeps the latency; only offlining gives it back.
-5. **Disk space and take names**: name the tracks before recording, because file names come from track names.
-6. **Record a short test** and run 4.2 through 4.5 on it. Catching a gain error after ten seconds is cheaper than after three hours.
+Execute the full intake record on all newly recorded material.
 
-Afterwards, run the full intake record on the material you just recorded. Material you recorded yourself is not exempt.
+## 8. Project brief
 
-## 8. The brief: the one thing measurement cannot replace
+A defined objective is required for mixing. Without an objective, processing defaults to standard parameters.
 
-No mix is right in the absolute. A mix is right for an intention. This is a real constraint on the work here: **without a stated intention, every choice you make is just a default.**
+Require the following parameters prior to mixing:
 
-Four things are needed before mixing starts:
+1. **Delivery format**: Determines loudness and true peak targets in [audio-mastering](./audio-mastering.md).
+2. **Reference tracks**: Provides measurable spectral and dynamic reference points.
+3. **Aesthetic parameters**: Defines spatial and tonal characteristics.
+4. **Constraints**: Mandatory processing limits (e.g., no pitch correction, specific duration, mono compatibility).
 
-1. **Delivery target.** Streaming, broadcast, film, club, or an internal reference. It sets the loudness target and true peak ceiling in [audio-mastering](./audio-mastering.md).
-2. **One or two reference tracks.** Not to imitate, but to have a measurable frame. With a reference file, every statement about spectral balance turns from an opinion into a comparison.
-3. **Tone and manner, stated in one sentence.** Close and dry, or distant and wide. Clean, or deliberately dirty. Built around the vocal, or around the groove.
-4. **Hard constraints.** For example: keep the performance as is, no pitch correction, keep the length, must survive mono summing.
+If parameters are not provided, document assumed parameters and proceed. Include the assumption list in the output document.
 
-**When the brief is missing, do not stop and wait.** Write down the assumptions you are working under, carry on, and put that list at the top of the handoff. A written assumption is corrected in one sentence; an unstated one costs a remix.
+Standard defaults (Tier 3): Streaming format, mono compatible, no performance correction, original length retained.
 
-Reasonable defaults with no information at all (Tier 3, and label them as defaults): streaming target, must sum to mono, performance untouched, length unchanged.
+## 9. Handoff specification
 
-## 9. Handoff to mixing
+Provide the following data to [audio-mixing](./audio-mixing.md):
 
-[audio-mixing](./audio-mixing.md) needs exactly six things. If one is missing, say it is missing rather than leaving it blank:
+1. **Intake table**: Includes all warnings and blockers.
+2. **Source list**: Track classifications and multi-microphone groupings.
+3. **Timing offsets**: Measured delays between grouped microphones, in samples and milliseconds.
+4. **Usable dynamic range**: Value per source, and identification of sources with restrictive noise floors.
+5. **Project brief**: Or the documented assumption list.
+6. **Session state**: Initial track count, solo/mute states, and FX bypass states.
 
-1. **The intake table**, including every warning and blocker.
-2. **The source list** with classification and grouping, meaning which mics belong to one source.
-3. **Measured timing offsets** between mics on one source, in samples and in ms.
-4. **Usable dynamic range** per source, and the list of sources with a meaningful noise floor.
-5. **The brief**, or the assumption list standing in for it.
-6. **Initial session state**: track count, which tracks were soloed or muted, which FX were enabled. This is the baseline for restoring the session.
+If a data point is missing, state its absence explicitly.
 
-## 10. Common traps
+## 10. Common error states
 
 | Symptom | Cause |
 |---|---|
-| Every source measures the same loudness | Measuring the whole project instead of soloing each track |
-| Soloing a track changes nothing in the numbers | Another track was already soloed; solo is not exclusive |
-| Good numbers but the render is silent | Media items are offline; see `reaper-mcp` |
-| The same source gives two different crest figures | The two measurements used different time windows |
-| Phase correlation looks fine but mono summing still loses bass | The correlation figure is a whole-song average; measure per section |
-| Plugin bypassed but the latency is still there | Bypass preserves PDC; you have to offline it |
-| Noise floor measures implausibly low | The measurement window landed on a passage edited to digital silence |
+| Uniform loudness across sources | Project output measured instead of soloed track |
+| Unresponsive solo state | Non-exclusive solo applied over existing solo |
+| Silent render output | Media items offline |
+| Inconsistent crest factor on same source | Differing measurement time windows |
+| Positive correlation but mono bass loss | Averaged correlation value obscures section-specific negative correlation |
+| Latency remains with bypassed plugin | Bypass maintains delay compensation; plugin must be offlined |
+| RMS noise floor approaches zero | Measurement window overlaps digital silence |
 
-## 11. Before leaving the session
+## 11. Session exit protocol
 
-- Restore every solo, mute and bypass exactly as received.
-- Delete any temporary analysis tracks. Compare the track count against the number recorded in section 9.6.
-- Restore the time selection and the render settings.
-- **Do not save the project.** The user's session is often in an unsaved state, and if a plugin failed to load during this session, saving makes that damage permanent. Say that you did not save and let them decide.
+- Restore all solo, mute, and bypass states to original configuration.
+- Delete temporary analysis tracks. Verify track count against section 9 data.
+- Restore time selection and render settings.
+- **Do not save the project.** Saving may commit errors, such as failed plugin loads. Notify the user that the project was not saved.

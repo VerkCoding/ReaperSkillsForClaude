@@ -1,10 +1,8 @@
 # REAPER for Claude - WIP
 
-Claude works inside REAPER as an audio engineer assistant: mixing, mastering, MIDI, FX,
-rendering, and real DSP measurement.
+This project integrates Claude with the REAPER DAW. It provides tools for mixing, mastering, MIDI, FX, rendering, and DSP measurement.
 
-One Claude plugin: three skills and an MCP server with 58 REAPER tools,
-installed the same way on Claude Code, Claude Desktop and claude.ai.
+The integration consists of three agent skills and an MCP server containing 58 REAPER tools. It supports Claude Code, Claude Desktop, and claude.ai.
 
 ```
 You:    Master this to -14 LUFS, keep the transients.
@@ -17,58 +15,52 @@ Claude: [measures the actual loudness, sets the chain, renders, measures again]
 | MCP server, 58 REAPER tools | yes | yes | **no** |
 | Lua file bridge | yes | where shell access exists | **no** |
 
-The web app has no local machine to reach, so a local MCP server cannot exist
-there. That is the browser, not a broken install.
+The claude.ai web application cannot access a local MCP server because it runs in the browser.
 
 ---
 
 ## Install
 
-**Windows.** Everything under the installer is cross-platform. See
-[Porting](DOCS.md#porting).
+**Windows.** The components installed are cross-platform. See
+[Porting](DOCS.md#porting) for other operating systems.
 
-**1.** Clone it:
+**1.** Clone the repository:
 
 ```bash
 git clone https://github.com/VerkCoding/ReaperSkillsForClaude.git
 ```
 
-**2.** Double-click **`RunThisToStart.bat`** and choose **`[1] Install Everything`**.
+**2.** Run **`RunThisToStart.bat`** and select **`[1] Install Everything`**.
 
-It backs up your current settings, installs anything missing, sets up the
-plugin, and checks it works. Takes several minutes. The only thing it needs from
-you is a Claude sign-in, if Claude wasn't already installed.
+The script backs up current settings, installs required dependencies, and configures the plugin. A Claude sign-in is required if it is not already installed on the system.
 
-**3.** Start **REAPER first, then Claude**, and ask:
+**3.** Start **REAPER**, then start **Claude**, and prompt:
 
 > Check the current REAPER project info
 
-If it answers, you're done.
+If the project information is returned, the installation is complete.
 
 > [!NOTE]
-> **If REAPER shows a "ReaScript task control" dialog** saying
+> **If REAPER shows a "ReaScript task control" dialog** stating
 > *"activate_reapy_server.py is running in the background"*, choose **New
-> instance**, never **Terminate instances**. Terminating stops both the server
-> and the bridge, which is why that choice leaves Claude reporting an error.
-> Nothing is broken.
+> instance**. Do not choose **Terminate instances**, as this stops the server
+> and the bridge.
 
-### Something went wrong?
+### Troubleshooting
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install\health-check.ps1
 ```
 
-Every line is `[ok]`, `[warn]` or `[FAIL]`, and each failure carries a fix. Or
-just ask Claude, since the **reaper-core-setup** skill covers all of it.
+The script outputs `[ok]`, `[warn]`, or `[FAIL]` for each step. Fixes are provided for failures. The **reaper-core-setup** skill also contains troubleshooting information.
 
-Full guide, options and internals: **[DOCS.md](DOCS.md)**.
+For additional documentation, see **[DOCS.md](DOCS.md)**.
 
 ---
 
 ## Roadmap
 
-Honest state of things. This works end to end on Windows; the gaps below are
-real and known.
+The plugin currently operates on Windows. The following items remain incomplete:
 
 **Before a wider release**
 
@@ -82,46 +74,32 @@ real and known.
 - [ ] ON GOD FIX EVERY BUG
 - [ ] Linux && MacOS
 
-**Known and deliberate**
+**Known and deliberate limitations**
 
-- Claude Code is installed through winget rather than from the cache. winget
-  extracts it instead of running an installer, and reproducing that bookkeeping
-  to save one download is a bad trade.
-- REAPER and Claude are never reinstalled if already present, so an existing
-  install is never repaired by this. That is on purpose.
+- Claude Code is installed using winget instead of the cache. Winget extracts the package instead of running an installer.
+- The installer skips REAPER and Claude if they are already present on the system. It does not repair existing installations.
 
 ---
 
-## Shout-outs
+## Credits and Dependencies
 
-This plugin stands on three REAPER projects that got there first.
+This plugin uses code and concepts from three other REAPER projects.
 
-**Ideology of: [xDarkzx/Reaper-MCP](https://github.com/xDarkzx/Reaper-MCP)**
-(Apache-2.0). The idea that an AI should reach REAPER through a *broad* tool
-surface rather than a handful of calls: composition, mixing, mastering, QC,
-ReaScript automation, all of it. That ambition set the target here.
+**[xDarkzx/Reaper-MCP](https://github.com/xDarkzx/Reaper-MCP)**
+(Apache-2.0): Provided the concept of exposing a large tool surface (composition, mixing, mastering, QC, ReaScript automation) to the AI.
 
-**Toolkit by: [bonfire-systems/reaper-mcp](https://github.com/bonfire-systems/reaper-mcp)**
-(MIT). The MCP server here is derived from it. The tool surface started as
-theirs, and much of it still is.
+**[bonfire-systems/reaper-mcp](https://github.com/bonfire-systems/reaper-mcp)**
+(MIT): Provided the original MCP server implementation and the initial set of tools.
 
-**Inspired by: [DevWesC/Reaper-Claude-MCP](https://github.com/DevWesC/Reaper-Claude-MCP)**
-(MIT). The Claude-and-REAPER pairing, and the PowerShell-installer approach to
-making it actually land on a Windows machine.
+**[DevWesC/Reaper-Claude-MCP](https://github.com/DevWesC/Reaper-Claude-MCP)**
+(MIT): Provided the PowerShell installer approach for Windows.
 
-And the ground everything stands on:
+Other dependencies:
 
-**[python-reapy](https://github.com/RomeoDespres/reapy)** by Roméo Després. The
-distant API that lets anything outside REAPER talk to it at all. Most of what
-this plugin does rests on it.
+**[python-reapy](https://github.com/RomeoDespres/reapy)** by Roméo Després: Provides the external API for REAPER.
 
-**[Cockos](https://www.reaper.fm/)**, for REAPER and for a ReaScript API broad
-enough that a project like this is even possible.
+**[Cockos](https://www.reaper.fm/)**: Developer of REAPER and the ReaScript API.
 
-**[EXLOUD/winget-installer](https://github.com/EXLOUD/winget-installer)**. Not
-used here, but reading it is what turned up the winget version pin. Its author
-had already found that pinning to 1.8.1911 avoids an entire dependency, which is
-the single change that made the offline install simple.
+**[EXLOUD/winget-installer](https://github.com/EXLOUD/winget-installer)**: Documented the winget version pinning (1.8.1911) used in the offline installation script.
 
-Licence, third-party components and what the installer downloads:
-**[LEGAL.md](LEGAL.md)**.
+For licensing and third-party component details, see **[LEGAL.md](LEGAL.md)**.

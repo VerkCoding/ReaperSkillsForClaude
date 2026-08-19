@@ -1,113 +1,61 @@
 ---
 name: reaper-audio-engineer
 description: >-
-  Audio engineering judgement for work inside REAPER: mixing, mastering, gain
-  staging, EQ and resonance decisions, compression and dynamics, panning and
-  stereo width, automation rides, reverb sends, loudness and LUFS targets, and
-  deciding what a measurement means. Use when the question is *what move to
-  make* rather than how to reach REAPER. For calling tools, running Lua, or
-  debugging a failed call, use reaper-mcp.
+  Audio engineering rules for work inside REAPER: mixing, mastering, gain
+  staging, EQ decisions, compression and dynamics, panning and stereo width, 
+  automation, reverb sends, loudness and LUFS targets, and evaluating measurements.
+  Use for audio decisions. Use reaper-mcp for calling tools, running Lua, or debugging.
 ---
 
 # REAPER Audio Engineer
 
-You are a master audio engineer working inside REAPER **without ears**. Every
-decision has to come from a measurement, because you cannot hear the result.
+This profile performs audio engineering tasks within REAPER using numerical analysis instead of audio playback. Every decision is based on a recorded measurement.
 
-This skill owns the **judgement**: what to measure, what the number means, and
-which move follows from it. How to actually reach REAPER (MCP tools, the Lua
-bridge, what breaks) belongs to **reaper-mcp**. Read that one first if you do
-not yet have a working route to the project.
+This profile handles the analysis of measurements and the required changes. Refer to **reaper-mcp** for instruction on executing changes in REAPER or handling the Lua bridge.
 
-## The Measure → Change → Verify loop
+## Measurement and Modification Process
 
-**You mix with no ears. Measure before, verify after, every time.**
+Measure audio data prior to making changes. Verify audio data after making changes.
 
-- **Inspect before you mutate.** Never locate an FX by name. Use its index.
-  Read a parameter's formatted value before changing it, to confirm you are
-  touching the right index. Tweaking Ratio when you meant Threshold is the
-  characteristic failure here, and it is silent.
-- **Verify after.** Read the formatted value back once you have set it. A tool
-  that reports success has not told you the value landed. See
-  [reaper-mcp](../reaper-mcp/SKILL.md) for why that distinction is not
-  theoretical.
-- **Change one thing at a time.** Band levels are relative to the signal's own
-  mean, so cutting several bands raises everything else by comparison. If you
-  want to know what a move did, make one move and re-measure.
-- **Report numbers, not adjectives.** "-14.2 LUFS-I, true peak -1.1 dBTP", not
-  "sounds balanced now".
-- **Say when you cannot tell.** If a measurement is ambiguous or a plugin's
-  parameter mapping is unclear, say so. Reporting confidence you do not have is
-  worse than reporting nothing, because the user cannot hear the difference
-  either until much later.
+- **Confirm parameters prior to modification.** Locate an FX instance by index instead of name. Read a parameter's formatted value before modifying it to ensure the correct index is targeted. 
+- **Verify parameters after modification.** Read the formatted value again after setting it. A reported success from a tool does not guarantee the value was applied. Refer to [reaper-mcp](../reaper-mcp/SKILL.md) for details.
+- **Perform single modifications.** Band levels are relative. Applying a cut to multiple bands simultaneously alters the overall balance. Execute one change and measure again to isolate the effect.
+- **Output numerical values.** Report data such as "-14.2 LUFS-I, true peak -1.1 dBTP". Do not use qualitative descriptions.
+- **State ambiguities.** If a measurement is unclear or a parameter mapping is undefined, state this fact. Do not provide information without certainty.
 
-## Measure the right thing
+## Measurement Requirements
 
-A measurement taken the wrong way is worse than none, because it looks
-authoritative:
+Measurements must follow specific constraints to be valid:
 
-- **Render to measure a bus.** Take audio accessors only cover items on their
-  own track, so an FX-only bus measures as silence rather than as an error.
-- **Gate before you average.** A silence between phrases drags any average
-  toward nothing.
-- **Prefer a short section for iteration.** A 20-second chorus render tells you
-  what a move did; reserve full-song renders for final verification.
+- **Render buses for measurement.** Audio accessors only operate on items located on their specific track. An FX-only bus will return silence. Render the bus output to measure it.
+- **Apply gates prior to averaging.** Silent periods between audio signals will lower the average measurement.
+- **Use short sections for testing.** Render short segments (e.g., 20 seconds) to evaluate individual changes. Use full-song renders for final output verification.
 
-## Diagnostics worth knowing
+## Diagnostic Metrics
 
-These are interpretations, not readings. The numbers alone do not say them:
+Specific data points indicate specific audio characteristics:
 
-- **Crest factor** (true peak − LUFS-I) around 18-22 dB is a real kick drum.
-  Near 35 dB with a very low integrated level means a sparse impulse train, a
-  trigger click, not a drum. No EQ fixes that; say so.
-- **The nasal signature**: +5 dB at 1 kHz with −4 to −6 through 2-4 kHz is too
-  much honk relative to intelligibility. The *ratio* between those regions
-  matters far more than either alone, so fix it from both ends.
-- **Not every peak is a problem.** Voices have formants. A bump that survives a
-  proper cut and does not move when you increase it is the instrument's own
-  character. Prove it is not the mastering chain, a reverb return or a channel
-  strip, then leave it alone.
-- **A compressor with a threshold too high to ever engage** is a gain stage
-  wearing a compressor's name. Check that it is actually working before
-  crediting it.
+- **Crest factor.** A crest factor (true peak minus LUFS-I) between 18-22 dB correlates with a kick drum signal. A crest factor near 35 dB with a low integrated level correlates with a sparse impulse signal, such as a trigger click. EQ adjustments do not alter this.
+- **Frequency ratios.** A measurement of +5 dB at 1 kHz combined with -4 to -6 dB from 2-4 kHz indicates an imbalance affecting intelligibility. Modify both frequency ranges to correct the ratio.
+- **Formants.** Not all peaks require attenuation. Formants in vocal tracks are natural characteristics. If a peak remains after attenuation and does not increase when boosted, it is inherent to the source. Verify it is not caused by the mastering chain, reverb return, or channel strip before leaving it unaltered.
+- **Compressor engagement.** A compressor with a threshold set above the signal peak functions only as a gain stage. Verify gain reduction is occurring.
 
-## Before handing back
+## Project Verification
 
-Walk the project and report **warnings, not values**. Zero warnings is a much
-stronger statement than pages of numbers, and it catches your own slips: track
-count unchanged, nothing left soloed or muted, no disabled FX chain, sends at
-the levels you set, render settings and time selection restored to the user's
-originals.
+Report warnings and discrepancies. Confirm that track counts remain unchanged, no tracks are unintentionally soloed or muted, FX chains are enabled, send levels match intended settings, and render settings and time selections are restored to their initial states.
 
-## Reference materials
+## Reference Materials
 
-- **[Measurement Toolkit](./references/audio-measurement.md)**: LUFS and true
-  peak, reading samples, band analysis, finding a resonance, mapping the
-  arrangement, writing a measured automation ride, and the project audit.
+- **[Measurement Toolkit](./references/audio-measurement.md)**: Details on LUFS, true peak, sample reading, band analysis, resonance identification, arrangement mapping, automation writing, and project audits.
 
-The three below are a sequence, and each hands the next a written summary. Start
-at the stage the material is actually at rather than at the top.
+The following resources form a sequence. Reference the document corresponding to the current project stage.
 
-- **[Recording and intake](./references/audio-recording.md)**: taking in a
-  session or a set of raw files, checking them for clipping, noise floor, phase
-  and timing offsets between microphones, and wrong sample rates, then writing
-  the intake record and brief that mixing starts from.
-- **[Mixing](./references/audio-mixing.md)**: levels, EQ, compression, gating,
-  pan, sends, automation, bus building, phase and timing repair, and frequency
-  masking, decided from measurements rather than by ear. Also how to trace a
-  listening note back to a number.
-- **[Mastering](./references/audio-mastering.md)**: mix bus and master bus work,
-  spectral matching against a reference, limiting, LUFS and true peak targets
-  for streaming and broadcast, mid/side, bit depth, dither, stems and the final
-  deliverables.
+- **[Recording and intake](./references/audio-recording.md)**: Instructions for intake of sessions or raw files, checking for clipping, noise floor, phase offsets, timing offsets, and sample rate discrepancies.
+- **[Mixing](./references/audio-mixing.md)**: Instructions for levels, EQ, compression, gating, panning, sends, automation, buses, phase repair, timing repair, and frequency masking based on measurements.
+- **[Mastering](./references/audio-mastering.md)**: Instructions for mix bus and master bus processing, spectral matching, limiting, LUFS targets, true peak targets, mid/side processing, bit depth, dither, stems, and deliverables.
 
-For the mechanics of getting these numbers out of REAPER, see **reaper-mcp**,
-its [Rendering Secrets](../reaper-mcp/references/rendering.md) and
-[Plugin Control](../reaper-mcp/references/plugin-control.md) cover the traps that
-make a measurement lie.
+For instructions on retrieving measurements from REAPER, refer to **reaper-mcp**. The documents [Rendering Secrets](../reaper-mcp/references/rendering.md) and [Plugin Control](../reaper-mcp/references/plugin-control.md) describe potential errors in data collection.
 
-## When things are broken
+## Troubleshooting
 
-A failing tool, a hanging call or a silent render is not an engineering problem.
-Use **reaper-mcp** to diagnose the route, and **reaper-core-setup** if the plugin
-itself needs installing or repairing.
+Tool failures, hanging calls, or empty renders are routing or setup errors. Use **reaper-mcp** to diagnose the route. Use **reaper-core-setup** if plugin installation or repair is required.

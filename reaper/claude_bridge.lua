@@ -1,23 +1,15 @@
 --[[
   claude_bridge.lua
-  Bridge Claude <-> REAPER for the deep Lua tasks the MCP server cannot express.
+  Facilitates execution of Lua scripts in REAPER.
 
-  This file is the listener. It is loaded by __startup.lua, which REAPER runs
-  automatically at launch. Installing it as its own file rather than as
-  __startup.lua matters: plenty of people already have a __startup.lua, and
-  overwriting it silently destroys their setup. The installer creates or appends
-  a single dofile() line instead.
-
-  Protocol - a directory under <REAPER resource path>/claude_bridge:
-
-     cmd.lua     Lua sent by Claude. Consumed and deleted on execution.
-     out.txt     Result of the most recent command.
-     status.txt  Heartbeat. Refreshed while the listener is alive, so the
-                 health check can tell "not running" from "running but slow".
-     log.txt     Command history with results.
-
-  To stop it: Actions > "ReaScript: Close all running scripts", or click the
-  running-script indicator at the bottom of the REAPER window.
+  This file operates as a background process. It is separated from __startup.lua
+  to prevent overriding user-defined startup routines.
+  
+  Files utilized in <REAPER resource path>/claude_bridge:
+     cmd.lua     Input script.
+     out.txt     Execution output.
+     status.txt  Process state indicator.
+     log.txt     Execution log.
 --]]
 
 local SEP  = package.config:sub(1, 1)
@@ -27,8 +19,8 @@ local FOUT = DIR .. SEP .. "out.txt"
 local FLOG = DIR .. SEP .. "log.txt"
 local FSTA = DIR .. SEP .. "status.txt"
 
-local POLL_INTERVAL      = 0.15  -- seconds between checks for new work
-local HEARTBEAT_INTERVAL = 5.0   -- seconds between status.txt refreshes
+local POLL_INTERVAL      = 0.15  -- Dictates script responsiveness to incoming files.
+local HEARTBEAT_INTERVAL = 5.0   -- Provides liveliness signal for external monitoring.
 local MAX_LOG_BYTES      = 2 * 1024 * 1024
 
 reaper.RecursiveCreateDirectory(DIR, 0)
@@ -57,7 +49,7 @@ local function file_size(path)
   return n or 0
 end
 
--- Turn a Lua return value into text Claude can read.
+-- Text format is required for external process consumption.
 local function serialize(v)
   if type(v) ~= "table" then return tostring(v) end
   local lines = {}
@@ -109,8 +101,7 @@ local function loop()
       local result = run(code)
       write_file(FOUT, result)
 
-      -- Truncate rather than grow without bound; a long mixing session with
-      -- spectrum dumps in it will otherwise reach hundreds of megabytes.
+      -- Truncation prevents excessive disk space consumption during prolonged usage.
       local mode = "ab"
       if file_size(FLOG) > MAX_LOG_BYTES then mode = "wb" end
       write_file(FLOG,

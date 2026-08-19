@@ -11,7 +11,7 @@ from reaper_mcp.units import set_solo
 
 logger = logging.getLogger("reaper_mcp.render_tools")
 
-# REAPER RENDER_FORMAT codes
+# Constant mapping for REAPER's render format enumeration.
 FORMAT_CODES = {
     "wav":  0,
     "mp3":  3,
@@ -19,32 +19,22 @@ FORMAT_CODES = {
     "flac": 5,
 }
 
-# REAPER RENDER_FORMAT2 codes for WAV bit depth
+# Constant mapping for REAPER's WAV bit depth enumeration.
 BIT_DEPTH_CODES = {
     16: 0,
     24: 2,
     32: 4,
 }
 
-# RENDER_BOUNDSFLAG values, which are worth spelling out because getting them
-# wrong is silent and then modal. REAPER's set is:
-#
-#     0 = custom time range   1 = entire project      2 = time selection
-#     3 = all project regions 4 = selected items      5 = selected regions
-#
-# 0 looks like the sensible default and is the one value that cannot work
-# unnoticed: the custom range starts out empty (RENDER_STARTPOS == RENDER_ENDPOS
-# == 0), so REAPER opens a modal "Nothing to render!" box. A modal box stops
-# REAPER running deferred scripts, which stops the reapy server answering, so
-# the render call never returns and the whole connection appears to hang. The
-# error is nowhere in Python - it is a dialog waiting on screen.
+# RENDER_BOUNDSFLAG values.
+# Value 0 (custom time range) requires RENDER_STARTPOS and RENDER_ENDPOS to be set.
+# If unset, REAPER displays a modal dialog which blocks background scripts and causes execution to halt.
+# Explicit values are used to prevent modal dialogs.
 BOUNDS_ENTIRE_PROJECT = 1
 BOUNDS_TIME_SELECTION = 2
 
-# Settings a render touches, saved and put back around every render. Rendering
-# is meant to be a read of the project, not an edit of its preferences, and
-# analysis tools render constantly - without this, asking for the loudness would
-# silently repoint the user's render output at a temp file.
+# Render settings are temporarily modified and restored.
+# State preservation prevents automated render operations from modifying the user's project settings permanently.
 _SAVED_STRINGS = ("RENDER_FILE", "RENDER_PATTERN")
 _SAVED_NUMBERS = (
     "RENDER_FORMAT", "RENDER_FORMAT2", "RENDER_SRATE",
@@ -55,22 +45,16 @@ _SAVED_NUMBERS = (
 def _get_string(key: str) -> str:
     """Read a string project setting.
 
-    The buffer passed in is the buffer REAPER writes back into, so it has to be
-    long enough for the answer - a short one truncates a render path. reapy
-    returns the whole argument list with the outputs filled in; index 3 is the
-    value.
+    The buffer length must accommodate the maximum expected path length to prevent truncation.
     """
     return RPR.GetSetProjectInfo_String(0, key, " " * 1024, False)[3]
 
 
 def _resolve_output(output_path: str, format: str) -> Path:
-    """Where REAPER will actually put the file.
+    """Determine final output file path.
 
-    RENDER_FILE is a *directory* and RENDER_PATTERN is the file name; handing
-    the full path to RENDER_FILE alone makes REAPER create a directory called
-    `mixdown.wav` and write the pattern-named file inside it. Since the caller
-    names a file, split it here, and let the format decide the extension so
-    asking for mp3 with a .wav name still lands somewhere predictable.
+    REAPER stores the directory in RENDER_FILE and the filename in RENDER_PATTERN.
+    The extension is overridden by the selected format to ensure consistency.
     """
     target = Path(output_path).expanduser().resolve()
     return target.with_suffix("." + format.lower())
@@ -85,7 +69,7 @@ def _render_settings(
     channels: int,
     bounds: int,
 ):
-    """Apply render settings for the duration of the block, then put them back."""
+    """Context manager to scope temporary render settings."""
     saved_strings = {key: _get_string(key) for key in _SAVED_STRINGS}
     saved_numbers = {
         key: RPR.GetSetProjectInfo(0, key, 0, False) for key in _SAVED_NUMBERS
@@ -111,39 +95,35 @@ def _render_settings(
 
 
 def _render_now() -> None:
-    RPR.Main_OnCommand(41824, 0)  # File: Render project to disk (no dialog)
+    RPR.Main_OnCommand(41824, 0)  # Command 41824: File: Render project to disk (no dialog)
 
 
 def _nothing_rendered(target: Path) -> str:
-    """Why no file appeared, in the two ways it actually happens.
+    """Generate error description when render output is missing.
 
-    41824 is the no-dialog render, but that only means REAPER does not ask
-    anything before starting - it still opens a modal box when the render turns
-    out to be empty, and that box is invisible from here.
+    Command 41824 suppresses the start dialog but not the error dialog. Modal dialogs halt script execution.
     """
     if target.parent.is_dir() and not any(target.parent.iterdir()):
-        where = "the output directory is empty"
+        where = "output directory empty"
     else:
-        where = f"nothing was written to {target}"
+        where = f"no file at {target}"
     return (
-        f"Render finished but produced no file ({where}). Check REAPER's window: "
-        "a 'Render Error' dialog blocks every background script until it is "
-        "dismissed. An empty project, or a time selection of zero length, is the "
-        "usual cause."
+        f"Render completed with missing output ({where}). "
+        "A modal 'Render Error' dialog may be blocking execution in REAPER. "
+        "Verify project content and time selection length."
     )
 
 
 def render_to_temp_file(sample_rate: int = 48000) -> str:
     """
-    Render the current project to a temporary WAV file and return its path.
-    Used by analysis and mastering tools. Caller is responsible for deleting the file.
+    Render project to a temporary WAV file.
+    Caller is responsible for file deletion.
     """
     import tempfile
     import uuid
 
-    # A unique name straight in the temp directory rather than a temp directory
-    # of its own: callers unlink the file they are given, so a wrapper directory
-    # would be left behind by every analysis call.
+    # Output is written directly to the system temporary directory.
+    # Avoiding subdirectories prevents leftover directories after caller unlinks the file.
     target = Path(tempfile.gettempdir()) / f"reaper-mcp-{uuid.uuid4().hex}.wav"
 
     with _render_settings(str(target), "wav", sample_rate, 24, 2,
@@ -152,9 +132,7 @@ def render_to_temp_file(sample_rate: int = 48000) -> str:
 
     if not resolved.is_file():
         raise RuntimeError(
-            "REAPER rendered no audio. If a 'Render Error' dialog is open in "
-            "REAPER, dismiss it - REAPER runs no background scripts while one is "
-            "waiting, so nothing else can work until it is closed."
+            "Render output missing. Close any open modal dialogs in REAPER to resume script execution."
         )
     return str(resolved)
 
@@ -208,7 +186,7 @@ def register_tools(mcp):
         """Render a specific time range of the project to a file."""
         try:
             if end <= start:
-                return {"success": False, "error": f"end ({end}) must be after start ({start})"}
+                return {"success": False, "error": f"Invalid range: end ({end}) must be greater than start ({start})."}
             project = get_project()
             project.time_selection = (start, end)
             with _render_settings(output_path, format, sample_rate, bit_depth, channels,
@@ -250,10 +228,10 @@ def register_tools(mcp):
             for idx in indices:
                 track = project.tracks[idx]
                 track_name = track.name or f"Track_{idx}"
-                # Solo this track exclusively
+                # Exclusive solo ensures isolation of track audio.
                 for j in range(project.n_tracks):
                     set_solo(project.tracks[j], j == idx)
-                # Sanitize filename
+                # Characters are restricted to prevent filesystem errors.
                 safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in track_name)
                 stem_path = os.path.join(output_directory, f"{safe_name}.{format}")
                 with _render_settings(stem_path, format, sample_rate, bit_depth, 2,
@@ -267,7 +245,7 @@ def register_tools(mcp):
                     "file_size_bytes": target.stat().st_size if target.is_file() else 0,
                 })
 
-            # Unsolo all tracks
+            # Restore project state.
             for j in range(project.n_tracks):
                 set_solo(project.tracks[j], False)
 
@@ -277,7 +255,7 @@ def register_tools(mcp):
                 "stems": rendered,
             }
         except Exception as e:
-            # Always unsolo on error
+            # State must be restored even if an error occurs.
             try:
                 proj = get_project()
                 for j in range(proj.n_tracks):

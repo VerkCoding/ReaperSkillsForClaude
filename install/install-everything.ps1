@@ -1,55 +1,28 @@
 <#
 .SYNOPSIS
-  Install everything REAPER for Claude needs, in one pass.
+  Executes the installation process for REAPER and Claude requirements.
 
 .DESCRIPTION
-  The whole setup, in the order the dependencies actually require:
+  Performs installation in dependency order:
+    1. Creates file snapshot for revert operations.
+    2. Verifies winget availability.
+    3. Installs Python, Git, REAPER, Claude Desktop, and Claude Code.
+    4. Configures dependencies, REAPER bridge, distant API, and Claude.
+    5. Performs health check.
 
-    1. Snapshot every file this can change, so [2] Revert Everything works
-    2. Make sure winget is available
-    3. Install Python, Git, REAPER, Claude Desktop and Claude Code
-    4. Configure the plugin: dependencies, REAPER bridge, distant API, Claude
-    5. Health check
+  REAPER and Claude are installed only if absent. Existing installations are not modified to prevent interference with existing application state and user data.
+  Python and Git are installed or upgraded as standard developer tools.
+  All packages are sourced from the winget community repository to utilize vendor-provided installers.
 
-  On applications and your data
-  -----------------------------
-  REAPER and Claude are installed only when they are ABSENT. If either is
-  already on the machine it is left completely alone - not upgraded, not
-  repaired, not reinstalled. Their installers are well behaved, but a reinstall
-  is a needless risk to a REAPER resource folder holding years of preferences,
-  FX chains and templates, and to Claude's local history. Nothing here is worth
-  that.
+  Application installations route through downloadCache. Packages present in the cache are installed locally. Packages not present are fetched using `winget download` prior to local installation. This design prevents redundant downloads across multiple executions or environments, mitigating rate-limiting risks.
 
-  Python and Git are ordinary developer tooling with no user state to lose, so
-  those are installed or upgraded normally.
-
-  Every package comes from the winget community source, which uses each
-  vendor's real installer - reaper.fm, claude.ai, git-scm - rather than a
-  Microsoft Store package.
-
-  downloadCache
-  -------------
-  Every application install goes through it. Already there means install from
-  disk and download nothing; not there means fetch it INTO the cache with
-  `winget download` and install from disk anyway. So the first run downloads
-  once and the runs after it download nothing.
-
-  That last part is the whole point. `winget install` fetches into its own temp
-  directory and deletes it afterwards, so a machine that gets wiped between runs
-  - a Sandbox, a test VM, a lab image - re-downloaded Git, Python, REAPER and
-  Claude every single time while downloadCache sat there empty. Repeating that
-  often enough is how an address gets rate-limited and then blocked.
-
-  It is still only ever an optimisation: an absent, empty or unwritable cache
-  falls straight back to `winget install` and behaves as it always did. [3]
-  Prepare Offline Files does the same fetching without installing, for setting
-  up a machine that cannot reach the vendors at all. See lib-download-cache.ps1.
+  If the cache is unavailable, installation defaults to standard `winget install` behavior. Offline preparation is supported via lib-download-cache.ps1.
 
 .PARAMETER SkipApps
-  Configure the plugin only; install no applications.
+  Configures the plugin without executing application installations.
 
 .PARAMETER Force
-  Continue past the "REAPER is running" warning.
+  Bypasses the application running state warning.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File install-everything.ps1
@@ -58,71 +31,33 @@
 param(
     [switch]$SkipApps,
     [switch]$Force,
-    # Set by RunThisToStart.bat, which has already explained what this does and
-    # had the user agree. Suppresses the second "press Enter" that would
-    # otherwise ask the same question again.
     [switch]$Confirmed,
     [string]$ReaperResourcePath
 )
 
 $ErrorActionPreference = 'Stop'
 
-# Give the environment back even when this dies partway.
-#
-# RFC_LOG_PATH is set below so child scripts write into this run's log, and the
-# clear at the end of the file only runs if the end of the file is reached. A
-# terminating error anywhere in between skipped it - and `& .\install-everything.ps1`
-# from a prompt runs in the CALLER's process, so the variable outlived the run
-# and the next script appended itself to a dead run's log. The failed run is the
-# one most likely to be followed straight away by another attempt, so that was
-# the leak's most likely moment, not its least.
-#
-# trap fires only on errors nothing else handled - the try/catch blocks below
-# still win - and `break` re-throws, so failure still looks exactly like failure.
+# Ensures the RFC_LOG_PATH environment variable is removed if execution terminates early. This prevents subsequent scripts from appending data to an orphaned log file when run in the same caller process.
 trap { Remove-Item Env:\RFC_LOG_PATH -ErrorAction SilentlyContinue; break }
 
-# How this talks, and the log it writes. Same function names the rest of
-# this file already calls - see lib-console.ps1.
+# Includes required library functions for console output and logging.
 . (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 $script:Problems = @()
 function Add-Problem($m) { $script:Problems += $m }
 
-# Which applications existed before this run. Populated during the install loop
-# and read by the first-run steps.
+# Stores pre-existing application states to determine required first-run actions post-installation.
 $script:WasPresent = @{}
 
 $Here       = $PSScriptRoot
 $PluginRoot = Split-Path -Parent $Here
 
-# Dot-sourced so their helpers share these Write-* functions and $script: scope.
+# Dot-sourcing integrates external functions into the current scope to utilize shared variables and standard output functions.
 . (Join-Path $Here 'lib-app-control.ps1')
 . (Join-Path $Here 'lib-download-cache.ps1')
 
-# ---------------------------------------------------------------------------
-# Whether installing Python may touch PATH.
-#
-# PrependPath=1 makes our 3.12 the machine's `python`. On a system that already
-# has one - 3.14, or an old 2.7 - that silently changes what every other project
-# on the machine resolves, which is not ours to do for the sake of an audio
-# plugin.
-#
-# It turns out we do not need it. Three different things want a Python here, and
-# none of them wants the default one:
-#
-#   the MCP server      runs from the virtualenv, which any 3.10+ can build
-#   REAPER's ReaScripts run under whatever reaper.ini's pythonlibpath64 names
-#   the configure step  needs <=3.12, reached with `py -3.12`, which ignores
-#                       PATH order entirely
-#
-# The only PATH dependency left is that SOME python has to exist to launch
-# scripts/launch_server.py, which then re-execs into the virtualenv. That needs
-# 3.6 or newer merely to parse - the file uses f-strings - so an existing 3.x is
-# perfectly good and is left exactly where it is.
-#
-# The exception is a machine whose `python` is Python 2, or has none at all.
-# There, launch_server.py will not even parse, so PATH does have to change.
-# ---------------------------------------------------------------------------
+# Determines if the Python installation should modify the system PATH variable.
+# Modifying PATH is avoided when a compatible Python version exists, to prevent altering the environment for other applications. The MCP server, REAPER, and configuration scripts utilize specific Python paths or the virtual environment. A system PATH modification is only required when no compatible version (>= 3.8) is present to ensure the initial launch script executes successfully.
 $pathPythonUsable = $false
 if (Get-Command python -ErrorAction SilentlyContinue) {
     $prevEAP = $ErrorActionPreference
@@ -135,37 +70,18 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
 }
 
 $pythonCustom = if ($pathPythonUsable) {
-    Write-Info "A usable Python is already on PATH - leaving it as the default."
+    Write-Info "Compatible Python detected on PATH. PATH modification omitted."
     'InstallAllUsers=0 Include_test=0'
 } else {
-    Write-Info "No usable Python on PATH, so the new one will be added to it."
+    Write-Info "Compatible Python not found on PATH. PATH modification enabled."
     'PrependPath=1 InstallAllUsers=0 Include_test=0'
 }
 
-# Applications, in dependency order. Defined in lib-app-control.ps1 so
-# fill-download-cache.ps1 works from the same list.
+# Retrieves the application installation sequence. Shared with cache generation scripts to ensure consistency.
 $Apps = Get-AppList -PythonCustom $pythonCustom
 
-# ---------------------------------------------------------------------------
-# Record the whole run to a file.
-#
-# Everything here is console output, and the interesting part - why pip or
-# winget gave up - scrolls past several minutes before the end. When something
-# does not work, "what did it say?" has no answer, and the only evidence left is
-# the symptom hours later. A transcript costs nothing and turns that into a file
-# anyone can read or send on.
-# ---------------------------------------------------------------------------
-#
-# Two files, and they are not the same file. The transcript is the raw capture -
-# winget's own output, pip's, every error verbatim. The step log written by
-# Start-RunLog below is the structured trace of what this script decided and
-# when. The first answers "what happened", the second answers "what did WE do",
-# and the second is the one worth reading first.
-#
-# They are named apart deliberately. Both used to be "setup-<timestamp>.log",
-# which on a run fast enough to land in the same second is one filename - the
-# step logger would have appended into the middle of the transcript, and the
-# transcript's own pruning would have deleted step logs.
+# Initializes transcript logging to capture raw standard output and standard error from native commands.
+# This operates independently of the structured step log to ensure complete output capture without intermingling log formats. Filenames include timestamps to prevent concurrent execution conflicts. A retention policy limits the number of stored transcript files.
 $LogDir = Join-Path $env:USERPROFILE '.reaper-for-claude\logs'
 $LogFile = Join-Path $LogDir ("transcript-{0}.log" -f (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
 $transcribing = $false
@@ -173,96 +89,62 @@ try {
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     Start-Transcript -Path $LogFile -Force | Out-Null
     $transcribing = $true
-    # Keep the last handful; these are small, but unbounded is its own mess.
     Get-ChildItem $LogDir -Filter 'transcript-*.log' -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | Select-Object -Skip 10 |
         ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
 } catch {
-    # Transcription is a nicety, never a reason not to install.
 }
 
-# A click in the console window pauses everything until a key is pressed, and a
-# stalled window looks exactly like a busy one. Off before the first line of
-# output, so there is no window of opportunity. See Disable-ConsoleQuickEdit.
+# Disables ConsoleQuickEdit to prevent unintended script pauses caused by user mouse interactions.
 [void](Disable-ConsoleQuickEdit)
 
 $stepLog = Start-RunLog 'setup'
-# Published so configure-plugin.ps1, install-winget.ps1 and install-python.ps1 -
-# each a separate PowerShell scope - append to this run's log instead of opening
-# their own or, as they did, none at all.
+# Exports the log path to an environment variable to allow child script scopes to append to the parent log file.
 if ($stepLog) { $env:RFC_LOG_PATH = $stepLog }
-Write-Banner "REAPER for Claude - install everything"
+Write-Banner "REAPER for Claude installation initialized."
 Write-Info "plugin      $PluginRoot"
 if ($stepLog)      { Write-Info "log         $stepLog" }
 if ($transcribing) { Write-Info "transcript  $LogFile" }
 
-# ---------------------------------------------------------------------------
-# 0. Get REAPER and Claude closed first.
-#
-#    Both of them hold their configuration in memory and write it back when they
-#    exit, so anything written underneath a running instance is discarded -
-#    reaper.ini for REAPER, claude_desktop_config.json for Claude. Asking first
-#    and closing second is the only way those writes survive.
-#
-#    Nothing is force-killed. The user is asked to save, and a close request is
-#    the same one the X button sends, so REAPER's save prompt still appears.
-# ---------------------------------------------------------------------------
-Write-Step "Closing REAPER and Claude"
+# Validates application termination to prevent external state overwrites during configuration modification.
+Write-Step "Terminating REAPER and Claude processes."
 
-# No prompt here when the menu already asked. Two confirmations for one decision
-# is one too many: the user has already read what this does and said yes, and
-# being asked again reads as though something changed.
+# Prevents redundant user prompts if confirmation was provided prior to execution.
 if (-not $Confirmed) {
     Write-Host ""
-    Write-Host "  Save any open work in REAPER and Claude now." -ForegroundColor Yellow
-    Write-Host "  Both are closed while this runs." -ForegroundColor Gray
+    Write-Host "  Save active data in REAPER and Claude." -ForegroundColor Yellow
+    Write-Host "  Applications will be terminated during execution." -ForegroundColor Gray
     Write-Host ""
-    Write-Host "  Press Enter to continue, or Ctrl+C to stop." -ForegroundColor Yellow
+    Write-Host "  Press Enter to proceed or Ctrl+C to cancel." -ForegroundColor Yellow
     [void](Read-Host)
 }
 
 $reaperClosed = Request-AppClosed -Kind reaper -Label 'REAPER'
 
-# Claude's result is deliberately not kept, unlike REAPER's below. A REAPER that
-# stays open means one step will be skipped, which has to be reported at the
-# end. A Claude that stays open does not: Request-AppClosed has already
-# explained the consequence itself, Confirm-AppsClosed checks again immediately
-# before anything is written, and configure-plugin.ps1 handles a running Claude
-# on its own. There is nothing left for this value to decide.
+# The return value for Claude is discarded as its execution state is validated separately during plugin configuration steps.
 [void](Request-AppClosed -Kind claude -Label 'Claude')
 
 if (-not $reaperClosed) {
-    Add-Problem "REAPER stayed open, so its connection settings may not have been saved. Close it and re-run [1]."
+    Add-Problem "REAPER process remained active. Configuration modifications may fail. Terminate process and retry."
 }
 
-# ---------------------------------------------------------------------------
-# 1. Snapshot. First, unconditionally, before a single byte changes.
-# ---------------------------------------------------------------------------
-Write-Step "Backing up current configuration"
+# Executes system snapshot to enable rollback capabilities prior to system modifications.
+Write-Step "Generating configuration backup."
 try {
-    # Hashtable splatting, not an array. Splatting an array passes its elements
-    # POSITIONALLY, so @('-Backup') arrives as a value rather than binding the
-    # switch, and the call fails with "a positional parameter cannot be found".
+    # Utilizes a hashtable for splatting to enforce named parameter binding and prevent positional parameter errors.
     $snapArgs = @{ Backup = $true }
     if ($ReaperResourcePath) { $snapArgs['ReaperResourcePath'] = $ReaperResourcePath }
-    # Out-Null alone, not Out-Host. backup-restore.ps1 reports progress with Write-Host,
-    # which bypasses the pipeline and is displayed either way, and returns the
-    # snapshot directory on the success stream for programmatic callers. Piping
-    # through Out-Host renders that path too, so the transcript showed the
-    # directory twice - once in the [ok] line and once bare.
+    # Suppresses success stream output to avoid duplicate path logging in transcripts, as backup-restore.ps1 writes status updates independently.
     & (Join-Path $Here 'backup-restore.ps1') @snapArgs | Out-Null
-    Write-Info "Undo this whole setup later with [2] Revert Everything."
+    Write-Info "Rollback functionality enabled."
 } catch {
-    Write-Err "Could not take a snapshot: $_"
-    Add-Problem "No backup was taken, so [2] Revert Everything will not be able to undo this run."
+    Write-Err "Snapshot creation failed: $_"
+    Add-Problem "Backup failure. Rollback capabilities will be unavailable."
 }
 
-# ---------------------------------------------------------------------------
-# 2 & 3. Applications
-# ---------------------------------------------------------------------------
 if ($SkipApps) {
     Write-Step "Applications"
-    Write-Warn2 "Skipped (-SkipApps)."
+    Write-Warn2 "Application installation bypassed via parameter."
 } else {
     Write-Step "Package manager"
     $haveWinget = $false
@@ -271,28 +153,17 @@ if ($SkipApps) {
     }
 
     if ($haveWinget) {
-        Write-Ok "winget $(& winget --version)"
+        Write-Ok "winget version $(& winget --version) confirmed."
     } else {
-        # winget is the backbone: REAPER, Claude, Git and Python all come
-        # through it, so getting it installed is worth doing properly rather
-        # than working around.
-        #
-        # install-winget.ps1 deploys the packages directly, which needs nothing
-        # but HTTPS - no PowerShell Gallery, no NuGet provider, no Store - and
-        # is the route that works on the machines that lack winget. It reads
-        # them from downloadCache when they are there and downloads them when
-        # they are not; see that file for which source it asks first. The
-        # Gallery bootstrap is still there behind it.
-        Write-Warn2 "winget is not available - installing it."
+        # Executes direct deployment of winget packages to resolve standard dependency requirements when winget is absent. This method operates independently of external repository providers.
+        Write-Warn2 "winget missing. Initiating installation."
         try {
             & (Join-Path $Here 'install-winget.ps1') -Embedded | Out-Host
         } catch {
-            Write-Warn2 "winget install did not succeed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+            Write-Warn2 "winget installation failed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
         }
 
-        # Re-check by path as well as by name. Add-AppxPackage puts the shim in
-        # WindowsApps, which is already on PATH, but this process cached its
-        # command lookups at startup.
+        # Re-evaluates system paths post-installation to detect command availability in the current session context.
         Update-PathFromRegistry
         $shim = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
         if (Test-Path $shim) { $env:PATH = "$(Split-Path $shim);$env:PATH" }
@@ -303,45 +174,26 @@ if ($SkipApps) {
             try { $null = & winget --version 2>&1; $haveWinget = ($LASTEXITCODE -eq 0) } catch { }
             $ErrorActionPreference = $prevEAP
         }
-        if ($haveWinget) { Write-Ok "winget is now available: $(& winget --version)" }
+        if ($haveWinget) { Write-Ok "winget version $(& winget --version) initialized." }
     }
 
     Write-Step "Applications"
 
-    # downloadCache, if it has been filled, comes before every download below.
-    # See lib-download-cache.ps1 for the whole argument; the short version is that a
-    # machine wiped between runs pays the same 300 MB every time, and repeating
-    # that often enough is what gets an address blocked.
+    # Evaluates cache availability prior to deployment routines to minimize redundant network transfer operations and prevent bandwidth threshold violations.
     if (Get-CacheDir) {
-        Write-Info "downloadCache is here - anything in it is installed from disk."
+        Write-Info "downloadCache detected. Local installations enabled."
     }
     if (-not $haveWinget) {
-        Write-Warn2 "winget is unavailable, so only downloadCache and python.org are left."
+        Write-Warn2 "winget absent. Installation limited to downloadCache and direct python.org sources."
     }
 
-    # Applications that ended up missing with no way to fetch them. Reported
-    # once, at the end, rather than five times in the middle.
+    # Accumulates missing manual installations for consolidated error reporting.
     $manual = @()
 
     foreach ($app in $Apps) {
-        # Each application is isolated.
-        #
-        # This loop previously ran bare under $ErrorActionPreference =
-        # 'Stop', so anything winget did that PowerShell treats as a
-        # terminating error - and merging a native command's stderr is
-        # enough - aborted the WHOLE run at that application. REAPER and
-        # Claude sit at the end of the list, so a hiccup on Python or Git
-        # took them with it, along with the plugin configuration below, and
-        # the output stopped mid-step with no line naming the cause.
-        #
-        # One application failing is now one application failing.
+        # Isolates application installations within try/catch blocks to ensure process continuation upon individual component failure.
         try {
-            # ---- is it already here? -------------------------------------
-            #
-            # winget list is the better answer where there is a winget. Where
-            # there is not, the question still has to be answered, because a
-            # cached installer can now put REAPER on a machine that never had a
-            # package manager - and `Safe` has to keep meaning what it says.
+            # Evaluates existing installation status to dictate installation operations and determine execution of first-run procedures later in the sequence. Fallback detection mechanism utilized when winget is absent.
             if ($haveWinget) {
                 $prevEAP = $ErrorActionPreference
                 $ErrorActionPreference = 'Continue'
@@ -355,127 +207,82 @@ if ($SkipApps) {
                 $installed = Test-AppPresent -Id $app.Id
             }
 
-            # Remembered so the first-run steps below only fire for
-            # applications this run actually introduced. Opening and closing
-            # an app somebody already uses would be presumptuous, and
-            # pointless - it has a config and a session already.
             $script:WasPresent[$app.Id] = $installed
 
             if ($installed -and $app.Safe) {
-                Write-Ok "$($app.Name) is already installed - left untouched."
+                Write-Ok "$($app.Name) existing installation verified."
                 continue
             }
 
             if ($installed) {
                 if (-not $haveWinget) {
-                    # Nothing to upgrade with. A cached installer is no help
-                    # here either: it is a fixed version from whenever the cache
-                    # was filled, and reinstalling it over a working copy could
-                    # just as easily be a downgrade.
-                    Write-Ok "$($app.Name) is already installed."
+                    # Upgrade operations are unsupported without winget to prevent unintended version downgrades from static cache sources.
+                    Write-Ok "$($app.Name) existing installation verified."
                     continue
                 }
-                Write-Info "$($app.Name) is already installed; checking for an upgrade."
+                Write-Info "Checking upgrade availability for $($app.Name)."
             } else {
-                Write-Info "Installing $($app.Name)..."
+                Write-Info "Initiating $($app.Name) deployment."
 
-                # ---- through the cache, always ---------------------------
-                #
-                # Not "use the cache if it happens to have this". Every install
-                # goes through downloadCache: already there means install from
-                # disk, not there means fetch it INTO the cache and install
-                # from disk anyway.
-                #
-                # The difference matters because `winget install` downloads
-                # into its own temp directory and deletes it afterwards. So a
-                # machine that is wiped and re-run - a Sandbox, a test VM -
-                # downloaded Git, Python, REAPER and Claude again every single
-                # time while downloadCache sat there empty, which is the exact
-                # thing this was built to stop.
-                #
-                # `winget download` is the same fetch from the same source, put
-                # somewhere it survives, with the manifest beside it. One
-                # download, then never again.
+                # Routes all payload acquisitions through downloadCache to retain binary assets across multiple test executions and mitigate redundant transfers.
                 $pkg       = Find-CachedPackage -Id $app.Id
                 $fromCache = $false
 
                 if ($pkg -and $pkg.Installer) {
-                    Write-Info ("  downloadCache has {0} {1} - installing from disk." -f $app.Name, $pkg.Version)
-                    # $app.Custom is appended after the manifest's own silent
-                    # switches, which is exactly what winget's --custom does.
+                    Write-Info ("  Installing {0} {1} from local cache." -f $app.Name, $pkg.Version)
                     $fromCache = Install-CachedPackage -Package $pkg -ExtraArgs $app.Custom
-                    if (-not $fromCache) { Write-Warn2 "  the cached copy did not install; falling back." }
+                    if (-not $fromCache) { Write-Warn2 "  Local installation failed. Initiating fallback procedure." }
                 } elseif ($pkg) {
-                    # Manifest but no installer: a previous run already found
-                    # out this one cannot be run from disk. Do not spend the
-                    # download finding out again.
-                    Write-Info "  not installable from disk (noted on an earlier run); using winget."
+                    # Bypasses local installation attempts for packages previously identified as incompatible with offline execution.
+                    Write-Info "  Package requires direct winget execution. Bypassing cache."
                 } elseif ($haveWinget) {
-                    Write-Info "  fetching it into downloadCache..."
+                    Write-Info "  Downloading package to local cache."
                     $pkg = Get-PackageToCache -Id $app.Id
                     if ($pkg) {
                         $fromCache = Install-CachedPackage -Package $pkg -ExtraArgs $app.Custom
-                        if (-not $fromCache) { Write-Warn2 "  it did not install; falling back to winget." }
+                        if (-not $fromCache) { Write-Warn2 "  Installation failed. Reverting to standard winget execution." }
                     }
                 }
 
                 if ($fromCache) {
-                    Write-Ok "$($app.Name) ready (installed from downloadCache)."
+                    Write-Ok "$($app.Name) deployed from local cache."
                     continue
                 }
             }
 
-            # ---- no winget, and the cache could not help ------------------
             if (-not $haveWinget) {
                 if ($app.Id -like 'Python.Python.*') {
-                    # Python from python.org, which needs nothing but a network
-                    # connection. Everything else in the plugin depends on it,
-                    # so it is worth a route of its own; REAPER and Claude have
-                    # no equally stable direct URL, so those are named for the
-                    # user rather than guessed at.
-                    Write-Info "Installing Python directly from python.org..."
-                    # Its exit code, not just its exceptions. install-python.ps1
-                    # reports a failed download or a non-zero installer by
-                    # exiting 1, which throws nothing at all - so catching only
-                    # exceptions here would print "Python ready" over the top of
-                    # its own error message.
+                    # Utilizes direct python.org acquisition to circumvent winget dependencies, ensuring base required component availability.
+                    Write-Info "Executing direct Python installation."
+                    # Evaluates process exit codes directly as the child script communicates failure states via non-zero exit codes rather than exceptions.
                     $pyOk = $false
                     try {
                         & (Join-Path $Here 'install-python.ps1') -Version '3.12.10' | Out-Host
                         $pyOk = ($LASTEXITCODE -eq 0)
                     } catch {
-                        Write-Err "Python could not be installed: $_"
+                        Write-Err "Python installation failure: $_"
                     }
                     if ($pyOk) {
-                        Write-Ok "$($app.Name) ready."
+                        Write-Ok "$($app.Name) deployed."
                     } else {
-                        Write-Err "$($app.Name) did not install."
-                        Add-Problem "Install Python from https://www.python.org/downloads/ with 'Add python.exe to PATH' ticked."
+                        Write-Err "$($app.Name) deployment failed."
+                        Add-Problem "Manual Python installation required. Ensure 'Add python.exe to PATH' is selected."
                     }
                 } else {
-                    Write-Warn2 "$($app.Name) cannot be fetched without winget."
+                    Write-Warn2 "$($app.Name) deployment unavailable."
                     $manual += $app.Name
                 }
                 continue
             }
 
-            # ---- winget --------------------------------------------------
-            #
-            # -e for an exact ID match: "REAPER" alone also matches an
-            # unrelated ScytheLabs.Reaper, and Python.Python.3 can resolve to
-            # Python 3.0. --source winget for the vendor's own installer
-            # rather than a Store package.
+            # Configures precise winget parameters to avoid identifier collisions and restrict sourcing to vendor distributions.
             $wargs = @(
                 'install', '-e', '--id', $app.Id, '--source', 'winget',
                 '--accept-package-agreements', '--accept-source-agreements'
             )
             if ($app.Custom) { $wargs += @('--custom', $app.Custom) }
 
-            # Retried, because winget's download step fails on a flaky
-            # connection with things like "InternetOpenUrl() failed,
-            # 0x80072f78" - a transient network error, not a package that
-            # cannot be installed. One retry turns most of those into a
-            # success rather than a line in the summary.
+            # Implements retry logic for transient network failures during package retrieval.
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             try {
@@ -484,7 +291,7 @@ if ($SkipApps) {
                     $code = $LASTEXITCODE
                     if ($code -eq 0 -or $code -eq -1978335189) { break }
                     if ($attempt -eq 1) {
-                        Write-Warn2 ("  {0} failed (exit {1}); retrying once..." -f $app.Name, $code)
+                        Write-Warn2 ("  {0} failure (exit {1}). Retrying." -f $app.Name, $code)
                         Start-Sleep -Seconds 5
                     }
                 }
@@ -492,67 +299,42 @@ if ($SkipApps) {
                 $ErrorActionPreference = $prevEAP
             }
 
-            # 0x8A15002B / -1978335189: "no applicable upgrade found", i.e.
-            # it is already current. Not a failure.
+            # Exit code -1978335189 indicates a current installation state and is parsed as a success condition.
             if ($code -eq 0 -or $code -eq -1978335189) {
-                Write-Ok "$($app.Name) ready."
+                Write-Ok "$($app.Name) deployed."
             } else {
-                Write-Err "$($app.Name): winget exited $code."
-                Add-Problem "$($app.Name) did not install (winget exit $code). Install it by hand, then re-run [1]."
+                Write-Err "$($app.Name): winget termination code $code."
+                Add-Problem "$($app.Name) deployment failed (exit $code). Manual installation required."
             }
         } catch {
             Write-Err "$($app.Name): $($_.Exception.Message)"
-            Add-Problem "$($app.Name) could not be installed - see the error above. The rest of the setup continued."
+            Add-Problem "$($app.Name) installation failure. Refer to error output. Execution continuing."
         }
     }
 
     if ($manual.Count -gt 0) {
         Write-Host ""
-        Write-Info "Without winget these have to come from somewhere else:"
+        Write-Info "Manual installation required for the following components:"
         Write-Info "    REAPER  https://www.reaper.fm/download.php"
         Write-Info "    Claude  https://claude.ai/download"
-        Write-Info "Or, on a machine that can reach the internet, run [3] Prepare"
-        Write-Info "Offline Files and copy the downloadCache folder onto this one."
-        Write-Info "Either way, run [1] again afterwards - everything already done"
-        Write-Info "is left alone and only the missing pieces filled in."
-        Add-Problem ("Install {0} by hand (winget was unavailable), then re-run [1]." -f ($manual -join ' and '))
+        Write-Info "Execute [3] Prepare Offline Files on a networked machine to generate a cache directory."
+        Write-Info "Rerun [1] to resume installation."
+        Add-Problem ("Manual installation required for {0}." -f ($manual -join ' and '))
     }
 
-    # A process reads PATH once at startup, so anything installed above is
-    # invisible to this one.
-    #
-    # The authoritative answer is in the registry: installers write there, and
-    # "restart your shell" means nothing more than "read it again". So read it
-    # again. This is what makes `claude`, `git` and `python` findable below
-    # without this script having to know where any of them chose to live.
+    # Refreshes process environment variables from registry configurations to enable immediate access to newly installed binaries.
     Update-PathFromRegistry
 
-    # Then the specific locations, as a safety net for anything that puts a
-    # binary somewhere without recording it in the registry. Kept deliberately:
-    # the registry read above covers the general case, this covers the ones that
-    # do not play by the rules, and neither is a reason to drop the other.
+    # Appends specific application directories to the session PATH to mitigate missing registry configurations from non-standard installer behaviors.
     $newPaths = @(
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\Scripts'),
         (Join-Path $env:ProgramFiles 'Python312'),
         (Join-Path $env:ProgramFiles 'Git\cmd'),
-        # Where winget puts command-line aliases for most packages.
         (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links')
     )
 
-    # Claude Code specifically.
-    #
-    # It is a portable package, so winget does not alias it into Links - it
-    # extracts it under WinGet\Packages\<Id>_<source>\ and puts THAT on PATH.
-    # This matters more than it looks: without it the plugin is never registered
-    # with Claude Code at all. The installer says "Path environment variable
-    # modified; restart your shell", this process cannot, so `claude` is not
-    # found and the step quietly downgrades to printing instructions - which is
-    # exactly what happened on the last clean run.
-    #
-    # Matched by wildcard because the folder carries a source hash
-    # (Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe) that is not
-    # ours to predict.
+    # Scans for Claude Code directory paths containing dynamic hash values to enable subsequent plugin registration steps.
     $pkgRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
     if (Test-Path $pkgRoot) {
         Get-ChildItem $pkgRoot -Directory -Filter 'Anthropic.ClaudeCode*' -ErrorAction SilentlyContinue |
@@ -564,75 +346,47 @@ if ($SkipApps) {
     }
 }
 
-# ---------------------------------------------------------------------------
-# 3b. First run.
-#
-# A freshly installed REAPER has no reaper.ini - the resource folder appears
-# only after it has run once - and a fresh Claude has no session. The rest of
-# the setup needs both, so rather than ending with "now go launch REAPER
-# yourself", do it here and wait.
-#
-# Only for applications this run installed. Anything that was already here has a
-# config and a session, and opening it uninvited would be presumptuous.
-# ---------------------------------------------------------------------------
+# Executes initial application runs to populate required configuration files and sessions for newly installed components. Excludes pre-existing installations to preserve user state.
 if (-not $SkipApps) {
     $reaperWasNew = ($script:WasPresent.ContainsKey('Cockos.REAPER') -and -not $script:WasPresent['Cockos.REAPER'])
     $claudeWasNew = ($script:WasPresent.ContainsKey('Anthropic.Claude') -and -not $script:WasPresent['Anthropic.Claude'])
 
     if ($reaperWasNew -or $claudeWasNew) {
-        Write-Step "First run"
+        Write-Step "Initial execution"
 
-        # Claude first, and before REAPER, even though REAPER's first run comes
-        # after it. Claude's installer launches the app itself, so by now it is
-        # very likely already up and building its profile - and REAPER's first
-        # run ends by force-closing what it opened. Getting Claude shut down
-        # cleanly here means nothing downstream is racing a Chromium profile
-        # that has never been written before.
+        # Enforces orderly termination of Claude's post-installation auto-launch to ensure configuration profiles are written to disk prior to subsequent operations.
         if ($claudeWasNew) { [void](Wait-ClaudeSettled) }
 
         if ($reaperWasNew) {
             $resource = if ($ReaperResourcePath) { $ReaperResourcePath } else { Join-Path $env:APPDATA 'REAPER' }
             if (-not (Invoke-ReaperFirstRun -ReaperResourcePath $resource)) {
-                Add-Problem "REAPER has not created its configuration yet. Launch REAPER once, close it, then re-run [1]."
+                Add-Problem "REAPER configuration missing. Manual execution required. Rerun [1] post-execution."
             }
         }
 
         if ($claudeWasNew) {
             if (-not (Invoke-ClaudeFirstRun)) {
-                Add-Problem "Claude is NOT signed in. The plugin is installed, but Claude cannot use it until you sign in and restart it."
+                Add-Problem "Claude authentication pending. Sign-in required for plugin functionality."
             }
         }
     }
 }
 
-# ---------------------------------------------------------------------------
-# 4. The plugin itself. configure-plugin.ps1 owns this and is unchanged by the wrapper.
-#
-# One last check before it runs. Everything below writes to files that REAPER
-# and Claude rewrite from memory on exit, and by now the user has been through
-# several prompts, an application install and possibly a sign-in - any of which
-# can have left one of them running again. This is the last moment where that is
-# still cheap to fix.
-# ---------------------------------------------------------------------------
-[void](Confirm-AppsClosed -Because "Checking both are still closed before writing any configuration.")
+# Validates running states prior to plugin configuration to prevent application overrides of newly written configuration files.
+[void](Confirm-AppsClosed -Because "Validating process state prior to configuration write operations.")
 
-Write-Step "Configuring the plugin"
-# Hashtable, for the same reason as the snapshot call above: an array splat is
-# positional, so '-Force' would bind to configure-plugin.ps1's first parameter, -Only,
-# and fail its ValidateSet.
+Write-Step "Plugin configuration"
+# Utilizes hashtable parameters to enforce correct mapping within the target script.
 $installArgs = @{}
 if ($ReaperResourcePath) { $installArgs['ReaperResourcePath'] = $ReaperResourcePath }
 if ($Force)              { $installArgs['Force'] = $true }
 
-# Collect its problems into this run's summary instead of letting it print a
-# second, possibly contradictory, banner of its own.
+# Redirects child script error reporting to a temporary file for unified consolidation within the parent summary.
 $problemsFile = Join-Path $env:TEMP ("rfc-problems-" + [Guid]::NewGuid().ToString("N").Substring(0, 8) + ".txt")
 $installArgs['ProblemsOut'] = $problemsFile
 
 try {
-    # Same NativeCommandError hazard as inside configure-plugin.ps1: pip and the claude
-    # CLI both write to stderr in normal operation, and under EAP 'Stop' that
-    # would abort the configuration this call exists to perform.
+    # Modifies error preferences temporarily to prevent standard error streams from native commands from aborting execution.
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -641,8 +395,8 @@ try {
         $ErrorActionPreference = $prevEAP
     }
 } catch {
-    Write-Err "Plugin configuration failed: $_"
-    Add-Problem "Re-run this option once the error above is resolved."
+    Write-Err "Plugin configuration failure: $_"
+    Add-Problem "Execute configuration step independently after resolving errors."
 }
 
 if (Test-Path $problemsFile) {
@@ -651,16 +405,7 @@ if (Test-Path $problemsFile) {
     Remove-Item $problemsFile -Force -ErrorAction SilentlyContinue
 }
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# The one check that decides whether any of this worked.
-#
-# Everything above can report success while the server is unable to start - a
-# pip failure scrolls past, the plugin registers fine, the health check runs,
-# and the user is told to restart Claude. They then find "server disconnected"
-# with no idea which step let them down. Ask the launcher directly and say so in
-# terms nobody can scroll past.
-# ---------------------------------------------------------------------------
+# Executes self-test diagnostic to validate server launch capabilities and dependency integrity.
 $serverOk = $false
 if (Get-Command python -ErrorAction SilentlyContinue) {
     $prevEAP = $ErrorActionPreference
@@ -674,14 +419,13 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
 
 if (-not $serverOk) {
     Write-Host ""
-    Write-Err  "The REAPER server cannot start."
-    Write-Info "Claude shows 'reaper: server disconnected' until this is fixed."
-    Write-Info "Its dependencies are missing. Build them with:"
+    Write-Err  "Server launch failure detected."
+    Write-Info "Application connection will fail. Execute dependency rebuild:"
     Write-Host ""
     Write-Host "        python `"$PluginRoot\scripts\bootstrap.py`"" -ForegroundColor White
     Write-Host ""
-    if ($transcribing) { Write-Info "What went wrong is in $LogFile" }
-    Add-Problem "The REAPER server cannot start - run scripts\bootstrap.py and read its output."
+    if ($transcribing) { Write-Info "Diagnostic information appended to $LogFile" }
+    Add-Problem "Server execution failed. Execute scripts\bootstrap.py to reconstruct environment."
 }
 
 Write-Result -Problems $script:Problems
@@ -693,24 +437,8 @@ if ($transcribing) {
 }
 Write-Host ""
 
-# Hand back the environment as it was found. RFC_LOG_PATH exists so child
-# scripts join this run's log; left set, the next script started in the same
-# session would append its output to THIS run's log. The menu starts each option
-# in a fresh process, but the scripts are documented as individually runnable,
-# which is exactly when that would bite. The trap at the top covers the path
-# where this line is never reached.
-#
-# RFC_STEP is deliberately NOT cleared here. Start-RunLog clears it whenever a
-# top-level run opens its own log, which is the same moment and one mechanism
-# instead of two - and revert-everything.ps1 and fill-download-cache.ps1 set it
-# through Write-Step and are already correct for that reason.
+# Removes logging environment variables to prevent output contamination across independent script executions.
 Remove-Item Env:\RFC_LOG_PATH -ErrorAction SilentlyContinue
 
-# Tell the caller whether this worked.
-#
-# Until now nothing here set an exit code, so RunThisToStart.bat had no way to
-# know - and printed "Start REAPER, restart Claude, you are done" after every
-# run, including one where winget died, REAPER and Claude were never installed
-# and five separate things had failed. A one-click installer that cannot tell
-# the user yes or no has not finished the job.
+# Returns process termination code indicating composite execution status.
 exit $(if ($script:Problems.Count -eq 0) { 0 } else { 1 })

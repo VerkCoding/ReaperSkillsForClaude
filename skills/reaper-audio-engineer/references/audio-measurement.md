@@ -1,8 +1,6 @@
 # Offline measurement toolkit
 
-Everything here runs without playback and without the audio device. It is what lets you make
-mixing decisions from data. All of it is fast: reading 22050 samples through a take accessor
-costs about 5 ms, so a full band analysis of a stem is a fraction of a second.
+These methods execute without playback and bypass the audio device, providing data for mixing decisions. Processing speed for reading 22050 samples via a take accessor averages 5 ms. Stem analysis completes in sub-second intervals.
 
 ## Contents
 
@@ -16,61 +14,50 @@ costs about 5 ms, so a full band analysis of a stem is a fraction of a second.
 
 ## Loudness of a file
 
-`CalculateNormalization` returns the gain that would hit the target, so the measurement is
-`-20*log10(gain)` when you pass a target of 1.0.
+`CalculateNormalization` outputs the required gain to reach a specified target. When target is 1.0, the measurement is computed as `-20*log10(gain)`.
 
 ```lua
 local src = reaper.PCM_Source_CreateFromFile(path)
 local len = reaper.GetMediaSourceLength(src)
 local function m(md) return -20 * math.log(reaper.CalculateNormalization(src, md, 1.0, 0, len), 10) end
--- md: 0 = LUFS-I, 1 = RMS, 2 = peak, 3 = true peak, 5 = LUFS-S max
+-- Support for various measurement formats: 0 = LUFS-I, 1 = RMS, 2 = peak, 3 = true peak, 5 = LUFS-S max
 reaper.PCM_Source_Destroy(src)
 ```
 
-Pass a real length. With `0, 0` it returns exactly 1.0, which decodes to a clean-looking
-`-0.00 dB` and is indistinguishable from a real measurement until you notice every source
-reads the same.
+Provide an accurate length parameter. Supplying `0, 0` yields exactly 1.0, resulting in an output of `-0.00 dB` for all sources.
 
-To measure a **stem in the project**, build the source from the take's filename rather than
-using the take's own source object, which may be offline:
+To measure a project stem, instantiate the source using the take's filename. Avoid using the take's source object to prevent offline state errors.
 
 ```lua
 local fn = reaper.GetMediaSourceFileName(reaper.GetMediaItemTake_Source(take), "")
 local src = reaper.PCM_Source_CreateFromFile(fn)
 ```
 
-`GetMediaSourceFileName` returns the filename directly as its only return value, a
-`select(2, ...)` around it yields nil.
+`GetMediaSourceFileName` outputs the filename directly. Using `select(2, ...)` yields nil.
 
-**Crest factor (true peak − LUFS-I) is diagnostic.** A real kick drum sits around 18-22 dB. A
-value near 35 dB with a very low integrated level means a sparse impulse train, a trigger
-click, not a drum. That is a source problem no EQ will solve, and worth saying out loud.
+Crest factor (true peak − LUFS-I) identifies signal types. Typical acoustic kick drums measure 18-22 dB. Readings near 35 dB paired with low integrated levels indicate sparse impulse trains or trigger clicks. This indicates source characteristics that equalization does not alter.
 
 ## Reading samples
 
-Take audio accessors work offline and read the file even when the project's copy is offline.
+Take audio accessors function offline and read the source file regardless of the project's offline status.
 
 ```lua
 local acc = reaper.CreateTakeAudioAccessor(take)
 local en  = reaper.GetAudioAccessorEndTime(acc)
-local SR, N = 22050, 22050              -- request any rate; REAPER resamples
+local SR, N = 22050, 22050              -- Request rate triggers REAPER internal resampling
 local buf = reaper.new_array(N)
 reaper.GetAudioAccessorSamples(acc, SR, 1, startTime, N, buf)
--- buf[1..N] are floats
+-- buf contains floats
 reaper.DestroyAudioAccessor(acc)
 ```
 
-Request a **lower samplerate** when you only need low-frequency content or an RMS envelope.
-4000 Hz for an arrangement map cuts the work by 11×.
+Request a lower sample rate for low-frequency content analysis or RMS envelope generation. Using 4000 Hz reduces processing time for arrangement mapping.
 
-**Track audio accessors are not a way to measure a bus.** They only cover items on that
-track, so on an FX-only bus `GetAudioAccessorStartTime` and `EndTime` are both 0 and every
-read returns nothing. To measure a bus, render it.
+Track audio accessors read only track items, making them incompatible with bus measurement. On FX-only buses, `GetAudioAccessorStartTime` and `EndTime` equal 0. Bus measurement requires rendering.
 
 ## Band analysis
 
-An RBJ bandpass bank over the sample buffer gives you tonal balance. Normalise each band
-against the signal's own broadband energy so you read *balance*, not level.
+An RBJ bandpass filter bank provides tonal balance data. Normalizing each band against the signal's broadband energy yields relative balance rather than absolute level.
 
 ```lua
 local function mkbp(f0, Q, SR)
@@ -79,7 +66,7 @@ local function mkbp(f0, Q, SR)
   local a0 = 1+al
   return {b0=al/a0, b2=-al/a0, a1=(-2*math.cos(w0))/a0, a2=(1-al)/a0}
 end
--- per band, one pass over buf:
+-- Calculate band energy block
 local x1,x2,y1,y2,acc2 = 0,0,0,0,0
 for i = 1, N do
   local x = buf[i]
@@ -89,116 +76,90 @@ for i = 1, N do
 end
 ```
 
-For an octave-ish overview use `Q = f0/(f2-f1)` with band edges; a serviceable set is
-sub 30-60, low 60-120, lomid 120-300, mid 300-800, upmid 800-2500, pres 2500-6000,
-air 6000-10000.
+Calculate Q using `Q = f0/(f2-f1)` with band edges for octave-scale analysis. Standard ranges are: sub 30-60, low 60-120, low-mid 120-300, mid 300-800, upper-mid 800-2500, presence 2500-6000, air 6000-10000.
 
-**Gate before you average.** Skip any window whose RMS is below a floor, or a long silence
-between phrases will drag the result. A window is worth using if its mean square exceeds
-about `1e-9`; for sparse material, take the loudest windows rather than evenly spaced ones.
+Gate signals prior to averaging. Exclude windows with RMS values below the noise floor to prevent silence from skewing the mean. Process windows with mean square values exceeding `1e-9`. For sparse material, analyze the loudest windows instead of evenly spaced intervals.
 
-**Sanity check on interpretation.** These numbers are relative to the signal's own mean, so a
-band moving does not always mean you changed that band, since cutting several other bands raises
-everything else by comparison. When you want to know what a specific move did, change one
-thing and re-measure.
+Data interpretation requires considering relative values. Because measurements are relative to the signal mean, reducing energy in multiple bands mathematically increases the relative value of unmodified bands. To isolate the effect of a specific adjustment, apply a single change and repeat the measurement.
 
 ## Finding a resonance
 
-Broad bands tell you the tilt; 1/3-octave tells you where the problem actually is. Use
-`Q = 4.318` at ISO centres and normalise to the mean of the scanned range so peaks stand out:
+Broadband analysis indicates general spectral tilt. 1/3-octave analysis isolates specific frequency concentrations. Apply `Q = 4.318` at ISO center frequencies and normalize to the mean of the scanned range to isolate peaks:
 
 ```
 200 250 315 400 500 630 800 1000 1250 1600 2000 2500 3150 4000
 ```
 
-Read the *shape*, not single numbers. A vocal that reads +5 at 1 kHz with −4 to −6 through
-2-4 kHz is the classic nasal signature: too much of the honk band relative to the
-intelligibility band. The ratio between those regions matters far more than either alone, so
-fix it from both ends: cut the peak and widen the presence boost to fill the hole.
+Analyze the overall frequency response shape rather than isolated values. A measurement of +5 at 1 kHz combined with −4 to −6 from 2-4 kHz indicates a dominant 1 kHz region relative to the 2-4 kHz region. Adjust the ratio by reducing the 1 kHz peak and increasing the 2-4 kHz region.
 
-Not every peak should be flattened. Voices have formants; a residual bump that survives a
-proper cut and does not move when you increase it is the instrument's own character. Prove it
-is not something else. Bypass the mastering chain, mute the reverb returns, check the channel
-strip EQ is really at zero, then leave it alone.
+Avoid indiscriminate flattening of peaks. Voices possess formants; stable frequency concentrations characterize the instrument. Verify the source of the peak by bypassing the mastering chain, muting reverb returns, and confirming channel strip EQ is flat.
 
 ## Mapping the arrangement
 
-Per-bar RMS at low samplerate, rendered as characters, gives you song structure in one
-command. You need this before writing automation or judging a balance.
+Per-bar RMS calculation at a low sample rate, output as text characters, provides structural data for the session. Obtain this data prior to generating automation or evaluating balance.
 
 ```lua
 local bar = 4 * 60 / reaper.Master_GetTempo()
 local SR = 4000
 local NB = math.floor(bar * SR)
--- for each bar: read NB samples, compute RMS, map dB-below-max to a glyph
+-- Calculate RMS per bar block and map dB-below-max to a character
 local glyph = {" ", ".", ":", "-", "=", "+", "*", "#", "@"}
 ```
 
-Print one row per source. Entries, drop-outs and section boundaries become obvious, and you
-can convert bar numbers to seconds with the same `bar` value.
+Output one row per source. This displays entries, drop-outs, and section boundaries. Convert bar numbers to seconds using the computed `bar` constant.
 
 ## Writing a measured automation ride
 
-A corrective vocal ride is one of the highest-value things you can do without ears, because
-it is pure measurement: even out what is uneven.
+Corrective level automation normalizes signal variance using mathematical measurement.
 
-Method: block the take into ~0.5 s windows, gate to the parts that are actually sung, take the
-**median** of the active blocks as the target (means get dragged by outliers), invert, clamp,
-smooth over about a phrase, and write points at ~1 s spacing.
+Method: Segment the take into ~0.5 s windows. Gate the signal to isolate active audio. Calculate the median of the active blocks to establish a target level, as medians resist outlier skewing. Invert the difference, clamp the values, apply smoothing over phrase lengths, and write automation points at approximately 1 s intervals.
 
 ```lua
-local gate = maxBlockLevel - 18          -- singing only; a looser gate boosts breaths
+local gate = maxBlockLevel - 18          -- Isolate active audio; loose gates include noise floor
 local target = sortedActive[#sortedActive // 2]
-local d = target - level                 -- then clamp to about -5 .. +4 dB
+local d = target - level                 -- Clamp output difference bounds
 ```
 
-Two things that will bite:
+Technical constraints:
 
-**Envelope scaling.** Volume envelopes store a scaled value, not linear amplitude:
+Volume envelopes store scaled values rather than linear amplitude:
 
 ```lua
 local env = reaper.GetTrackEnvelopeByName(tr, "Volume")
 if not env then
   reaper.SetOnlyTrackSelected(tr)
-  reaper.Main_OnCommand(40406, 0)        -- Track: toggle volume envelope visible
+  reaper.Main_OnCommand(40406, 0)        -- Initialize volume envelope visibility
   env = reaper.GetTrackEnvelopeByName(tr, "Volume")
 end
 local mode = reaper.GetEnvelopeScalingMode(env)
 reaper.InsertEnvelopePoint(env, t, reaper.ScaleToEnvelopeMode(mode, 10^(dB/20)), 0, 0, false, true)
--- ... then reaper.Envelope_SortPoints(env)
+-- Sort points required after bulk insert
 ```
 
-Reading back gives the scaled value; convert with `ScaleFromEnvelopeMode` before interpreting
-it as dB, or you will see numbers like 716 and think something is broken.
+Reading envelope points returns scaled values. Apply `ScaleFromEnvelopeMode` before interpreting the data as decibels to avoid incorrect scaling assumptions.
 
-**Where the ride sits in the chain.** Put it on the source track, upstream of the strip's
-compressor, so the compressor receives an already-even signal and does less work. If the
-send to the next tier is post-fader, the envelope applies to it.
+Automation placement: Apply the automation on the source track, preceding the channel compressor. This feeds a normalized signal into the dynamics processor. If the routing is post-fader, the volume envelope applies to the send.
 
-Report the gate, target and resulting range. If the ride is pinned at its clamp for long
-stretches, the gate is too loose and you are lifting breaths, so tighten it and rerun.
+Output the gate threshold, target level, and resulting range. If the automation remains clamped at maximum or minimum values for extended periods, the gate threshold is too low and includes non-target audio. Adjust the threshold and reprocess.
 
 ## Auditing the project
 
-Before handing back, walk the project and report **warnings, not values**. Zero warnings is a
-much stronger statement than pages of numbers, and it catches your own slips.
+Prior to completion, scan the project and generate warnings rather than raw values. A zero-warning state confirms compliance.
 
-Worth asserting:
+Audit checklist:
 
-- Track count matches the start (a temporary analysis track left behind is easy to miss)
-- No track soloed or muted, no `I_FXEN == 0`, master FX chain enabled
-- The expected plugin really is in the slot you edited, on every strip you touched
-- No compressor with a threshold too high to ever engage, a "compressor" doing nothing while
-  its makeup gain is up is just a gain stage, and it is a very common way for a chain to look
-  right and do nothing
-- Envelope point count and range are sane
-- No send muted; send levels are what you set
-- Render settings, render path and time selection restored to the user's originals
-- Item fades present where you added them
+- Track count matches the initial state to verify no temporary analysis tracks remain.
+- All tracks unmuted and unsoloed, `I_FXEN != 0`, and master FX chain enabled.
+- Modified plugins match expected IDs in their designated slots.
+- Compressor thresholds engage the signal. Compressors applying makeup gain without gain reduction function solely as static gain stages.
+- Envelope point counts and ranges remain within standard limits.
+- Sends are unmuted; send levels match explicitly set values.
+- Render settings, render paths, and time selections match the initial user state.
+- Expected item fades exist on targeted items.
 
 ```lua
 local warn = {}
--- ... accumulate strings ...
+-- Output collected warnings block
 return body .. "\n\n=== WARNINGS (" .. #warn .. ") ===\n" ..
   (#warn > 0 and table.concat(warn, "\n") or "none")
 ```

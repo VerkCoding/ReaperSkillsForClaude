@@ -1,68 +1,29 @@
 #!/usr/bin/env python3
-"""Exercise every MCP tool against a live REAPER and report what works.
+"""Exercise every MCP tool against a live REAPER instance.
 
-The server has 58 tools and no tests. Most of them cannot be unit tested in any
-useful sense - their whole behaviour is a round trip into REAPER - so the honest
-check is the expensive one: call them for real, against a running REAPER, and
-see what comes back.
+This script tests the server's tools by calling them against a running REAPER instance and verifying the return values.
+The script performs the following:
+  * Functional verification: Tools are executed with arguments that should succeed. Where applicable, the effects are verified.
+  * Performance measurement: Tool execution time is recorded. Read-only tools are called repeatedly to gather a distribution of execution times.
 
-Two questions get answered at once, because the same calls answer both:
+Calls are routed through ``mcp.call_tool`` to test argument coercion, schema validation, and JSON serialisation.
 
-  * Does it work?  Each tool is called with arguments that should succeed, and
-    where there is a checkable claim - set the tempo to 140, read 140 back - the
-    claim is checked. A tool that returns ``success: true`` while doing nothing
-    is a failure this catches and a smoke test does not. That is not
-    hypothetical: ``render_project`` reports success and a file size of 0 when
-    REAPER has quietly written the audio somewhere else.
+Timeout handling:
+Every call executes in a separate thread and is awaited with a timeout. This handles modal dialogs that block deferred scripts in REAPER. Upon timeout, the script inspects REAPER's windows, dismisses known dismissable dialogs, and reports the contents of blocking dialogs.
 
-  * How slow is it?  Every call is timed, and the cheap read-only ones are
-    repeated so the reapy round trip shows up as a distribution rather than one
-    sample. That number is the budget every tool spends, so it is worth knowing.
-
-Calls go through ``mcp.call_tool`` rather than the Python functions directly.
-The functions are closures inside ``register_tools`` and not reachable anyway,
-but the better reason is that this is the path Claude uses: argument coercion,
-schema validation and JSON serialisation are all part of what is being tested.
-
-NOTHING HERE MAY HANG
-
-Every call runs in its own thread and is waited on with a timeout, and that is
-not defensive habit - it is the first thing this script found. A render whose
-bounds are empty makes REAPER open a modal "Nothing to render!" box, and a modal
-box stops REAPER running deferred scripts, so the reapy server stops answering
-and the call never returns. The run has to survive that, name it, and carry on.
-
-So on a timeout the script looks at REAPER's windows, reports the dialog by its
-text, clicks OK on a render error, and collects the result the call finally
-returns. It will not touch a "ReaScript task control" dialog: the wrong button
-there stops the bridge as well as the server, and ``connection.py`` explains at
-length why. It aborts instead and says what is on screen.
-
-WHAT IT TOUCHES
-
-Everything happens inside the project that is already open, on tracks this
-script creates and then deletes. It never calls ``create_project``,
-``load_project`` or ``save_project`` unless asked - a new-project command on a
-project with unsaved changes opens a modal save dialog - and for the same
-reason ``start_recording`` is off by default.
-
-State that is global to the project - tempo, master volume, master FX, cursor,
-time selection - is read before and restored after. Tracks and files created
-along the way are removed in reverse order, which matters on Windows: REAPER
-holds the imported WAV open until the item referencing it is gone.
+State management:
+Operations are performed within the currently open project on temporary tracks. The ``create_project``, ``load_project``, and ``save_project`` tools are only tested when explicitly requested.
+Global project state is read before execution and restored afterward. Added tracks and files are removed in reverse order to ensure file locks are released.
 
 USAGE
-
-    python scripts/benchmark_tools.py                  # the default run
-    python scripts/benchmark_tools.py --repeat 30      # more latency samples
-    python scripts/benchmark_tools.py --json out.json  # machine-readable results
-    python scripts/benchmark_tools.py --timeout 60     # slower machine, longer renders
+    python scripts/benchmark_tools.py
+    python scripts/benchmark_tools.py --repeat 30
+    python scripts/benchmark_tools.py --json out.json
+    python scripts/benchmark_tools.py --timeout 60
     python scripts/benchmark_tools.py --include-destructive
-    python scripts/benchmark_tools.py --list           # registered tools, no calls
+    python scripts/benchmark_tools.py --list
 
-Exit code is 0 when nothing failed, 1 otherwise. Tools with a documented
-precondition this script cannot meet - an envelope that has to be visible in the
-UI, a preset that has to exist - are marked ``~`` and do not affect it.
+Exit code is 0 on success, 1 on failure. Tools with unmet preconditions are marked ``~`` and do not cause failure.
 """
 
 from __future__ import annotations
@@ -83,12 +44,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
-# Names for everything this script creates, so a run that dies halfway leaves
-# something identifiable behind rather than an anonymous "Track 3".
+# Prefix for temporary assets to aid identification on failure.
 PREFIX = "__bench__"
 
-# Dialogs REAPER opens that this script knows how to handle. The distinction
-# matters: one is safe to dismiss, the other is not.
+# Dialog definitions for automated dismissal.
 DISMISSABLE = ("Render Error",)
 DO_NOT_TOUCH = ("ReaScript task control",)
 
@@ -98,13 +57,7 @@ DO_NOT_TOUCH = ("ReaScript task control",)
 # --------------------------------------------------------------------------
 
 def _ensure_dependencies() -> None:
-    """Re-exec under the managed virtualenv if this interpreter cannot serve.
-
-    Running ``python scripts/benchmark_tools.py`` should work from any shell, and the
-    interpreter on PATH is usually not the one bootstrap.py built. The launcher
-    already knows where that environment lives, so ask it rather than keeping a
-    second copy of the path.
-    """
+    """Re-execute using the managed virtual environment to ensure dependency availability."""
     sys.path.insert(0, str(ROOT / "src"))
     try:
         import mcp.server.fastmcp  # noqa: F401
@@ -112,9 +65,7 @@ def _ensure_dependencies() -> None:
         import numpy  # noqa: F401
         return
     except ImportError as e:
-        # Bind it outside the handler; Python unbinds `as` names on the way out,
-        # and this message is the only useful thing to print if there turns out
-        # to be no virtualenv to fall back to.
+        # Store exception to print if environment fallback fails.
         first_error = e
 
     sys.path.insert(0, str(HERE))
@@ -164,17 +115,8 @@ def _win32():
 
 
 def open_dialogs() -> list[tuple[int, str, list[str]]]:
-    """Every window REAPER has open besides its main one, with the text inside.
-
-    Deliberately not a list of titles this script knows. The first version only
-    recognised two, so the run that hit REAPER's "No tracks are armed for
-    recording" warning reported "no dialog found" and gave up - the one piece of
-    information that would have explained the freeze was on screen and went
-    unread. Whether a dialog is safe to dismiss is a separate question from
-    whether it can be seen, and only the first one deserves a list.
-
-    Scoped by process id so an unrelated window from another application is
-    never mistaken for REAPER's.
+    """Return all active REAPER dialogs to capture error text during a freeze.
+    Filtered by process ID to avoid matching unrelated windows.
     """
     api = _win32()
     if api is None:
@@ -192,8 +134,7 @@ def open_dialogs() -> list[tuple[int, str, list[str]]]:
         user32.GetWindowThreadProcessId(h, ctypes.byref(out))
         return out.value
 
-    # REAPER's main window names itself; everything else sharing its process is
-    # a dialog, a progress box, or a floating window.
+    # Identify REAPER main window to obtain process ID.
     reaper_pid = None
 
     def find_main(h, _):
@@ -231,7 +172,7 @@ def open_dialogs() -> list[tuple[int, str, list[str]]]:
 
 
 def dismiss(handle: int) -> bool:
-    """Click OK on one dialog. Only ever called for DISMISSABLE titles."""
+    """Dismiss a dialog by simulating a click on the OK button."""
     api = _win32()
     if api is None:
         return False
@@ -274,11 +215,11 @@ class Result:
 
 
 class Wedged(Exception):
-    """REAPER stopped answering and this script must not keep poking it."""
+    """Exception raised when REAPER becomes unresponsive."""
 
 
 class Bench:
-    """Calls tools, times them, survives modal dialogs, and remembers the undo."""
+    """Benchmark execution environment state."""
 
     def __init__(self, mcp, repeat: int, timeout: float, may_dismiss: bool):
         self.mcp = mcp
@@ -292,17 +233,7 @@ class Bench:
     # -- plumbing ----------------------------------------------------------
 
     def _in_thread(self, tool: str, args: dict, times: int, budget: float):
-        """Run ``times`` calls on a private loop; give up on the thread if it hangs.
-
-        A thread rather than ``asyncio.wait_for`` because the blocked call is
-        blocked inside REAPER, not inside the event loop - cancelling the task
-        would leave the loop wedged for every call after it. An abandoned thread
-        is a daemon and costs nothing; it unblocks by itself the moment the
-        dialog is cleared.
-
-        The clock is started around the call alone, so the cost of standing the
-        thread and the loop up never lands in a reported latency.
-        """
+        """Execute calls in a dedicated thread to prevent blocking the main event loop if REAPER hangs."""
         box: dict = {"samples": []}
         done = threading.Event()
 
@@ -329,11 +260,9 @@ class Bench:
         if done.wait(budget):
             return box, ""
 
-        # Blocked. Find out what is on screen before deciding anything.
+        # Inspect dialogs to determine cause of block.
         note = self._handle_block(tool, budget)
-        # A dismissed dialog releases REAPER, and the call then returns on its
-        # own - usually with the error it should have reported in the first
-        # place. Worth waiting a moment for, because that error is the finding.
+        # Wait for potential return after dialog dismissal.
         if done.wait(10.0):
             return box, note
         raise Wedged(note)
@@ -357,10 +286,7 @@ class Bench:
             if title in DISMISSABLE and self.may_dismiss and dismiss(handle):
                 notes.append(f"REAPER said '{message}' (dialog dismissed)")
             else:
-                # Reported in full and left alone. Anything not on the safe list
-                # may be asking a question with real consequences - "save
-                # changes?" has three answers and this script is not entitled to
-                # pick one.
+                # Log unfamiliar dialogs without interacting.
                 notes.append(
                     f"REAPER is showing '{title}': {message}"
                     f"  [buttons: {', '.join(lines) or 'none found'}] - "
@@ -369,7 +295,7 @@ class Bench:
         return "; ".join(notes)
 
     def raw(self, tool: str, args: dict | None = None) -> dict:
-        """One call, for the places that need a value rather than a result row."""
+        """Execute a single call and return the payload."""
         box, _ = self._in_thread(tool, args or {}, 1, self.timeout)
         return box.get("payload", {})
 
@@ -386,16 +312,7 @@ class Bench:
         times: int = 1,
         budget: float | None = None,
     ) -> dict:
-        """Call a tool, record the outcome, and hand back its payload.
-
-        ``expect`` is a callable given the payload; it returns an error string
-        when the tool's answer is wrong. That distinction is the point of this
-        script - "it returned" and "it did what it said" are different claims,
-        and only the second one is worth anything.
-
-        ``may_fail`` names a precondition this script cannot create. Those are
-        reported but do not fail the run.
-        """
+        """Execute a tool, validate the response against expected behavior, and log the result."""
         times = max(1, times)
         budget = budget or self.timeout * (times if times > 1 else 1)
 
@@ -444,27 +361,7 @@ class Bench:
         self.results.append(Result(tool, group, FAIL, None, detail))
 
     def confirm(self, probe, expected, label: str, tol: float | None = None) -> None:
-        """Ask REAPER, and fail the call just recorded if REAPER disagrees.
-
-        ``expect=`` above is handed the tool's own payload - the tool's word for
-        what it did. This is REAPER's word, read straight through
-        ``reascript_api``, and the difference is the entire point.
-
-        It is not a theoretical difference. ``set_fx_parameter`` used to report
-        the value it had been given rather than the value REAPER held, so it
-        looked right in every transcript; ``track.armed = True`` assigns an
-        attribute to a temporary object and never reaches REAPER at all. Both
-        pass a check that reads the payload. Neither passes this one.
-
-        ``expected`` is a value, or a predicate taking the reading - use the
-        predicate when the claim is "more than none" rather than an exact
-        number. ``tol`` compares floats loosely, which dB and pan need: they
-        round-trip through REAPER's own scaling and do not come back bit-exact.
-
-        Silent when the recorded call is not already ``ok``. A tool that failed
-        has changed nothing, so probing it would add a second row saying the
-        same thing in different words.
-        """
+        """Verify REAPER state matches the expected state. Fails the preceding recorded operation on mismatch."""
         if not self.results or self.results[-1].status != OK:
             return
 
@@ -479,10 +376,7 @@ class Bench:
             finally:
                 done.set()
 
-        # Same no-hanging rule as every other call into REAPER. A probe reads
-        # over the same reapy socket a modal dialog freezes, so an unguarded one
-        # would be a new way to wedge the run - the exact failure this script
-        # was built around.
+        # Run probe in thread to prevent blocking on REAPER dialogs.
         threading.Thread(target=worker, daemon=True, name=f"probe-{label}").start()
         if not done.wait(self.timeout):
             self._demote(f"REAPER did not answer the {label} probe within {self.timeout:.0f}s")
@@ -506,11 +400,7 @@ class Bench:
             self._demote(f"REAPER says {label} is {actual!r}, not {wanted}")
 
     def _demote(self, detail: str) -> None:
-        """Turn the last recorded pass into a failure, keeping its timing.
-
-        The tempo check already rewrote ``results[-1]`` in place; this is that
-        move with a name on it, so twenty-odd probes do not each reinvent it.
-        """
+        """Mark the last result as failed due to a state mismatch."""
         result = self.results[-1]
         result.status = FAIL
         result.detail = f"REAPER disagrees: {detail}" if not result.detail else \
@@ -522,7 +412,7 @@ class Bench:
         self.cleanups.append((description, fn))
 
     def run_cleanups(self) -> list[str]:
-        """Undo in reverse, with the same no-hanging rule as everything else."""
+        """Execute deferred cleanup operations in LIFO order."""
         problems = []
         for description, fn in reversed(self.cleanups):
             box: dict = {}
@@ -561,15 +451,7 @@ def _parse(blocks) -> dict:
 # --------------------------------------------------------------------------
 
 def make_test_wav(path: Path) -> None:
-    """Three seconds of stereo audio chosen so the analysis tools have work.
-
-    A sine alone makes four of the five analysis tools trivial: no transients to
-    find, identical channels so stereo width is zero, and a crest factor that is
-    a constant. So: a tone for the spectrum, a small phase offset between the
-    channels so mid/side and correlation are non-degenerate, and periodic noise
-    bursts for onset detection. Peak sits near -1.9 dBFS, which is loud enough
-    to measure and quiet enough that ``detect_clipping`` should report nothing.
-    """
+    """Generate stereo audio file for analysis testing."""
     import numpy as np
     import soundfile as sf
 
@@ -599,12 +481,7 @@ def make_test_wav(path: Path) -> None:
 # --------------------------------------------------------------------------
 
 def _project_tab_count(limit: int = 32) -> int:
-    """How many project tabs are open.
-
-    Bounded, and compared against the null pointer rather than truthiness:
-    EnumProjects returns a pointer string past the end of the list too, so
-    `while EnumProjects(i, ...)[0]` is an infinite loop that hammers REAPER.
-    """
+    """Return the number of open project tabs."""
     from reapy import reascript_api as RPR  # noqa: PLC0415
 
     for i in range(limit):
@@ -621,11 +498,7 @@ def approx(value, target, tolerance=0.05) -> bool:
 
 
 # --------------------------------------------------------------------------
-# Probes: what REAPER holds, asked directly
-#
-# Everything here goes through reascript_api and never through a tool, because
-# the tools are what is on trial. Each one is read fresh - no pointer is cached
-# across a call, since adding or deleting a track can move them.
+# Probes: Direct REAPER state access for verification.
 # --------------------------------------------------------------------------
 
 NULL_PTR = "0x0000000000000000"
@@ -648,7 +521,7 @@ def _item_ptr(track_index: int, item_index: int):
 
 
 def _note_count(track_index: int, item_index: int) -> int:
-    """Notes REAPER holds in an item's active take."""
+    """Return the number of notes in the specified item's active take."""
     from reapy import reascript_api as RPR  # noqa: PLC0415
 
     take = RPR.GetActiveTake(_item_ptr(track_index, item_index))
@@ -659,12 +532,7 @@ def _note_count(track_index: int, item_index: int) -> int:
 
 
 def _envelope_points(track_index: int, name: str) -> int:
-    """Points on a named track envelope. 0 when the envelope does not exist.
-
-    An automation call that never made the envelope and one that made an empty
-    envelope are different bugs, but both are "no automation", and 0 says so
-    without needing the distinction.
-    """
+    """Return point count on a track envelope. Returns 0 if envelope is missing."""
     from reapy import reascript_api as RPR  # noqa: PLC0415
 
     env = RPR.GetTrackEnvelopeByName(_track_id(track_index), name)
@@ -716,13 +584,7 @@ def _track_count() -> int:
 
 
 def rendered_bytes(payload: dict) -> str | None:
-    """A render that reports success is not a render that produced audio.
-
-    ``os.path.exists`` is true for a directory, and REAPER makes a directory of
-    exactly the requested name when RENDER_FILE is handed a full path while
-    RENDER_PATTERN still holds a filename. So check the size the tool reports,
-    which is 0 in that case.
-    """
+    """Verify render output size to confirm actual file creation."""
     size = payload.get("file_size_bytes", 0)
     return None if size and size > 1000 else f"reported {size} bytes"
 
@@ -746,14 +608,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     original_tabs = _project_tab_count()
 
     def report_extra_tabs():
-        """Notice, but do not close, project tabs create_project opened.
-
-        REAPER's New Project opens a tab rather than replacing the current one,
-        so --include-destructive always leaves one behind. Closing it is not
-        this script's call: a tab with unsaved changes asks a three-button
-        question on the way out, and answering that is how work gets thrown
-        away. Naming it is enough.
-        """
+        """Identify leftover project tabs without closing them."""
         extra = _project_tab_count() - original_tabs
         if extra > 0:
             raise RuntimeError(
@@ -768,13 +623,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
         proj.time_selection = (0.0, 0.0)
 
     def restore_tempo_map():
-        """Tempo, time signature, and any marker the run created.
-
-        Order is load bearing: the signature goes back first because writing it
-        is what creates the marker, and the tempo second because with a marker
-        present it is the marker that holds the tempo. Markers the bench added
-        are then dropped, newest first, so an existing one at index 0 survives.
-        """
+        """Restore previous tempo and time signature map."""
         _write_time_signature(*original_signature)
         _write_tempo(original_tempo)
         for i in range(RPR.CountTempoTimeSigMarkers(0) - 1, original_markers - 1, -1):
@@ -810,10 +659,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     b.call("set_time_signature", {"numerator": 3, "denominator": 4}, group=g,
            expect=lambda p: None if p.get("time_signature") == "3/4" else f"read back {p.get('time_signature')!r}")
 
-    # Order matters here, which is the whole reason for the second call. REAPER
-    # keeps the time signature in a tempo marker, and while that marker exists
-    # the plain tempo setter stops taking effect - so a tempo set after a time
-    # signature used to be accepted, reported as done, and ignored.
+    # Verify setting tempo functions correctly when a time signature marker exists.
     b.call("set_tempo", {"bpm": 90.0}, group=g,
            expect=lambda p: None if approx(p.get("tempo"), 90.0)
            else f"tempo after a time-signature change stuck at {p.get('tempo')}")
@@ -830,10 +676,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     if destructive:
         saved = workdir / "bench.rpp"
         b.call("save_project", {"project_path": str(saved)}, group=g)
-        # Two claims in one: REAPER wrote the file, and it no longer considers
-        # the project unsaved. save_project has to do both - the ReaScript that
-        # writes the file leaves the dirty flag set, and a project still marked
-        # dirty is what makes the next create_project open a modal.
+        # Verify file creation and clear project dirty flag.
         b.confirm(lambda: (saved.is_file() and saved.stat().st_size > 0, RPR.IsProjectDirty(0)),
                   lambda pair: pair[0] and pair[1] == 0,
                   f"(a file at {saved.name}, IsProjectDirty), wanted (True, 0)")
@@ -845,8 +688,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
 
         tabs_before = _project_tab_count()
         b.call("create_project", {"tempo": 120.0}, group=g)
-        # New Project opens a tab rather than replacing the current one, so the
-        # observable effect is the tab count, not the contents of this one.
+        # Verify project creation via tab count.
         b.confirm(_project_tab_count, tabs_before + 1, "the open project-tab count")
     else:
         for tool in ("save_project", "load_project", "create_project"):
@@ -873,8 +715,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
            expect=lambda p: None if p.get("soloed") is True else "solo did not stick")
     b.call("set_track_solo", {"track_index": audio_ix, "soloed": False}, group=g)
     b.call("set_track_color", {"track_index": audio_ix, "r": 200, "g": 60, "b": 60}, group=g)
-    # Both reads happen inside the probe thread. ColorToNative is a REAPER call
-    # too, and one made on this thread would be one more way to hang.
+    # Perform API color verification in probe thread.
     b.confirm(lambda: (int(RPR.GetMediaTrackInfo_Value(_track_id(audio_ix), "I_CUSTOMCOLOR")),
                        RPR.ColorToNative(200, 60, 60) | 0x1000000),
               lambda pair: pair[0] == pair[1],
@@ -884,14 +725,10 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     b.call("list_tracks", group=g, times=b.repeat,
            expect=lambda p: None if p.get("count", 0) >= 2 else "bench tracks missing from the list")
 
-    # Made and removed on the spot, at the end of the track list, so the indices
-    # everything below depends on are never disturbed.
+    # Append temporary track to verify delete functionality.
     throwaway = b.call("create_track", {"name": PREFIX + "throwaway"}, group=g)
     if throwaway.get("success"):
-        # Counted through REAPER rather than through list_tracks. The old check
-        # asked one tool whether another tool had worked, so a shared fault -
-        # both reading the same stale project handle, say - would have agreed
-        # with itself and passed.
+        # Verify deletion via REAPER state rather than tool output.
         before = _track_count()
         b.call("delete_track", {"track_index": throwaway["track_index"]}, group=g)
         b.confirm(_track_count, before - 1, "the track count")
@@ -910,18 +747,14 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     b.call("set_cursor_position", {"position": 1.5}, group=g,
            expect=lambda p: None if approx(p.get("position"), 1.5, 0.01) else f"cursor at {p.get('position')}")
     b.call("play_project", group=g)
-    # Bit 1 of the play state, not the whole word: REAPER reports paused and
-    # recording in the same integer, so == 1 would call a paused transport a
-    # failure to start.
+    # Verify play state bit to isolate playback from paused or recording states.
     b.confirm(lambda: _play_state() & 1, 1, "the transport play bit")
     b.call("stop_transport", group=g)
     b.confirm(_play_state, 0, "the transport state")
 
     b.call("edit_audio_item",
            {"track_index": audio_ix, "item_index": item_ix, "fade_in": 0.1, "fade_out": 0.1}, group=g)
-    # The fades are the only thing this call was asked to change, and its
-    # payload reports position and length - never the fades. So there is no
-    # value in the reply that could have caught a fade that did not land.
+    # Verify fade attributes via REAPER state as the tool payload lacks them.
     b.confirm(lambda: (RPR.GetMediaItemInfo_Value(_item_ptr(audio_ix, item_ix), "D_FADEINLEN"),
                        RPR.GetMediaItemInfo_Value(_item_ptr(audio_ix, item_ix), "D_FADEOUTLEN")),
               lambda pair: approx(pair[0], 0.1, 0.001) and approx(pair[1], 0.1, 0.001),
@@ -934,9 +767,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
 
     if destructive:
         b.call("start_recording", {"track_index": midi_ix}, group=g)
-        # Bit 4 is recording. This is the check that would have caught the
-        # `track.armed = True` no-op: the transport rolled, nothing was armed,
-        # and REAPER raised a modal instead of recording.
+        # Verify recording state bit to confirm arming and transport start.
         b.confirm(lambda: _play_state() & 4, 4, "the transport record bit")
         b.call("stop_transport", group=g)
         b.confirm(_play_state, 0, "the transport state")
@@ -959,10 +790,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
            expect=lambda p: None if len(p.get("chords", [])) == 4 else f"{len(p.get('chords', []))} chords placed")
     b.call("create_drum_pattern",
            {"track_index": midi_ix, "pattern": "k...h...s...h...", "start_position": 12.0}, group=g)
-    # k, h, s, h are the four characters in DRUM_MAPPINGS, and repeats defaults
-    # to 1, so REAPER should hold exactly four notes. Counted on the item the
-    # call just made - the newest on the track - because the payload returns an
-    # item_id pointer and no index.
+    # Verify note insertion count based on pattern length.
     b.confirm(lambda: _note_count(midi_ix, RPR.CountTrackMediaItems(_track_id(midi_ix)) - 1),
               4, "the drum note count")
 
@@ -980,21 +808,14 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
                {"track_index": audio_ix, "fx_index": fx_ix, "param_index": 0, "value": 0.6}, group=g,
                expect=lambda p: None if approx(p.get("value"), 0.6, 0.02)
                else f"asked for 0.6, REAPER kept {p.get('value')}")
-        # Confirmed against a separate read, because a setter grading its own
-        # work is exactly how the original silent no-op survived: it assigned to
-        # an attribute reapy does not define and reported the value it was
-        # handed, never the one REAPER holds.
+        # Verify parameter setting via secondary read to ensure REAPER state update.
         stored = (b.raw("get_fx_parameters",
                         {"track_index": audio_ix, "fx_index": fx_ix})
                   .get("parameters") or [{}])[0].get("normalized_value")
         if not approx(stored, 0.6, 0.02) and b.results[-1].status == OK:
             b.results[-1].status = FAIL
             b.results[-1].detail = f"get_fx_parameters still reports {stored}"
-        # bypass_fx writes `fx.is_enabled = not bypassed`, which is a reapy
-        # attribute assignment on an FX object - the same shape as every silent
-        # no-op in the traps table. Checked in both directions, because a setter
-        # that is simply ignored looks correct in whichever state the FX already
-        # happened to be in.
+        # Verify enable state toggle.
         b.call("bypass_fx", {"track_index": audio_ix, "fx_index": fx_ix, "bypassed": True}, group=g)
         b.confirm(lambda: _fx_enabled(audio_ix, fx_ix), False, "TrackFX_GetEnabled after bypassing")
         b.call("bypass_fx", {"track_index": audio_ix, "fx_index": fx_ix, "bypassed": False}, group=g)
@@ -1003,8 +824,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
         b.call("load_fx_preset",
                {"track_index": audio_ix, "fx_index": fx_ix, "preset_name": "Default"}, group=g,
                may_fail="stock ReaEQ ships no preset named 'Default'")
-        # Only when the call claimed to succeed - confirm is silent otherwise,
-        # and a stock ReaEQ usually has no preset by that name.
+        # Verify preset name if loading succeeds.
         b.confirm(lambda: RPR.TrackFX_GetPreset(_track_id(audio_ix), fx_ix, "", 256)[3],
                   "Default", "the loaded preset name")
 
@@ -1012,8 +832,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
         b.call("remove_fx", {"track_index": audio_ix, "fx_index": fx_ix}, group=g)
         b.confirm(lambda: _fx_count(audio_ix), fx_before - 1, "the track FX count")
     else:
-        # Everything here addresses an FX by index; without one they would all
-        # fail for a reason that has nothing to do with them.
+        # Skip FX operations if creation failed.
         for tool in ("list_track_fx", "get_fx_parameters", "set_fx_parameter",
                      "bypass_fx", "load_fx_preset", "remove_fx"):
             b.skip(tool, g, "add_fx failed, so there is no FX to address")
@@ -1023,9 +842,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     tracks_before_bus = _track_count()
     bus = b.call("create_bus", {"name": PREFIX + "bus", "track_indices": [audio_ix, midi_ix]}, group=g)
     bus_ix = bus.get("bus_index", midi_ix + 1)
-    # A bus is a track plus the receives that make it one. Both are checked: a
-    # bare track with nothing routed into it would satisfy the count alone and
-    # is not a bus.
+    # Verify bus creation by checking track count and receive routings.
     b.confirm(lambda: (_track_count(), _send_count(bus_ix, -1)),
               lambda pair: pair[0] == tracks_before_bus + 1 and pair[1] >= 2,
               f"(track count, receives into the bus), wanted ({tracks_before_bus + 1}, >=2)")
@@ -1041,7 +858,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     if last_send >= 0:
         b.call("set_send_volume",
                {"source_track_index": audio_ix, "send_index": last_send, "volume_db": -6.0}, group=g)
-        # D_VOL is a linear gain, not dB: -6 dB is about 0.501.
+        # Verify send gain using linear scale.
         b.confirm(lambda: RPR.GetTrackSendInfo_Value(_track_id(audio_ix), 0, last_send, "D_VOL"),
                   10 ** (-6.0 / 20.0), "the send gain (linear)", tol=0.01)
 
@@ -1052,8 +869,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
         b.skip("set_send_volume", g, "no send to operate on")
         b.skip("remove_send", g, "no send to operate on")
 
-    # Envelopes have to be visible in the UI before REAPER hands one back, and
-    # nothing in the tool surface can make that happen.
+    # Test automation point addition assuming envelope UI visibility.
     b.call("add_volume_automation", {"track_index": audio_ix, "position": 1.0, "value_db": -3.0}, group=g,
            may_fail="the volume envelope must be shown in REAPER first")
     b.confirm(lambda: _envelope_points(audio_ix, "Volume"), lambda n: n > 0,
@@ -1106,8 +922,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
         b.skip("set_master_fx_parameter", g, "add_master_fx failed, so there is no FX to address")
     limiter_before = len(_master_fx_names())
     b.call("apply_limiter", {"threshold_db": -0.5}, group=g)
-    # The count alone would pass if it added the wrong plugin, so the names are
-    # read too and one of them has to look like a limiter.
+    # Verify limiter application by checking plugin name.
     b.confirm(_master_fx_names,
               lambda names: len(names) == limiter_before + 1
               and any("limit" in n.lower() for n in names),
@@ -1228,9 +1043,7 @@ def main() -> int:
 
     b = Bench(mcp, repeat=args.repeat, timeout=args.timeout, may_dismiss=not args.no_dismiss)
 
-    # Pay the connection cost before anything is timed. The first call of a
-    # session can wait up to a minute for REAPER to publish its reapy port, and
-    # that belongs to nobody's latency budget.
+    # Establish connection prior to benchmarking to exclude initialization latency.
     print("connecting to REAPER...", flush=True)
     started = time.perf_counter()
     try:
@@ -1247,18 +1060,13 @@ def main() -> int:
           f"{probe.get('track_count')} tracks, {probe.get('length', 0):.1f}s long")
     print(f"interpreter: {sys.executable}")
 
-    # --scratch turns the destructive tools on, because the only reason they
-    # were off is that they write to whatever project is open.
+    # Enable destructive tools when scratch mode is active.
     destructive = args.include_destructive or args.scratch
 
     if args.scratch:
         from reapy import reascript_api as RPR  # noqa: PLC0415
 
-        # Refuse rather than prompt. New Project on a project with unsaved
-        # changes opens a three-button save dialog, and a modal stops REAPER
-        # running deferred scripts - which stops the reapy server AND the Lua
-        # bridge, so nothing can answer and nothing can clear it but a human.
-        # Saying no here costs one sentence; provoking it costs the session.
+        # Abort if project is dirty to prevent blocking save dialogs.
         if RPR.IsProjectDirty(0):
             print("\nThe open project has unsaved changes, and --scratch would make REAPER\n"
                   "ask about them in a modal dialog - which freezes every route into\n"
@@ -1291,15 +1099,13 @@ def main() -> int:
             cleanup_problems = [
                 "skipped entirely - REAPER was not answering, so nothing could be undone"
             ]
-        # REAPER holds the imported WAV until the item referencing it is gone,
-        # so this has to follow the track deletions above.
+        # Delete temporary assets after track removal to avoid file locks.
         shutil.rmtree(workdir, ignore_errors=True)
 
     code = report(b, registered, elapsed, cleanup_problems, aborted)
 
     if args.scratch:
-        # Left open on purpose. Closing a tab with unsaved changes asks a
-        # three-button question, and this script does not answer those.
+        # Retain scratch tab to prevent blocking save dialogs on exit.
         print("  scratch mode left its project tab open - close it in REAPER without\n"
               "  saving when you are done reading the results above.\n")
 

@@ -1,27 +1,23 @@
 # Legal
 
-Licence, credits, and the limits of what this software promises.
+Information regarding licensing, credits, and liability.
 
 ## Licence
 
-Released under the **MIT Licence**. Full text in [LICENSE](LICENSE).
+This project is released under the **MIT Licence**. The full text is available in [LICENSE](LICENSE).
 
-The MCP server is derived from
-[bonfire-systems/reaper-mcp](https://github.com/bonfire-systems/reaper-mcp)
-(MIT), so `LICENSE` carries two copyright lines: theirs, which MIT requires a
-derivative work to keep, and ours, which covers everything added since.
+The MCP server is derived from [bonfire-systems/reaper-mcp](https://github.com/bonfire-systems/reaper-mcp) (MIT). The `LICENSE` file includes their copyright notice as required by the MIT license, along with our copyright notice for subsequent additions.
 
 ## Credits
 
-Design and inspiration, no code taken:
+The following projects provided design concepts, but no code was used:
 [xDarkzx/Reaper-MCP](https://github.com/xDarkzx/Reaper-MCP) (Apache-2.0) and
 [DevWesC/Reaper-Claude-MCP](https://github.com/DevWesC/Reaper-Claude-MCP) (MIT).
-The full acknowledgements are in the [shout-outs](README.md#shout-outs).
+Full acknowledgements are available in the [Credits and Dependencies](README.md#credits-and-dependencies) section of the README.
 
 ## Dependencies
 
-Installed into a virtualenv at `%USERPROFILE%\.reaper-for-claude\venv`, never
-vendored into this repository. Each keeps its own licence.
+Dependencies are installed into a virtual environment at `%USERPROFILE%\.reaper-for-claude\venv` and are not included in this repository. Each package retains its respective license.
 
 | Package | Licence |
 | --- | --- |
@@ -32,50 +28,31 @@ vendored into this repository. Each keeps its own licence.
 | [pyloudnorm](https://github.com/csteinmetz1/pyloudnorm) | MIT |
 | [soundfile](https://github.com/bastibe/python-soundfile) | BSD-3-Clause |
 
-`librosa` pulls in `numba`, `llvmlite`, `scipy` and `scikit-learn` transitively,
-all BSD-family. Run `pip list` inside the virtualenv for the resolved set.
+`librosa` transitively installs `numba`, `llvmlite`, `scipy`, and `scikit-learn`, which use BSD-family licenses. Execute `pip list` within the virtual environment to view all installed packages.
 
-One package, `python-reapy`, is also installed into your base Python's user
-site-packages. REAPER embeds its own interpreter and cannot see a virtualenv.
-See [Two interpreters](DOCS.md#two-interpreters).
+The `python-reapy` package is additionally installed into the base Python user site-packages directory. REAPER utilizes an embedded interpreter that cannot access the virtual environment. See [Two interpreters](DOCS.md#two-interpreters).
 
 ## Installers
 
-Everything the setup downloads comes from the vendors themselves: the winget
-community source for Python, Git, REAPER and Claude, Microsoft for the winget
-runtime components, and PyPI for Python packages. No third-party mirrors.
+Downloads initiated by the setup script originate from the respective vendors: the winget community source for Python, Git, REAPER, and Claude; Microsoft for winget runtime components; and PyPI for Python packages. Third-party mirrors are not used.
 
-Downloads land in `downloadCache\` before use, so you can inspect them.
-`[3] Prepare Offline Files` fetches the same set without installing anything.
+Downloaded files are stored in `downloadCache\` prior to installation. The `[3] Prepare Offline Files` option downloads these files without executing the installation.
 
 ## Privacy
 
-- **No telemetry, no analytics.** The only network traffic is the downloads
-  above.
-- **Claude's sign-in is checked for presence only.** The setup asks whether an
-  account is attached. It never reads, stores or transmits a token.
-- **Logs stay on your machine**, in `%USERPROFILE%\.reaper-for-claude\logs\`.
-- **Your work is never touched.** REAPER projects, media, presets and FX chains,
-  and Claude conversations, are not read, modified or deleted.
+- No telemetry or analytics are collected. Network activity is limited to downloading the dependencies listed above.
+- The setup script verifies the presence of a Claude sign-in. It does not read, store, or transmit authentication tokens.
+- Log files are stored locally in `%USERPROFILE%\.reaper-for-claude\logs\`.
+- The script does not read, modify, or delete REAPER projects, media files, presets, FX chains, or Claude conversations.
 
 ## Trademarks
 
-**REAPER** is a trademark of **Cockos Incorporated**. **Claude** is a trademark
-of **Anthropic PBC**. **Windows** is a trademark of **Microsoft Corporation**.
+**REAPER** is a trademark of **Cockos Incorporated**. **Claude** is a trademark of **Anthropic PBC**. **Windows** is a trademark of **Microsoft Corporation**.
 
-This is an independent, unofficial integration, **not affiliated with, endorsed
-by, or sponsored by** any of them. Those names identify the software this plugin
-works with, nothing more. You need your own licences for REAPER and Claude; this
-project provides neither.
+This is an independent integration and is not affiliated with, endorsed by, or sponsored by these entities. Trademarks are used solely for identification. Users are responsible for acquiring their own licenses for REAPER and Claude.
 
 ## No warranty
 
-This software is provided **as is**, with **no warranty of any kind**, and the
-authors are **not liable** for any claim, damage or other liability arising from
-its use. [LICENSE](LICENSE) is the binding text.
+This software is provided "as is", without warranty of any kind. The authors are not liable for any claim, damage, or other liability arising from its use. The [LICENSE](LICENSE) file contains the legally binding terms.
 
-Read that in light of what the setup does: it edits `reaper.ini`,
-`reaper-kb.ini`, `reaper-extstate.ini`, `__startup.lua` and
-`claude_desktop_config.json`. It snapshots them first and `[2] Revert
-Everything` puts them back, but **a snapshot is not a backup**. Keep your own
-copy of any REAPER configuration you would mind losing.
+The setup script modifies `reaper.ini`, `reaper-kb.ini`, `reaper-extstate.ini`, `__startup.lua`, and `claude_desktop_config.json`. While the script creates a snapshot before modification and the `[2] Revert Everything` option can restore them, users should maintain their own independent backups of any critical REAPER configuration files.

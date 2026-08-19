@@ -1,8 +1,6 @@
 # Rendering from the bridge
 
-Rendering is the only way to measure a bus, the mix or the master, so you will need it. It is
-also the part of the bridge most likely to waste an hour. Everything here was established by
-elimination against a real project.
+Rendering is required to measure a bus, the mix, or the master. The following information defines the rendering process.
 
 ## Contents
 
@@ -17,15 +15,15 @@ elimination against a real project.
 
 ## The recipe
 
-Save the user's settings, render, restore. The `40101` call is not optional.
+Save the user's settings, render, and restore. The `40101` call is required.
 
 ```lua
-local DIR = [[C:\path\to\scratch]]           -- a DIRECTORY, not a file path
+local DIR = [[C:\path\to\scratch]]
 local RES = DIR .. [[\result.txt]]
 local function wr(s) local f = io.open(RES, "w") if f then f:write(s) f:close() end end
 wr("PENDING")
 
-reaper.Main_OnCommand(40101, 0)              -- Media: set all media ONLINE
+reaper.Main_OnCommand(40101, 0)
 
 local sv = {}
 for _, k in ipairs({"RENDER_SETTINGS","RENDER_BOUNDSFLAG","RENDER_TAILFLAG"}) do
@@ -35,14 +33,14 @@ local _, svF = reaper.GetSetProjectInfo_String(0, "RENDER_FILE", "", false)
 local _, svP = reaper.GetSetProjectInfo_String(0, "RENDER_PATTERN", "", false)
 local ts, te = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
 
-reaper.GetSet_LoopTimeRange(true, false, 99.6, 121.0, false)   -- the range you want
-reaper.GetSetProjectInfo(0, "RENDER_SETTINGS",   0, true)      -- master mix
-reaper.GetSetProjectInfo(0, "RENDER_BOUNDSFLAG", 2, true)      -- time selection
-reaper.GetSetProjectInfo(0, "RENDER_TAILFLAG",   0, true)      -- no 4 s tail
+reaper.GetSet_LoopTimeRange(true, false, 99.6, 121.0, false)
+reaper.GetSetProjectInfo(0, "RENDER_SETTINGS",   0, true)
+reaper.GetSetProjectInfo(0, "RENDER_BOUNDSFLAG", 2, true)
+reaper.GetSetProjectInfo(0, "RENDER_TAILFLAG",   0, true)
 reaper.GetSetProjectInfo_String(0, "RENDER_FILE", DIR, true)
 reaper.GetSetProjectInfo_String(0, "RENDER_PATTERN", "chunk", true)
 
-reaper.Main_OnCommand(41824, 0)              -- render, auto-close dialog
+reaper.Main_OnCommand(41824, 0)
 
 reaper.GetSet_LoopTimeRange(true, false, ts, te, false)
 for k, v in pairs(sv) do reaper.GetSetProjectInfo(0, k, v, true) end
@@ -51,42 +49,33 @@ reaper.GetSetProjectInfo_String(0, "RENDER_PATTERN", svP, true)
 wr("DONE")
 ```
 
-`RENDER_FILE` is a directory. Giving it a path with a filename stem creates a folder of that
-name and puts the render inside. Harmless but confusing when you go looking for the file.
+`RENDER_FILE` takes a directory. Providing a file path creates a folder with that name containing the render.
 
 ## Why renders come out silent
 
-REAPER's preference **`offlineinact = 1`**, "set media items offline when application is not
-active", takes every media item offline whenever REAPER loses focus. Driving it from a
-background process means REAPER never has focus. Items contribute nothing, and you get a
-file of exactly the right length containing silence.
+REAPER's preference `offlineinact = 1` ("set media items offline when application is not active") takes media items offline when REAPER loses focus. When run from a background process, REAPER does not have focus. This causes the items to go offline, resulting in a silent file of the correct length.
 
-Confirm the preference:
+Check the preference:
 
 ```lua
-local ok, v = reaper.get_config_var_string("offlineinact")   -- "1" means the trap is armed
+local ok, v = reaper.get_config_var_string("offlineinact")
 ```
 
-Detect the state at any moment. This is the reliable signal:
+Detect the item state:
 
 ```lua
 local src = reaper.GetMediaItemTake_Source(reaper.GetActiveTake(reaper.GetMediaItem(0, 0)))
-reaper.GetMediaSourceLength(src)   -- 0.0 when offline, real length when online
+reaper.GetMediaSourceLength(src)
 ```
 
-Actions, verified by measuring source length either side of each:
+Actions to manage media online status:
 
 | Action | Effect |
 |---|---|
-| `40100` | set all media **offline** |
-| `40101` | set all media **online** |
+| `40100` | set all media offline |
+| `40101` | set all media online |
 
-Getting these backwards makes everything silent, so if you are unsure, call one and check the
-source length rather than trusting memory.
-
-Offer the user the permanent fix, turning `offlineinact` off in Preferences → Media, but
-treat it as their setting to change, and keep calling `40101` regardless so the skill works on
-an unmodified machine.
+Ensure `40101` is called before rendering. The user can disable `offlineinact` in Preferences, but `40101` should be called to ensure functionality on unmodified installations.
 
 ## Bounds flags
 
@@ -94,23 +83,19 @@ an unmodified machine.
 
 | Value | Meaning | Works via API? |
 |---|---|---|
-| 0 | custom time range | **No**: silently ignores `RENDER_STARTPOS`/`RENDER_ENDPOS` |
+| 0 | custom time range | No: ignores `RENDER_STARTPOS`/`RENDER_ENDPOS` |
 | 1 | entire project | Yes |
 | 2 | time selection | Yes: set it with `GetSet_LoopTimeRange` |
 
-Use 2 for section checks and 1 for the final measurement. Save and restore the user's time
-selection; they very likely have one they care about.
+Use value 2 for section checks and 1 for final measurement. Save and restore the user's time selection.
 
-`RENDER_SETTINGS = 0` is the master mix. Other values render stems and produce multiple
-numbered files, which is a good way to be confused about why there are two outputs.
+`RENDER_SETTINGS = 0` specifies the master mix. Other values render stems and produce multiple numbered files.
 
 ## Polling instead of sleeping
 
-A full-song render blocks REAPER for a minute or two. The bridge cannot write `out.txt` until
-your script returns, so a fixed sleep will read the *previous* command's output and you will
-draw conclusions from stale data.
+A full-song render blocks REAPER. The bridge does not write `out.txt` until the script returns, so a fixed sleep will read the previous command's output.
 
-Write progress to a side file from inside the Lua and poll that file:
+Write progress to a separate file from Lua and poll that file:
 
 ```powershell
 for ($i=0; $i -lt 40; $i++) {
@@ -120,79 +105,59 @@ for ($i=0; $i -lt 40; $i++) {
 }
 ```
 
-`scripts/bridge.py`, the client behind `reaper-bridge`, does the equivalent for
-ordinary commands by watching `out.txt`'s timestamp rather than sleeping, so it
-never returns the previous command's output. Raise `--timeout` for a render
-instead of polling by hand; reach for the side-file pattern above only when the
-render outlives any timeout you are willing to set.
+`scripts/bridge.py` watches the `out.txt` timestamp to avoid returning previous command output. Increase the `--timeout` parameter for renders instead of manual polling, unless the render duration exceeds the maximum acceptable timeout.
 
 ## Measuring the result
 
-Do the measurement inside the same Lua command, using REAPER's own analyser:
+Measurement can be done inside the Lua command using REAPER's API:
 
 ```lua
 local src = reaper.PCM_Source_CreateFromFile(path)
 local len = reaper.GetMediaSourceLength(src)
 local function m(md) return -20 * math.log(reaper.CalculateNormalization(src, md, 1.0, 0, len), 10) end
-local I, S, T = m(0), m(5), m(3)     -- LUFS-I, LUFS-S max, true peak dBTP
+local I, S, T = m(0), m(5), m(3)
 reaper.PCM_Source_Destroy(src)
 ```
 
-Occasionally `GetMediaSourceLength` returns 0 on a file REAPER has only just finished writing.
-Re-create the source in a subsequent command rather than concluding the render failed.
+If `GetMediaSourceLength` returns 0 on a newly written file, recreate the source in a subsequent command.
 
-Do **not** write your own WAV parser in PowerShell to double-check. In PowerShell,
-`[byte] -bor [int]` returns a **byte**, so 24-bit samples truncate to 0-255 and every file,
-including known-good ones, measures a peak of exactly −90.34 dBFS. If you ever see that
-number on more than one file, the parser is lying, not the audio. Cast with `[int]` first if
-you really need an independent check.
+If implementing a WAV parser in PowerShell, note that `[byte] -bor [int]` returns a byte, causing 24-bit samples to truncate. Cast with `[int]` before operations.
 
 ## Rendering one bus in isolation
 
-Useful for checking what a chain actually did to a source. Solo the **group or bus** track,
-not a tier that feeds downstream purely through explicit sends. REAPER's solo does not
-propagate along send chains in every routing topology, and you will render silence.
+To check the effect of a specific chain, solo the group or bus track. REAPER's solo does not propagate along send chains in all routing topologies.
 
-To measure a chain without the mastering chain colouring the result, disable the FX chains
-rather than bypassing plugins one by one:
+To measure a chain without the master chain effects, disable the FX chains:
 
 ```lua
 reaper.SetMediaTrackInfo_Value(premaster, "I_FXEN", 0)
 reaper.SetMediaTrackInfo_Value(reaper.GetMasterTrack(0), "I_FXEN", 0)
--- render, then restore both
 ```
 
-Mute reverb/delay return tracks the same way if you need the dry signal. Restore everything in
-the same command so a failure cannot leave the project in a strange state.
+Return tracks can be muted similarly. Restore states within the same command.
 
 ## Timing
 
-Measured on a 62-track project with roughly 90 plugins, 44.1 kHz:
+Example timings on a 62-track project with approximately 90 plugins at 44.1 kHz:
 
 | Range | Wall time |
 |---|---|
 | 2 s | ~2 s |
 | 8 s | ~5 s |
 | 21 s | ~12-14 s |
-| 195 s (full song) | ~100 s |
+| 195 s | ~100 s |
 
-Roughly 2× real time. Budget for it: prefer one 20 s chorus render for iteration and reserve
-full-song renders for final verification.
+Performance is approximately 2× real time. Use partial renders for iteration and full renders for final verification.
 
 ## Diagnosing a silent render
 
-In order, because each step rules out a whole class of cause:
+Check the following properties:
 
-1. **Is a track soloed?** Walk every track's `I_SOLO`. A solo left on from a previous session
-   silences everything except one element, which may not play in the range you rendered.
-2. **Is media online?** Check `GetMediaSourceLength` on a take source. 0.0 means offline.
-3. **Is anything muted, or is an FX chain disabled?** Check `B_MUTE` and `I_FXEN` per track.
-4. **Does the routing reach the master?** Walk one source-to-master path printing `D_VOL`,
-   `B_MAINSEND` and every send's destination and level.
-5. **Render with all FX chains disabled.** If that is silent too, the problem is upstream of
-   the plugins: routing or media. If it has audio, bisect the chains.
-6. **Only then** suspect a plugin.
+1. Check `I_SOLO` on every track.
+2. Check `GetMediaSourceLength` on a take source. A value of 0.0 indicates offline media.
+3. Check `B_MUTE` and `I_FXEN` on every track.
+4. Verify routing to the master track. Inspect `D_VOL`, `B_MAINSEND`, and send parameters.
+5. Render with all FX chains disabled. If silent, verify routing and media. If audio is present, bisect the chains.
+6. Verify individual plugins.
 
-A render that measures around −90 dBFS rather than true digital silence is usually the analog
-noise floor of the mix-bus plugins with no input reaching them, which points at media or
-routing, not at the plugins themselves.
+A render measuring near −90 dBFS indicates analog noise floor from plugins with no input. This indicates issues with media or routing.

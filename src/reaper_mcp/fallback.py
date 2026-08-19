@@ -1,12 +1,9 @@
-"""A one-tool MCP server for when the real one cannot start.
+"""Provides a minimal MCP server to expose startup errors.
 
-Without this, a missing dependency shows up as "reaper: failed to connect" and
-nothing else - no cause, no fix, and no way for Claude to find out more. Serving
-a single honest tool instead means Claude can ask what went wrong and relay the
-answer, which turns a dead end into one instruction the user can act on.
+The primary server fails silently on missing dependencies. Exposing a single
+diagnostic tool allows the system to communicate the error state.
 
-This module imports only `mcp`. Importing anything else would defeat its
-purpose, since a broken dependency is exactly why it is running.
+Dependencies are restricted to `mcp` to ensure execution when other imports fail.
 """
 
 import sys
@@ -20,20 +17,16 @@ def serve(root: Path, detail: str) -> None:
 
     @mcp.tool()
     def reaper_setup_status() -> str:
-        """Explain why the REAPER tools are unavailable and how to fix it.
+        """Returns the startup error state for the REAPER server.
 
-        Call this whenever the user asks about REAPER and no REAPER tools are
-        present, or when a REAPER request cannot be served.
+        Invoked to retrieve diagnostic information when normal REAPER tools are not registered.
         """
         return (
-            "The REAPER MCP server could not start, so none of its tools "
-            "(tracks, FX, MIDI, mixing, mastering, rendering, analysis) are "
-            f"available.\n\n{detail}\n\n"
+            "REAPER MCP server initialization failed.\n\n"
+            f"Error detail: {detail}\n\n"
             f"Plugin directory: {root}\n"
-            f"Interpreter that tried to start it: {sys.executable}\n\n"
-            "The file bridge is unaffected: if REAPER is running with "
-            "claude_bridge.lua loaded, Lua can still be sent through it, so "
-            "measurement and rendering work remains possible."
+            f"Python executable: {sys.executable}\n\n"
+            "File bridge functionality remains active via claude_bridge.lua."
         )
 
     mcp.run(transport="stdio")

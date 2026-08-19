@@ -15,21 +15,23 @@ def register_tools(mcp):
     def import_audio_file(file_path: str, track_index: int, position: float = 0.0) -> dict:
         """
         Import an audio file onto a track at the given position (seconds).
-        Supports all formats REAPER can read: wav, aiff, mp3, flac, ogg, etc.
+        Supports formats readable by REAPER: wav, aiff, mp3, flac, ogg.
         """
         try:
             if not os.path.exists(file_path):
                 return {"success": False, "error": f"File not found: {file_path}"}
             project = get_project()
             track = project.tracks[track_index]
-            # Select only this track, set cursor, then insert media at cursor
+            
+            # REAPER uses track selection and cursor position to determine the insertion point.
             RPR.SetOnlyTrackSelected(track.id)
             project.cursor_position = position
             RPR.InsertMedia(file_path, 0)
-            # Retrieve the item that was just created (last item on the track)
+            
+            # Inserted media is appended as the last item on the track.
             track_refreshed = project.tracks[track_index]
             if track_refreshed.n_items == 0:
-                return {"success": False, "error": "Insert succeeded but no item found on track"}
+                return {"success": False, "error": "Insert operation completed but no item was found on track."}
             item = track_refreshed.items[track_refreshed.n_items - 1]
             return {
                 "success": True,
@@ -45,35 +47,26 @@ def register_tools(mcp):
 
     @mcp.tool()
     def start_recording(track_index: int) -> dict:
-        """Arm a track and start recording. Call stop_transport when done."""
+        """Arm a track and start recording."""
         try:
             project = get_project()
             track = project.tracks[track_index]
 
-            # reapy's Track has no `armed` property, so `track.armed = True`
-            # only set an attribute on a throwaway Python object - REAPER never
-            # heard about it. Recording then started with nothing armed, which
-            # REAPER answers with a modal "No tracks are armed for recording"
-            # warning; a modal dialog stops every background script, so the
-            # tool that was meant to start a recording instead froze the
-            # connection until somebody clicked the box.
+            # The reapy.Track.armed property does not update REAPER's state. 
+            # Initiating recording without an armed track triggers a modal dialog that halts script execution.
             RPR.SetMediaTrackInfo_Value(track.id, "I_RECARM", 1)
             if not RPR.GetMediaTrackInfo_Value(track.id, "I_RECARM"):
                 return {
                     "success": False,
-                    "error": (
-                        f"Could not arm track {track_index}. Not starting the "
-                        "transport: recording with nothing armed opens a modal "
-                        "warning in REAPER that blocks every other tool."
-                    ),
+                    "error": f"Track {track_index} arming failed. Transport start aborted to prevent modal dialog block.",
                 }
 
-            RPR.Main_OnCommand(1013, 0)  # Transport: Record
+            RPR.Main_OnCommand(1013, 0)
             return {
                 "success": True,
                 "track_index": track_index,
                 "armed": True,
-                "message": "Recording started. Call stop_transport to stop.",
+                "message": "Recording started.",
             }
         except Exception as e:
             logger.error(f"start_recording failed: {e}")
@@ -83,8 +76,8 @@ def register_tools(mcp):
     def stop_transport() -> dict:
         """Stop playback or recording."""
         try:
-            RPR.Main_OnCommand(1016, 0)  # Transport: Stop
-            return {"success": True, "message": "Transport stopped"}
+            RPR.Main_OnCommand(1016, 0)
+            return {"success": True, "message": "Transport stopped."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -92,8 +85,8 @@ def register_tools(mcp):
     def play_project() -> dict:
         """Start project playback from the current cursor position."""
         try:
-            RPR.Main_OnCommand(1007, 0)  # Transport: Play
-            return {"success": True, "message": "Playback started"}
+            RPR.Main_OnCommand(1007, 0)
+            return {"success": True, "message": "Playback started."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -117,24 +110,18 @@ def register_tools(mcp):
         fade_out: float = 0.0,
     ) -> dict:
         """
-        Trim an audio item and/or add fades. All values in seconds.
+        Trim an audio item and add fades.
         start_trim: seconds to remove from the beginning.
         end_trim: seconds to remove from the end.
-        fade_in/fade_out: fade length in seconds.
+        fade_in: fade in length in seconds.
+        fade_out: fade out length in seconds.
         """
         try:
             project = get_project()
             track = project.tracks[track_index]
             item = track.items[item_index]
 
-            # Written through reascript_api and read back below.
-            #
-            # `item.position` and `item.length` do reach REAPER, but the other
-            # three reapy properties in this block did not: fade_in_length and
-            # fade_out_length assign an attribute and go nowhere, so the fades
-            # were silently dropped while this returned success, and
-            # take.start_offset has no setter at all - it raised AttributeError
-            # and took the whole trim with it.
+            # Direct RPR calls are required because reapy properties for fades and offsets either fail to propagate to REAPER or lack setter methods.
             if start_trim > 0:
                 RPR.SetMediaItemInfo_Value(item.id, "D_POSITION", item.position + start_trim)
                 RPR.SetMediaItemInfo_Value(item.id, "D_LENGTH", item.length - start_trim)
@@ -152,8 +139,7 @@ def register_tools(mcp):
             if fade_out > 0:
                 RPR.SetMediaItemInfo_Value(item.id, "D_FADEOUTLEN", fade_out)
 
-            # Reported from REAPER rather than from the arguments, so a value it
-            # clamped or refused shows up here instead of being echoed back.
+            # Querying REAPER directly ensures returned values reflect actual state, including constraints.
             return {
                 "success": True,
                 "track_index": track_index,
@@ -168,7 +154,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def adjust_pitch(track_index: int, item_index: int, semitones: float) -> dict:
-        """Adjust the pitch of an audio item by semitones (can be fractional)."""
+        """Adjust the pitch of an audio item by semitones."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -186,7 +172,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def adjust_playback_rate(track_index: int, item_index: int, rate: float) -> dict:
-        """Adjust playback rate of an audio item. 1.0 = normal speed, 0.5 = half speed."""
+        """Adjust playback rate of an audio item."""
         try:
             project = get_project()
             track = project.tracks[track_index]

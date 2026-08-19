@@ -1,20 +1,21 @@
 #!/bin/sh
-# Bare-command wrapper for the REAPER file bridge.
+# Wrapper for the REAPER file bridge.
 #
-# Claude Code puts a plugin's bin/ on the Bash tool's PATH, so with the plugin
-# enabled this is callable as `reaper-bridge` from any Bash tool call, with no
-# path juggling in the skill and nothing to keep in sync when the plugin moves.
+# The bin/ directory is present on the PATH. This allows `reaper-bridge` to be 
+# invoked without specifying an absolute path.
 #
+# Usage examples:
 #   reaper-bridge --code 'return reaper.GetAppVersion()'
 #   echo 'return 1+1' | reaper-bridge
 #
-# Resolved from this script's own location rather than CLAUDE_PLUGIN_ROOT: that
-# variable is exported to hook and MCP subprocesses, but relying on it inside a
-# plain Bash tool call is an assumption this does not need to make.
+# The location is resolved relative to the script path to avoid dependency on 
+# the CLAUDE_PLUGIN_ROOT environment variable, which may not be present in all 
+# contexts.
 set -eu
 
 self=$0
-# Follow symlinks so a linked copy still finds the plugin it belongs to.
+
+# Resolving symlinks ensures the relative path to the target script remains valid.
 while [ -L "$self" ]; do
     link=$(readlink "$self")
     case $link in
@@ -27,7 +28,7 @@ root=$(cd "$(dirname "$self")/.." && pwd)
 script=$root/scripts/bridge.py
 
 [ -f "$script" ] || {
-    echo "reaper-bridge: cannot find $script" >&2
+    echo "Error: $script not found." >&2
     exit 1
 }
 
@@ -38,5 +39,5 @@ for py in "${REAPER_MCP_PYTHON:-}" python3 python py; do
     fi
 done
 
-echo "reaper-bridge: no Python interpreter found on PATH." >&2
+echo "Error: Python interpreter not found." >&2
 exit 1

@@ -1,33 +1,15 @@
 <#
 .SYNOPSIS
-  Configure the plugin: dependencies, REAPER bridge, distant API, Claude.
-
-  Installs no applications - install-everything.ps1 has done that by the time
-  this runs, and running this on its own assumes they are already there.
+  Configure plugin components.
 
 .DESCRIPTION
-  The repository is the plugin. Nothing is copied into a skills directory any
-  more: Claude Code registers this folder as a marketplace and installs from it,
-  and Claude Desktop installs the same plugin through its own Plugins UI. That
-  removes the class of bug where an edited repository and an installed copy
-  drifted apart, and where both loaded at once and every tool appeared twice.
-
-  Four independent things get set up. Each can fail without taking the others
-  down, and each is idempotent, so re-running after a failure is safe.
-
-    1. Python      a virtualenv the plugin owns, holding the server's deps
-    2. REAPER      the Lua bridge listener, loaded from __startup.lua
-    3. REAPER      the reapy distant API, which the MCP server connects through
-    4. Claude      Claude Code via the CLI; Claude Desktop via its config
+  Configures Python virtualenv, REAPER Lua bridge, REAPER distant API, and Claude integration. Configuration blocks are independent and idempotent.
 
 .PARAMETER Only
-  Restrict the run to one area: python, reaper, claude.
+  Target specific configuration area: python, reaper, claude.
 
 .PARAMETER Link
-  Install into Claude Code as a live-editing skills-directory plugin instead of
-  a marketplace install. A marketplace install copies the plugin into a
-  versioned cache, so edits here would not reach Claude until the version is
-  bumped and it is reinstalled. Use this while developing the plugin.
+  Install into Claude Code via directory junction.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File configure-plugin.ps1
@@ -45,21 +27,11 @@ param(
     [switch]$SkipReaperConfig,
     [switch]$Link,
     [switch]$Force,
-    # Set by install-everything.ps1, which prints the combined summary itself.
-    #
-    # Without this there are two "DONE" banners, and they can disagree: each
-    # script keeps its own $script:Problems, and `&` runs this one in a child
-    # scope, so anything found here never reaches the wrapper's list. The user
-    # then sees "DONE - with 1 thing to fix" under "DONE - nothing left to do by
-    # hand" and has no way to tell which one is true. Writing the problems to
-    # this path hands them over instead, and the banner below is skipped.
     [string]$ProblemsOut
 )
 
 $ErrorActionPreference = 'Stop'
 
-# How this talks, and the log it writes. Same function names the rest of
-# this file already calls - see lib-console.ps1.
 . (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 $script:Problems = @()
@@ -67,21 +39,8 @@ function Add-Problem($m) { $script:Problems += $m }
 
 function Invoke-Native {
     <#
-      Run a native command without letting its stderr abort the script.
-
-      Windows PowerShell 5.1 wraps every stderr line from a native executable in
-      an ErrorRecord. Under $ErrorActionPreference = 'Stop' that is a TERMINATING
-      error, so a pip progress note or a warning from the claude CLI - output
-      that means nothing is wrong - throws NativeCommandError and takes the rest
-      of the install with it. Observed as:
-
-          [FAIL] Plugin configuration failed: RemoteException
-
-      which stops the REAPER bridge, the distant API and the Claude registration
-      from running at all, while the earlier steps report success.
-
-      Exit codes are what these commands actually communicate, and every caller
-      here already checks $LASTEXITCODE.
+      Prevents native command stderr from generating ErrorRecords.
+      Avoids termination when $ErrorActionPreference = 'Stop' is active.
     #>
     param([scriptblock]$Block)
     $prev = $ErrorActionPreference
@@ -93,11 +52,6 @@ $doPython = (-not $Only) -or ($Only -eq 'python')
 $doReaper = (-not $Only) -or ($Only -eq 'reaper')
 $doClaude = (-not $Only) -or ($Only -eq 'claude')
 
-# ---------------------------------------------------------------------------
-# Anchor on the script's own location. $PSScriptRoot is install\, so the plugin
-# root is its parent. Nothing here uses a path relative to the caller's cwd -
-# "Run as administrator" starts you in System32.
-# ---------------------------------------------------------------------------
 $PluginRoot = Split-Path -Parent $PSScriptRoot
 $Bootstrap  = Join-Path $PluginRoot 'scripts\bootstrap.py'
 $Launcher   = Join-Path $PluginRoot 'scripts\launch_server.py'
@@ -107,7 +61,7 @@ $BridgeLua  = Join-Path $ReaperSrc 'claude_bridge.lua'
 $Manifest   = Join-Path $PluginRoot '.claude-plugin\plugin.json'
 
 foreach ($p in @($Bootstrap, $Launcher, $EnableRpy, $BridgeLua, $Manifest)) {
-    if (-not (Test-Path $p)) { throw "Missing plugin file: $p" }
+    if (-not (Test-Path $p)) { throw "Missing file: $p" }
 }
 
 $MarketplaceName = 'reaper-skills-for-claude'
@@ -116,12 +70,8 @@ $PluginRef       = "$PluginName@$MarketplaceName"
 
 function Test-MarketplaceInstalled {
     <#
-      Is the plugin currently installed from the marketplace? Reads, never writes.
-
-      Needed because "a link exists" and "a link is what loads" are different
-      facts. Claude resolves the shared plugin name in favour of the
-      marketplace, so when both are present the link is inert - and saying so
-      requires asking which are present rather than assuming.
+      Checks for marketplace installation.
+      Required because junction presence does not guarantee execution priority.
     #>
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { return $false }
     $listing = Invoke-Native { & claude plugin list 2>&1 | Out-String }
@@ -130,47 +80,28 @@ function Test-MarketplaceInstalled {
 
 function Clear-MarketplaceRoute {
     <#
-      Take the marketplace route out, so the developer link is the only one left.
-
-      The two routes share a plugin name, and Claude Code resolves that in
-      favour of the marketplace - silently. Left in place, the link loads
-      nothing and the next edit in this repository simply appears to do nothing.
-
-      Uninstalling is not sufficient on its own: the marketplace ENTRY reserves
-      the name whether or not anything is installed from it. Both have to go.
-
-      Used by BOTH branches below, which is the point. It used to live only in
-      the -Link branch, so a plain [1] on a machine that had a link would notice
-      the link, say so, and register the marketplace on top of it anyway -
-      creating the conflict, reporting "Installed", and leaving the health check
-      to fail on a clash this script had just made.
+      Removes marketplace configuration.
+      Prevents marketplace entries from overriding local directory junctions.
     #>
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { return }
 
-    # Every call goes through Invoke-Native, not just the first. They all merge
-    # stderr, and under EAP 'Stop' a single warning line from the CLI is a
-    # terminating error - which would abort partway, leaving the marketplace
-    # entry still shadowing the junction this exists to clear.
     $listing = Invoke-Native { & claude plugin list 2>&1 | Out-String }
     if ($listing -match [regex]::Escape($PluginRef)) {
-        Write-Info "Removing the marketplace install, which would shadow the link."
+        Write-Info "Removing marketplace installation."
         Invoke-Native { & claude plugin uninstall $PluginRef 2>&1 | ForEach-Object { Write-Info $_ } }
     }
 
     $markets = Invoke-Native { & claude plugin marketplace list 2>&1 | Out-String }
     if ($markets -match [regex]::Escape($MarketplaceName)) {
-        Write-Info "Removing the marketplace registration, which reserves the name."
+        Write-Info "Removing marketplace registration."
         Invoke-Native { & claude plugin marketplace remove $MarketplaceName 2>&1 | ForEach-Object { Write-Info $_ } }
     }
 }
 
 [void](Start-RunLog 'configure-plugin')
-Write-Banner "REAPER for Claude - configure the plugin"
-Write-Info "plugin  $PluginRoot"
+Write-Banner "Plugin configuration"
+Write-Info "Path: $PluginRoot"
 
-# ---------------------------------------------------------------------------
-# 1. Python environment
-# ---------------------------------------------------------------------------
 $PythonExe = $null
 if ($doPython -or $doReaper) {
     $cmd = Get-Command python -ErrorAction SilentlyContinue
@@ -181,63 +112,28 @@ if ($doPython) {
     Write-Step "Python environment"
 
     if (-not $PythonExe) {
-        Write-Err "python is not on PATH."
-        Add-Problem "Install Python from python.org, ticking 'Add Python to PATH', then re-run."
+        Write-Err "Python executable not found."
+        Add-Problem "Install Python and add it to PATH."
     } elseif ($SkipBootstrap) {
-        Write-Warn2 "Skipping the dependency install (-SkipBootstrap)."
+        Write-Warn2 "Skipping dependency installation."
     } else {
         $pyVer = & python -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null
-        Write-Info "Building the environment with Python $pyVer ($PythonExe)"
-        Write-Info "A cold install takes a few minutes - librosa is the slow one."
+        Write-Info "Python version: $pyVer ($PythonExe)"
 
-        # bootstrap.py owns the whole decision: where the venv goes, whether the
-        # requirements changed, and whether the result actually imports. The
-        # installer deliberately does not second-guess it, so there is one
-        # implementation of that logic rather than two that can disagree.
         Invoke-Native { & python $Bootstrap }
         if ($LASTEXITCODE -eq 0) {
             Write-Ok "Dependencies installed."
         } else {
-            Write-Err "bootstrap.py exited $LASTEXITCODE."
-            Add-Problem "Read the pip output above. If no wheel exists for Python $pyVer, try: py -3.12 `"$Bootstrap`" --recreate"
+            Write-Err "bootstrap.py exit code: $LASTEXITCODE."
+            Add-Problem "Check output. Retry command: py -3.12 `"$Bootstrap`" --recreate"
         }
     }
 }
 
-# ---------------------------------------------------------------------------
-# Choosing the interpreter that configures REAPER.
-#
-# This is NOT the interpreter that runs the server, and conflating them destroys
-# data. Two independent requirements:
-#
-#   * `import reapy` must work. bootstrap.py installs into a virtualenv, so on a
-#     fresh machine the system Python has nothing, and configuring would fail at
-#     the import - leaving a working-looking install where every REAPER tool
-#     errors later.
-#
-#   * Python must be 3.12 or older. reapy 0.10.0 crashes partway through
-#     rewriting reaper.ini on 3.13+, because configparser gained unnamed
-#     sections and reapy calls .lower() on the sentinel. The crash leaves
-#     reaper.ini EMPTY - every REAPER preference gone, with nothing in the error
-#     naming the file. enable_reapy.py refuses to run there, and this picks an
-#     interpreter that will not hit it in the first place.
-#
-# The server has no such limit and happily runs on 3.14, which is why it is
-# selected separately.
-# ---------------------------------------------------------------------------
-# One value, not an interpreter plus arguments. `--print-reaper-python` returns
-# a resolved path - which is why Test-Path can be called on it below - so the
-# launcher-style "py -3.12" pair it used to allow for cannot occur. The empty
-# argument array that carried that case is gone rather than left as a branch
-# nothing can reach.
+# Select Python interpreter for REAPER configuration.
+# Required because reapy 0.10.0 modifies reaper.ini and requires Python <= 3.12.
 $ReapyPython = $null
 
-# bootstrap.py owns this choice, so ask it rather than repeating the search.
-# The interpreter that runs enable_reapy.py BECOMES REAPER's embedded Python -
-# reapy writes its shared library path into reaper.ini - so this decision and
-# "where does reapy get installed" are the same decision, and having two
-# implementations of it would eventually point REAPER at one interpreter while
-# installing reapy into another.
 if ($PythonExe) {
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -245,15 +141,6 @@ if ($PythonExe) {
         $chosen = & python $Bootstrap --print-reaper-python 2>$null | Select-Object -Last 1
         if ($LASTEXITCODE -eq 0 -and $chosen) {
             $chosen = "$chosen".Trim()
-            # Two conditions, both required, and neither is bootstrap's job to
-            # enforce: it reports the best available interpreter even when the
-            # best available is unsuitable.
-            #
-            #   <= 3.12   or enable_reapy refuses and reaper.ini is left alone
-            #   has reapy or configuring fails at the import
-            #
-            # Rejecting here rather than attempting means the user gets the
-            # "install 3.12" instruction instead of watching a step fail first.
             $null = & $chosen -c 'import sys; sys.exit(0 if sys.version_info[:2] <= (3, 12) else 1)' 2>&1
             $verOk = ($LASTEXITCODE -eq 0)
             $null = & $chosen -c 'import reapy' 2>&1
@@ -262,7 +149,7 @@ if ($PythonExe) {
             if ($verOk -and $reapyOk -and (Test-Path $chosen)) {
                 $ReapyPython = $chosen
             } elseif (-not $verOk) {
-                Write-Info "Best available interpreter is $chosen, which is newer than 3.12."
+                Write-Info "Selected interpreter $chosen is > 3.12."
             }
         }
     } catch { }
@@ -274,9 +161,6 @@ function Invoke-Reapy {
     & $ReapyPython @ScriptArgs
 }
 
-# ---------------------------------------------------------------------------
-# 2. REAPER: bridge listener
-# ---------------------------------------------------------------------------
 $ReaperFound = $false
 $ScriptsDir  = $null
 
@@ -287,17 +171,6 @@ if ($doReaper) {
     $ReaperFound = Test-Path (Join-Path $ReaperResourcePath 'reaper.ini')
 
     if (-not $ReaperFound) {
-        # Two very different situations, and telling them apart matters: the
-        # advice for one is useless for the other. A run where winget was
-        # unavailable reported "Launch REAPER once so it creates its config" on
-        # a machine with no REAPER on it at all - an instruction the user cannot
-        # follow, pointing away from the thing that actually needs doing.
-        # Interpolated rather than Join-Path'd, for two reasons. An edit once
-        # collapsed the "\r" of "\reaper.exe" into a carriage return inside these
-        # literals, which made every Test-Path false and left this branch
-        # unreachable - so the "install REAPER" message was printed even to
-        # people who already had it. And Join-Path throws on a null first
-        # argument, which ${env:ProgramFiles(x86)} is on a 32-bit install.
         $exe = @(
             "$env:ProgramFiles\REAPER (x64)\reaper.exe",
             "$env:ProgramFiles\REAPER\reaper.exe",
@@ -305,12 +178,11 @@ if ($doReaper) {
         ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
         if ($exe) {
-            Write-Err "REAPER is installed but has never run - no reaper.ini under $ReaperResourcePath"
-            Add-Problem "Launch REAPER once so it creates its config, then re-run. Portable install? Pass -ReaperResourcePath."
+            Write-Err "reaper.ini not found."
+            Add-Problem "Execute REAPER to generate configuration file. Specify -ReaperResourcePath for portable installations."
         } else {
-            Write-Err "REAPER does not appear to be installed."
-            Write-Info "Nothing here can configure it until it exists: https://www.reaper.fm/download.php"
-            Add-Problem "Install REAPER, run it once so it creates its config, then re-run."
+            Write-Err "REAPER installation not found."
+            Add-Problem "Install REAPER and execute once."
         }
     } else {
         Write-Info "Resource path: $ReaperResourcePath"
@@ -318,15 +190,11 @@ if ($doReaper) {
         New-Item -ItemType Directory -Force -Path $ScriptsDir | Out-Null
 
         Copy-Item -Force $BridgeLua (Join-Path $ScriptsDir 'claude_bridge.lua')
-        Write-Ok "claude_bridge.lua -> $ScriptsDir"
+        Write-Ok "Copied claude_bridge.lua."
 
-        # Also drop enable_reapy.py next to it, so it can be run from REAPER's
-        # action list later without going back to this folder.
         Copy-Item -Force $EnableRpy (Join-Path $ScriptsDir 'enable_reapy.py')
-        Write-Ok "enable_reapy.py -> $ScriptsDir"
+        Write-Ok "Copied enable_reapy.py."
 
-        # __startup.lua is REAPER's auto-run hook. Overwriting it would destroy
-        # whatever startup script the user already has, so add one dofile() line.
         $startup = Join-Path $ScriptsDir '__startup.lua'
         $loader  = @'
 
@@ -343,77 +211,57 @@ end
         if (-not (Test-Path $startup)) {
             [System.IO.File]::WriteAllText($startup, $loader.TrimStart("`r", "`n"),
                                            (New-Object System.Text.UTF8Encoding $false))
-            Write-Ok "Created __startup.lua with the bridge loader."
+            Write-Ok "Created __startup.lua."
         } elseif ((Get-Content $startup -Raw) -match 'claude_bridge') {
-            Write-Ok "__startup.lua already loads the bridge; left untouched."
+            Write-Ok "__startup.lua contains bridge loader."
         } else {
             Copy-Item -Force $startup "$startup.bak"
             Add-Content -Path $startup -Value $loader -Encoding UTF8
-            Write-Ok "Appended the bridge loader to your __startup.lua (backup: __startup.lua.bak)."
+            Write-Ok "Modified __startup.lua. Backup created."
         }
 
         Write-Info "Bridge directory: $(Join-Path $ReaperResourcePath 'claude_bridge')"
     }
 
-    # -----------------------------------------------------------------------
-    # 3. REAPER: distant API
-    #    reapy.config.configure_reaper() works from outside REAPER, so this is
-    #    automated - but only with REAPER closed, because REAPER rewrites
-    #    reaper.ini on exit and would discard whatever was written underneath it.
-    # -----------------------------------------------------------------------
+    # Execute outside REAPER process to prevent concurrent reaper.ini modifications.
     Write-Step "REAPER distant API"
 
     if ($SkipReaperConfig) {
-        Write-Warn2 "Skipping (-SkipReaperConfig)."
+        Write-Warn2 "Skipped distant API configuration."
     } elseif (-not $ReaperFound -or -not $PythonExe) {
-        Write-Warn2 "Skipped: needs both Python and a REAPER config folder."
-        Add-Problem "After fixing the above, run: python `"$EnableRpy`""
+        Write-Warn2 "Skipped distant API configuration. Missing Python or REAPER path."
+        Add-Problem "Run: python `"$EnableRpy`""
     } elseif (-not $ReapyPython) {
-        # Refusing is the safe outcome. Running this under 3.13+ would empty
-        # reaper.ini, and no amount of connectivity is worth that.
-        Write-Err "No Python 3.12-or-older interpreter with reapy is available."
-        Write-Info "reapy 0.10.0 empties reaper.ini when it configures REAPER under"
-        Write-Info "Python 3.13+, so this step is skipped rather than risked."
-        Write-Info "Everything else - the bridge, the server, Claude - is unaffected."
-        Add-Problem "Install Python 3.12 (winget install -e --id Python.Python.3.12), then: py -3.12 -m pip install python-reapy  and re-run with -Only reaper"
+        Write-Err "Compatible Python version not found."
+        Add-Problem "Install Python 3.12 and python-reapy."
     } else {
         $reaperRunning = @(Get-Process -Name 'reaper' -ErrorAction SilentlyContinue).Count -gt 0
         if ($reaperRunning -and -not $Force) {
-            Write-Warn2 "REAPER is running. It rewrites reaper.ini on exit, which would discard these changes."
-            Write-Info  "Close REAPER and re-run, or run this from inside REAPER:"
-            Write-Info  "  Actions > Show action list > ReaScript: Run... > $ScriptsDir\enable_reapy.py"
-            Add-Problem "Distant API not configured: REAPER was open. Close it and re-run."
+            Write-Warn2 "REAPER process detected."
+            Add-Problem "Close REAPER and execute configuration."
         } else {
-            Write-Info "Using interpreter: $ReapyPython"
-            # Not $args - that is an automatic variable in PowerShell.
+            Write-Info "Interpreter: $ReapyPython"
             $pyArgs = @($EnableRpy, '--resource-path', $ReaperResourcePath)
             if ($Force) { $pyArgs += '--force' }
             Invoke-Native { Invoke-Reapy $pyArgs }
             if ($LASTEXITCODE -eq 0) {
-                Write-Ok "Distant API configured."
+                Write-Ok "Distant API configuration applied."
             } else {
-                Write-Err "enable_reapy.py exited $LASTEXITCODE."
-                Add-Problem "Run manually with REAPER closed: $ReapyPython `"$EnableRpy`""
+                Write-Err "enable_reapy.py exit code: $LASTEXITCODE."
+                Add-Problem "Execute: $ReapyPython `"$EnableRpy`""
             }
         }
     }
 }
 
-# ---------------------------------------------------------------------------
-# 4. Claude
-# ---------------------------------------------------------------------------
 if ($doClaude) {
     Write-Step "Claude Code"
 
     $LinkPath = Join-Path $env:USERPROFILE ".claude\skills\$PluginName"
 
     if ($SkipCode) {
-        Write-Warn2 "Skipping Claude Code (-SkipCode)."
+        Write-Warn2 "Skipped Claude Code configuration."
     } elseif ($Link) {
-        # A folder under a skills directory containing .claude-plugin/plugin.json
-        # loads as a plugin discovered *in place* - no copy, so edits are live.
-        # A junction rather than a copy is the whole point; a copy would
-        # reintroduce exactly the drift this layout exists to remove.
         $skillsDir = Split-Path -Parent $LinkPath
         New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
 
@@ -421,96 +269,49 @@ if ($doClaude) {
         if ($existing) {
             $isLink = $existing.Attributes -band [IO.FileAttributes]::ReparsePoint
             if (-not $isLink) {
-                Write-Err "$LinkPath exists and is a real directory, not a link."
-                Add-Problem "Delete or rename $LinkPath, then re-run with -Link."
+                Write-Err "Directory exists at junction path."
+                Add-Problem "Remove $LinkPath and execute."
             } else {
-                # Junctions are cheap to recreate and the target may have moved.
                 (Get-Item $LinkPath).Delete()
                 $existing = $null
             }
         }
 
         if (-not (Test-Path $LinkPath)) {
-            # mklink /J needs no elevation, unlike a symbolic link.
             & cmd /c mklink /J "`"$LinkPath`"" "`"$PluginRoot`"" | Out-Null
             if (Test-Path $LinkPath) {
-                Write-Ok "Linked $LinkPath -> $PluginRoot"
-                Write-Info "Loads as $PluginName@skills-dir. Edits here are live."
+                Write-Ok "Junction created."
             } else {
-                Write-Err "Could not create the junction."
-                Add-Problem "Create it by hand: mklink /J `"$LinkPath`" `"$PluginRoot`""
+                Write-Err "Junction creation failed."
+                Add-Problem "Execute: mklink /J `"$LinkPath`" `"$PluginRoot`""
             }
         }
 
-        # Clears them rather than printing advice - see Clear-MarketplaceRoute.
         Clear-MarketplaceRoute
 
         if (Get-Command claude -ErrorAction SilentlyContinue) {
             $after = Invoke-Native { & claude plugin list 2>&1 | Out-String }
-            if ($after -match "$PluginName@skills-dir") { Write-Ok "Loaded in place; edits are live." }
-            else { Write-Warn2 "Not loaded yet - restart Claude Code or run /reload-plugins." }
+            if ($after -match "$PluginName@skills-dir") { Write-Ok "Plugin loaded." }
+            else { Write-Warn2 "Plugin load status unverified." }
         }
     } else {
         $claude = Get-Command claude -ErrorAction SilentlyContinue
 
         if (Test-Path $LinkPath) {
-            # A link and a marketplace install cannot both work, so this route
-            # stops here rather than registering over the top of one.
-            #
-            # It used to say "everything loads twice" and ask for the link to be
-            # deleted, then install the marketplace regardless. Both halves were
-            # wrong. They do not load twice - Claude Code prefers the
-            # marketplace and the link loads NOTHING - and installing anyway
-            # broke a live-edit setup somebody had deliberately made, reported
-            # "Installed", then left the health check failing on a clash this
-            # script had created one step earlier. The run ended up printing two
-            # opposite remedies: rmdir the link here, remove the marketplace
-            # there.
-            #
-            # The link wins because it is the more specific state and the one
-            # that took a deliberate act to create. Switching the other way is
-            # one command, and it is offered rather than performed.
-            Write-Warn2 "A developer link exists at $LinkPath"
+            Write-Warn2 "Junction exists at $LinkPath"
 
             if (Test-MarketplaceInstalled) {
-                # Both routes are here, and this run made neither of them. It
-                # reports and stops.
-                #
-                # It used to remove the marketplace, on the reasoning that a
-                # link "took a deliberate act to create". So does adding a
-                # marketplace through Claude's own Settings > Plugins, and that
-                # act is usually the more recent one - so a plain re-run of [1]
-                # silently deleted a plugin entry the user had just added by
-                # hand, and it vanished from their plugin list with nothing
-                # said. Choosing between two things the user set up deliberately
-                # is not this script's decision to make quietly.
-                Write-Info  "The marketplace copy is installed too, and Claude prefers it, so"
-                Write-Info  "that is the one loading - this link is inert while it is there."
-                Write-Info  "Both are left exactly as they are. To pick one:"
-                Write-Info  "  keep the marketplace copy (the one Settings > Plugins lists):"
-                Write-Info  "    rmdir `"$LinkPath`""
-                Write-Info  "  or load this folder live instead, for editing:"
-                Write-Info  "    install\configure-plugin.ps1 -Only claude -Link"
-                Add-Problem "Two plugin routes are installed and the marketplace one is loading. Pick one with the commands above - nothing was changed."
+                Write-Info "Marketplace and junction configurations both present."
+                Add-Problem "Remove junction or marketplace configuration."
             } else {
-                Write-Info  "Keeping it - it loads this repository in place, so edits here are live."
-                Write-Info  "Not registering the marketplace: the two share a plugin name, and"
-                Write-Info  "Claude Code would silently prefer the marketplace, leaving the link dead."
-                Write-Info  "To use the marketplace copy instead, delete the link and re-run [1]:"
-                Write-Info  "  rmdir `"$LinkPath`""
+                Write-Info "Junction retained."
             }
         } elseif (-not $claude) {
-            Write-Warn2 "The claude CLI is not on PATH; registering by hand instead."
-            Write-Info  "In Claude Code, run:"
-            Write-Info  "  /plugin marketplace add `"$PluginRoot`""
-            Write-Info  "  /plugin install $PluginRef"
+            Write-Warn2 "CLI executable not found."
+            Write-Info "Execute in Claude Code:"
+            Write-Info "  /plugin marketplace add `"$PluginRoot`""
+            Write-Info "  /plugin install $PluginRef"
         } else {
-            # --scope user is the CLI default, but stated explicitly because it
-            # is the design intent rather than a convenience: the plugin belongs
-            # to this user account, in every project, and never to one
-            # repository or to the machine as a whole. A project-scoped install
-            # would work only inside this folder, which is not what anyone wants
-            # from an audio toolkit.
             Invoke-Native {
                 & claude plugin marketplace add "$PluginRoot" --scope user 2>&1 |
                     ForEach-Object { Write-Info $_ }
@@ -518,10 +319,9 @@ if ($doClaude) {
                     ForEach-Object { Write-Info $_ }
             }
             if ($LASTEXITCODE -eq 0) {
-                Write-Ok "Installed $PluginRef"
+                Write-Ok "Installation complete."
             } else {
-                Write-Warn2 "The CLI returned $LASTEXITCODE - it may already be installed."
-                Write-Info  "Check with: claude plugin list"
+                Write-Warn2 "CLI returned $LASTEXITCODE."
             }
         }
     }
@@ -529,24 +329,8 @@ if ($doClaude) {
     Write-Step "Claude Desktop"
 
     if ($SkipDesktop) {
-        Write-Warn2 "Skipping Claude Desktop (-SkipDesktop)."
+        Write-Warn2 "Skipped Claude Desktop configuration."
     } else {
-        Write-Info "Plugin (recommended - brings the skills as well as the tools):"
-        Write-Info "  Customize > Plugins > Personal plugins > + > Add marketplace"
-        Write-Info "  Point it at this repository once it is pushed to a git host."
-        Write-Info ""
-        Write-Info "Writing the MCP server directly into the Desktop config as well, so the"
-        Write-Info "REAPER tools work immediately without waiting on that."
-
-        # Claude Desktop holds this file's contents in memory and rewrites it -
-        # exactly like REAPER and reaper.ini. An edit made underneath a running
-        # Desktop can be silently reverted to whatever it had before, which
-        # presents much later as a server pointing at a path that no longer
-        # exists. Warn rather than refuse: the write is harmless when it sticks,
-        # and the health check catches it when it does not.
-        # Path-aware, because the Claude Code CLI is also claude.exe: matching on
-        # name alone warns about Desktop being open when only the CLI is
-        # running, which is the normal state when this is run from a terminal.
         $desktopRunning = @(
             Get-Process -Name 'claude', 'Claude' -ErrorAction SilentlyContinue | Where-Object {
                 $p = try { $_.Path } catch { $null }
@@ -554,26 +338,10 @@ if ($doClaude) {
             }
         ).Count -gt 0
         if ($desktopRunning) {
-            Write-Warn2 "Claude Desktop is running. It can rewrite this file from its own state,"
-            Write-Warn2 "reverting what is written below."
-            Add-Problem "Quit Claude Desktop fully (tray icon too), re-run with -Only claude, then start it again."
+            Write-Warn2 "Claude Desktop process detected."
+            Add-Problem "Terminate Claude Desktop and execute configuration."
         }
 
-        # Desktop has no ${CLAUDE_PLUGIN_ROOT} outside the plugin runtime, so the
-        # config gets an absolute path. That is safe to write here precisely
-        # because the installer knows where the plugin actually is.
-        # An absolute interpreter, not the word "python".
-        #
-        # This file is ours to write and Desktop reads it verbatim, so there is
-        # no reason to leave it depending on PATH - which is exactly the thing
-        # that changes when the user installs another Python next month, or that
-        # points at Python 2 on an older machine, where launch_server.py would
-        # not even parse.
-        #
-        # A system interpreter rather than the virtualenv's: the launcher
-        # re-execs into the venv itself, and pinning the venv here would turn
-        # "the venv was rebuilt" into a broken Desktop config instead of a
-        # recoverable one.
         $desktopPython = 'python'
         $resolved = Get-Command python -ErrorAction SilentlyContinue
         if ($resolved) {
@@ -586,16 +354,14 @@ if ($doClaude) {
             $ErrorActionPreference = $prevEAP
         }
         if ($desktopPython -eq 'python') {
-            # PATH python is missing or too old. Ask the launcher's own search,
-            # which knows how to reach a `py -3.12` that PATH never mentions.
             $best = Invoke-Native { & python $Launcher --self-test 2>$null | Select-Object -Last 1 }
             if ($LASTEXITCODE -eq 0 -and $best -and (Test-Path "$best")) {
                 $desktopPython = "$best".Trim()
             } else {
-                Write-Warn2 "No usable Python found for Claude Desktop; leaving the entry as 'python'."
+                Write-Warn2 "Target Python unavailable."
             }
         }
-        Write-Info "Desktop will launch: $desktopPython"
+        Write-Info "Target interpreter: $desktopPython"
 
         $mcpEntry = [ordered]@{
             command = $desktopPython
@@ -624,83 +390,60 @@ if ($doClaude) {
                     $json | Add-Member -MemberType NoteProperty -Name 'mcpServers' -Value ([PSCustomObject]@{})
                 }
                 $json.mcpServers | Add-Member -MemberType NoteProperty -Name 'reaper' -Value $mcpEntry -Force
-                Copy-Item -Force $cfg "$cfg.bak"   # this file holds the user's other servers
+                Copy-Item -Force $cfg "$cfg.bak"
                 [System.IO.File]::WriteAllText($cfg, ($json | ConvertTo-Json -Depth 12),
                                                (New-Object System.Text.UTF8Encoding $false))
-                # Both a plain and an MSIX install can be present, each with its
-                # own config. Naming the file makes two identical-looking lines
-                # legible instead of looking like a bug.
-                Write-Ok "Claude Desktop updated: $cfg (backup alongside it)"
+                Write-Ok "Configuration file modified: $cfg"
             } catch {
-                Write-Err "Could not update $cfg : $_"
-                Add-Problem "Edit $cfg by hand, or re-run after closing Claude Desktop."
+                Write-Err "Modification failed for $cfg"
+                Add-Problem "Modify $cfg manually."
             }
         }
-        if (-not $found) { Write-Info "No Claude Desktop install found; skipped." }
+        if (-not $found) { Write-Info "Configuration file not found." }
     }
 
-    # -----------------------------------------------------------------------
-    # Older versions installed copies under a skills directory. Those still load
-    # if left in place, so every tool would appear twice and edits here would
-    # have no visible effect - a genuinely baffling symptom. Report, never
-    # delete: the folders are outside this repository and may not all be ours.
-    # -----------------------------------------------------------------------
-    # Superseded: earlier versions installed these, and this plugin now contains
-    # everything they did. reaper-mcp is itself a plugin, so its ~58 tools load a
-    # second time alongside ours.
+    # Record legacy paths to prevent duplication of tools.
     $superseded = @()
     foreach ($d in @('reaper-mcp', 'reaper-ai-engineer-skill')) {
         $p = Join-Path $env:USERPROFILE ".claude\skills\$d"
         if (Test-Path $p) { $superseded += $p }
     }
 
-    # Overlapping but NOT ours - a separate REAPER skill that carries files this
-    # repository does not have. Worth naming, never worth deleting on a guess.
     $independent = Join-Path $env:USERPROFILE '.claude\skills\audio-engineer-reaper'
 
     if ($superseded.Count -gt 0 -or (Test-Path $independent)) {
-        Write-Step "Other REAPER skills already installed"
-        foreach ($p in $superseded) { Write-Warn2 "superseded: $p" }
+        Write-Step "Legacy configurations detected"
+        foreach ($p in $superseded) { Write-Warn2 "Legacy path: $p" }
         if ($superseded.Count -gt 0) {
-            Write-Info "This plugin replaces those. Left in place they load in parallel."
-            Add-Problem "Delete the superseded copies once the plugin is confirmed working."
+            Write-Info "Duplicate items identified."
+            Add-Problem "Remove legacy items."
         }
         if (Test-Path $independent) {
-            Write-Info "also present: $independent"
-            Write-Info "That one is a separate skill with content not in this repository."
-            Write-Info "It overlaps with reaper-audio-engineer. Yours to keep or remove."
+            Write-Info "Independent legacy configuration present: $independent"
         }
     }
 }
 
-# ---------------------------------------------------------------------------
-# 5. Health check + summary
-# ---------------------------------------------------------------------------
 $doctor = Join-Path $PSScriptRoot 'health-check.ps1'
 if (Test-Path $doctor) {
     if ($ReaperResourcePath) { & $doctor -ReaperResourcePath $ReaperResourcePath }
     else { & $doctor }
 }
 
-# Hand the problems to the caller rather than reporting them separately.
 if ($ProblemsOut) {
     try {
         Set-Content -Path $ProblemsOut -Value @($script:Problems) -Encoding UTF8
     } catch {
-        # If this cannot be written the wrapper simply reports fewer problems;
-        # they were all printed as they happened, so nothing is actually lost.
     }
     return
 }
 
 Write-Result -Problems $script:Problems
 if ($script:Problems.Count -eq 0) {
-    Write-Host "     1. Restart REAPER (it reloads reaper.ini)."
-    Write-Host "     2. Restart Claude."
-    Write-Host "     3. Ask: `"Check the current REAPER project info`""
+    Write-Host "Restart REAPER."
+    Write-Host "Restart Claude."
 } else {
-    Write-Host "     Re-running this after fixing them is safe."
+    Write-Host "Execution requires retry."
 }
-Write-Host ""
 
 exit $(if ($script:Problems.Count -eq 0) { 0 } else { 1 })

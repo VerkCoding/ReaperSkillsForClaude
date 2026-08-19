@@ -23,10 +23,7 @@ def register_tools(mcp):
     @mcp.tool()
     def analyze_frequency_spectrum() -> dict:
         """
-        Render the project and analyze frequency band levels.
-        Returns RMS level in dB for seven bands:
-        sub_bass (20–60Hz), bass (60–250Hz), low_mids (250–500Hz),
-        mids (500–2kHz), high_mids (2–4kHz), presence (4–8kHz), brilliance (8–20kHz).
+        Renders the project and measures RMS level in dB across seven frequency bands.
         """
         try:
             import librosa
@@ -55,7 +52,7 @@ def register_tools(mcp):
 
             results = {
                 name: {
-                    "range_hz": f"{lo}–{hi}",
+                    "range_hz": f"{lo}-{hi}",
                     "level_db": round(_band_rms_db(D, freqs, lo, hi), 1),
                 }
                 for name, (lo, hi) in bands.items()
@@ -69,8 +66,7 @@ def register_tools(mcp):
     @mcp.tool()
     def detect_clipping() -> dict:
         """
-        Render the project and detect digital clipping (samples at or above 0 dBFS).
-        Returns clipped sample count, peak level in dB, and whether clipping was found.
+        Renders the project and detects samples at or above 0 dBFS.
         """
         try:
             import soundfile as sf
@@ -106,8 +102,7 @@ def register_tools(mcp):
     @mcp.tool()
     def analyze_dynamics() -> dict:
         """
-        Render the project and measure dynamic range: RMS, peak, crest factor,
-        and a simplified DR score (average peak-to-RMS over 3-second blocks).
+        Renders the project and measures RMS, peak, crest factor, and dynamic range score.
         """
         try:
             import soundfile as sf
@@ -127,7 +122,7 @@ def register_tools(mcp):
             peak_db = float(20 * np.log10(peak)) if peak > 0 else -120.0
             crest_db = peak_db - rms_db
 
-            # Simplified DR score: average crest factor over 3-second blocks
+            # Calculate dynamic range score based on 3-second windows to evaluate sustained dynamics.
             block_size = rate * 3
             n_blocks = len(mono) // block_size
             dr_scores = []
@@ -152,9 +147,7 @@ def register_tools(mcp):
     @mcp.tool()
     def analyze_stereo_field() -> dict:
         """
-        Render the project and analyze stereo width and mono compatibility.
-        Returns mid/side balance, stereo width ratio, and L/R correlation.
-        Correlation near 1 = mono-like, near 0 = wide stereo, negative = phase issues.
+        Renders the project and measures stereo width and mono compatibility.
         """
         try:
             import soundfile as sf
@@ -168,7 +161,7 @@ def register_tools(mcp):
                     os.unlink(tmp)
 
             if data.ndim < 2 or data.shape[1] < 2:
-                return {"success": False, "error": "Project rendered as mono; cannot analyze stereo field"}
+                return {"success": False, "error": "Project rendered as mono. Stereo field analysis is unavailable."}
 
             L, R = data[:, 0], data[:, 1]
             mid = (L + R) / 2
@@ -185,10 +178,7 @@ def register_tools(mcp):
                 "mid_rms_db": round(float(20 * np.log10(mid_rms + 1e-10)), 1),
                 "side_rms_db": round(float(20 * np.log10(side_rms + 1e-10)), 1),
                 "mono_compatible": correlation > 0.0,
-                "notes": (
-                    "width_ratio: 0=mono, >0.5=wide stereo. "
-                    "lr_correlation: 1=mono, 0=fully wide, <0=phase problems."
-                ),
+                "notes": "width_ratio: 0.0 = mono, >0.5 = stereo. lr_correlation: 1.0 = mono, 0.0 = stereo, <0.0 = phase issues.",
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -196,8 +186,7 @@ def register_tools(mcp):
     @mcp.tool()
     def analyze_transients() -> dict:
         """
-        Render the project and detect transient events (note attacks, drum hits, etc.).
-        Returns the count and timing of up to 100 transient onset events.
+        Renders the project and detects transient onset events.
         """
         try:
             import librosa
@@ -218,7 +207,7 @@ def register_tools(mcp):
                 "success": True,
                 "onset_count": len(onset_times),
                 "onset_times_seconds": [round(t, 3) for t in capped],
-                "note": "Showing up to 100 events" if len(onset_times) > 100 else None,
+                "note": "Output limited to 100 events." if len(onset_times) > 100 else None,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}

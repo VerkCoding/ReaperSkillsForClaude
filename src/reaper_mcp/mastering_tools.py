@@ -19,10 +19,8 @@ MASTERING_PRESETS = {
 def _add_fx(track, fx_name: str):
     """Add a plugin and return its FX object, or None if there is no such plugin.
 
-    reapy 0.10's ``add_fx`` returns an FX object and raises ValueError for an
-    unknown name; it never returns the -1 that REAPER's own API documents. Every
-    caller here used to test the result against a number, which raises a
-    TypeError before the plugin can be reported as added.
+    reapy 0.10 raises ValueError for unknown names rather than returning -1.
+    Catching ValueError prevents TypeError crashes in calling code.
     """
     try:
         return track.add_fx(fx_name)
@@ -61,18 +59,17 @@ def register_tools(mcp):
 
     @mcp.tool()
     def set_master_fx_parameter(fx_index: int, param_index: int, value: float) -> dict:
-        """Set a normalized parameter (0.0–1.0) on a master track FX plugin."""
+        """Set a normalized parameter (0.0-1.0) on a master track FX plugin."""
         try:
             if not 0.0 <= value <= 1.0:
-                return {"success": False, "error": f"value must be 0.0-1.0, got {value}"}
+                return {"success": False, "error": f"Value must be 0.0-1.0, got {value}"}
             project = get_project()
             master = project.master_track
             fx = master.fxs[fx_index]
             param_name = fx.params[param_index].name
 
-            # Through ReaScript for the reason set_fx_parameter explains: the
-            # attribute assignment this used to do lands on a throwaway float
-            # subclass and never reaches REAPER.
+            # Direct attribute assignment targets a throwaway float subclass.
+            # RPR.TrackFX_SetParamNormalized ensures the assignment is passed to the REAPER API.
             RPR.TrackFX_SetParamNormalized(master.id, fx_index, param_index, value)
             applied = RPR.TrackFX_GetParamNormalized(master.id, fx_index, param_index)
 
@@ -99,13 +96,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def apply_mastering_chain(preset: str = "default") -> dict:
-        """
-        Add a standard mastering FX chain to the master track.
-        Presets: default (EQ > Comp > Limiter), loud (EQ > Comp x2 > Limiter),
-        gentle (EQ > light Comp > Limiter).
-        After applying, use set_master_fx_parameter to dial in specific settings.
-        Use list_master_fx + get_fx_parameters to discover parameter indices.
-        """
+        """Add a predefined FX chain to the master track."""
         try:
             if preset not in MASTERING_PRESETS:
                 return {
@@ -124,7 +115,7 @@ def register_tools(mcp):
             if missing:
                 return {
                     "success": False,
-                    "error": f"Not installed: {', '.join(missing)}",
+                    "error": f"Plugins not installed: {', '.join(missing)}",
                     "preset": preset,
                     "fx_chain": added,
                 }
@@ -134,36 +125,25 @@ def register_tools(mcp):
 
     @mcp.tool()
     def apply_limiter(threshold_db: float = -0.5, release_ms: float = 50.0) -> dict:
-        """
-        Add ReaLimit to the master track.
-        After adding, use set_master_fx_parameter with the parameter indices from
-        get_fx_parameters to set the threshold and release values.
-        """
+        """Add ReaLimit to the master track."""
         try:
             project = get_project()
             master = project.master_track
             fx = _add_fx(master, "ReaLimit")
             if fx is None:
-                return {"success": False, "error": "ReaLimit not found — check REAPER installation"}
+                return {"success": False, "error": "ReaLimit plugin not found."}
             return {
                 "success": True,
                 "fx_index": fx.index,
                 "name": fx.name,
-                "hint": (
-                    f"ReaLimit added at index {fx.index}. "
-                    "Use get_fx_parameters to find threshold/release param indices, "
-                    "then use set_master_fx_parameter to set them."
-                ),
+                "instruction": f"ReaLimit added at index {fx.index}. Retrieve parameter indices via get_fx_parameters. Set parameters via set_master_fx_parameter.",
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
     def analyze_loudness() -> dict:
-        """
-        Render the project to a temp file and measure integrated loudness (LUFS)
-        and true peak (dBTP) using the ITU-R BS.1770 standard.
-        """
+        """Render the project to a temporary file and measure integrated loudness (LUFS) and true peak (dBTP) based on ITU-R BS.1770."""
         try:
             import soundfile as sf
             import pyloudnorm as pyln
@@ -187,16 +167,12 @@ def register_tools(mcp):
                 if os.path.exists(tmp):
                     os.unlink(tmp)
         except Exception as e:
-            logger.error(f"analyze_loudness failed: {e}")
+            logger.error(f"analyze_loudness error: {e}")
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
     def normalize_project(target_lufs: float = -14.0) -> dict:
-        """
-        Measure the project's integrated loudness, then adjust the master volume
-        so the output hits the target LUFS level.
-        Common targets: -14 LUFS (streaming), -16 LUFS (podcasts), -23 LUFS (broadcast).
-        """
+        """Measure the project integrated loudness and adjust the master volume to achieve the target LUFS."""
         try:
             import soundfile as sf
             import pyloudnorm as pyln
@@ -212,7 +188,7 @@ def register_tools(mcp):
                     os.unlink(tmp)
 
             if current_lufs == float("-inf"):
-                return {"success": False, "error": "Project appears to be silent"}
+                return {"success": False, "error": "Project audio is silent."}
 
             gain_db = target_lufs - current_lufs
             project = get_project()

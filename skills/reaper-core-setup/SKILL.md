@@ -13,37 +13,30 @@ description: >-
 
 # REAPER for Claude: core setup
 
-This plugin ships three skills. This one is the ground floor: it gets the
-connection working, and it says which of the other two a request belongs to.
+This plugin contains three skills. This skill establishes the connection and determines which of the other two skills handles a request.
 
 ## The three skills
 
 | Skill | Owns | Reach for it when |
 | --- | --- | --- |
 | **reaper-core-setup** (this one) | Installation, the health check, repair, and which surface you are on | Nothing works yet, or you cannot tell which layer is at fault |
-| **reaper-mcp** | The channel: MCP tools, the Lua bridge, what silently lies, what hangs | You need to *reach* REAPER, or a call failed, hung, or returned something suspicious |
-| **reaper-audio-engineer** | The craft: what to measure, what it means, which move follows | You have a working route and the question is *what to do* |
+| **reaper-mcp** | The channel: MCP tools, the Lua bridge, handling silent failures and hangs | REAPER connection is required, or a call failed, hung, or returned abnormal data |
+| **reaper-audio-engineer** | The craft: measurement, interpretation, and subsequent actions | A working route exists and the task is to determine the next action |
 
-The split that matters: **reaper-mcp answers "did the command land?", and
-reaper-audio-engineer answers "was it the right command?"** A silent render is
-the first kind. A render that is clean but too quiet is the second.
+**reaper-mcp determines if the command executed successfully. reaper-audio-engineer determines if the command was correct.** A silent render falls under reaper-mcp. A render that executes but is too quiet falls under reaper-audio-engineer.
 
-Crossing between them is normal and safe in this order:
+Transitions between skills follow this order:
 
 1. **Here**, until the health check is clean.
 2. **reaper-mcp**, until you have a route and a value you trust.
 3. **reaper-audio-engineer**, to decide and to interpret.
 4. Back to **reaper-mcp** to apply the change and read it back.
 
-If a measurement looks impossible (a bus reading silence, every source
-reporting the same level, a parameter that will not move), stop treating it as
-an engineering result and go back to step 2. Those are transport failures
-wearing an engineering costume, and reaper-mcp lists the specific ones.
+If a measurement is anomalous (e.g., a bus reads silence, all sources report identical levels, a parameter does not change), treat it as a transport failure rather than an engineering result. Return to step 2. reaper-mcp lists specific transport failures.
 
 ## Four requirements
 
-Four things have to be true before Claude can work in REAPER. Diagnose in this
-order; each one depends on the ones above it.
+Four requirements must be met before Claude can interact with REAPER. Diagnose in the following sequence, as each requirement depends on the preceding ones.
 
 | # | Requirement | Fails as |
 | --- | --- | --- |
@@ -52,9 +45,7 @@ order; each one depends on the ones above it.
 | 3 | REAPER's distant API configured | `WinError 10053`, connection refused |
 | 4 | `claude_bridge.lua` loaded in REAPER | Bridge commands time out |
 
-Requirements 3 and 4 are independent: the MCP server needs the distant API, the
-file bridge needs the Lua listener. Losing one leaves the other working, so
-establish which route is broken before changing anything.
+Requirements 3 and 4 are independent. The MCP server requires the distant API, and the file bridge requires the Lua listener. If one fails, the other remains functional. Determine which route is broken before modifying configuration.
 
 ## Start here
 
@@ -64,15 +55,11 @@ On Windows, run the health check:
 powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/install/health-check.ps1"
 ```
 
-Every line is `[ok]`, `[warn]` or `[FAIL]`, and each failure carries a `->` fix.
-Read its output before guessing. It checks all four requirements plus where the
-plugin is installed.
+Review the output of the health check. Output lines indicate `[ok]`, `[warn]`, or `[FAIL]`. Failures include a `->` fix. The script checks all four requirements and the plugin installation path.
 
 ## 1. The Python environment
 
-The MCP server does **not** run under whatever `python` resolves to. A launcher
-probes for an interpreter that can actually import the dependencies, preferring
-a virtualenv the plugin owns. Check it:
+The MCP server uses a specific Python environment, not necessarily the system default. A launcher locates an interpreter capable of importing dependencies, prioritizing the plugin's virtual environment. To verify:
 
 ```bash
 python "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --check
@@ -84,41 +71,25 @@ Build or repair it:
 python "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py"
 ```
 
-This creates a virtualenv under the host's persistent plugin data directory and
-installs `requirements.txt` into it. It touches nothing else on the system, and
-it survives plugin updates. A cold install takes a few minutes, mostly librosa.
+This command creates a virtualenv in the host's persistent plugin data directory and installs `requirements.txt`. It does not modify system files and persists across plugin updates. Installation duration is primarily dependent on compiling or downloading librosa.
 
-**Do not tell the user to `pip install` into their system Python.** That is how
-an unrelated project gets broken, and the launcher would not necessarily pick
-that interpreter anyway.
+**Do not instruct the user to run `pip install` on their system Python environment.** Modifying the system Python may affect other projects, and the launcher may not select that interpreter.
 
-If the install fails because no wheel exists for their Python version, bootstrap
-with a different interpreter. The launcher will find the venv regardless of
-which Python built it:
+If installation fails due to missing wheels for the Python version, bootstrap using a different interpreter. The launcher locates the venv regardless of the originating Python version:
 
 ```bash
 py -3.12 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --recreate
 ```
 
-The environment lives at `%USERPROFILE%\.reaper-for-claude\venv`, a fixed path
-that both the installer and the running server resolve identically. It is
-deliberately not derived from the host's plugin data directory: that only exists
-when Claude launches the server, so a venv built from a terminal would land
-somewhere the server never looks.
+The environment path is `%USERPROFILE%\.reaper-for-claude\venv`. This path is fixed and resolved identically by the installer and the server. It is not derived from the host's plugin data directory, as that directory exists only when Claude launches the server.
 
-**Two interpreters need reapy, and the virtualenv only covers one.** REAPER
-loads a Python shared library and runs ReaScripts inside its own process, so it
-uses the *base* installation and cannot see a virtualenv. `reapy` therefore has
-to be importable by the base Python as well, or `activate_reapy_server` fails
-and the distant API never starts, which presents as "everything installed,
-nothing connects". `bootstrap.py` handles this, installing only `python-reapy`
-there. If it ever needs doing by hand:
+**Two interpreters require reapy; the virtualenv provides it for only one.** REAPER loads a Python shared library and executes ReaScripts within its own process using the base Python installation, which does not access the virtualenv. `reapy` must be importable by the base Python, otherwise `activate_reapy_server` fails and the distant API does not start. `bootstrap.py` installs `python-reapy` in the base environment. Manual installation command:
 
 ```
 "<base python>" -m pip install --user python-reapy
 ```
 
-`--check` reports both sides separately, and so does the health check.
+`--check` and the health check report the status of both environments separately.
 
 **The version limit applies to configuring REAPER, not to running the server.**
 Two interpreters, two different requirements:
@@ -128,37 +99,24 @@ Two interpreters, two different requirements:
 | Running the MCP server | any Python where the imports work; 3.14 is fine |
 | Configuring REAPER (`enable_reapy.py`) | **3.12 or older** |
 
-reapy 0.10.0 crashes partway through rewriting `reaper.ini` on Python 3.13+,
-because `configparser` gained unnamed sections and reapy calls `.lower()` on the
-sentinel. The crash leaves `reaper.ini` **empty**. Every REAPER preference
-gone, with nothing in the error naming the file.
+reapy 0.10.0 fails during `reaper.ini` modification on Python 3.13+ due to changes in `configparser` regarding unnamed sections. This failure results in an empty `reaper.ini` file, deleting all REAPER preferences.
 
-`enable_reapy.py` refuses to run there, backs the file up first and restores it
-if it shrinks, and the installer picks a 3.12-or-older interpreter for that step
-alone. If the health check says REAPER *cannot be reconfigured*, that is what it
-means, and the fix is:
+`enable_reapy.py` blocks execution on Python 3.13+, creates a backup, and restores the file if truncation occurs. The installer selects a Python 3.12 or older interpreter for this step. If the health check indicates REAPER cannot be reconfigured, execute the following fix:
 
 ```
 winget install -e --id Python.Python.3.12
 py -3.12 -m pip install python-reapy
 ```
 
-Never work around this by forcing the configure step onto a newer interpreter.
+Do not attempt to execute the configuration step using Python 3.13 or newer.
 
-**`No module named 'mcp.server.fastmcp'`** means `mcp` 2.0 or newer got
-installed. It dropped the FastMCP API the tool modules are written against.
-`requirements.txt` pins `mcp<2.0.0`; an environment built before that pin needs
-rebuilding with `--recreate`. This is the failure that hits a fresh install
-hardest, because a machine that already had `mcp` 1.x keeps working and shows no
-sign of the problem.
+**`No module named 'mcp.server.fastmcp'`** indicates `mcp` version 2.0 or newer is installed. This version removes the FastMCP API required by the tool modules. `requirements.txt` specifies `mcp<2.0.0`. Environments created prior to this specification must be rebuilt using `--recreate`.
 
-To force a specific interpreter permanently, set `REAPER_MCP_PYTHON` to its full
-path in the environment Claude starts in.
+To set a specific interpreter, configure the `REAPER_MCP_PYTHON` environment variable with the full path before starting Claude.
 
 ## 2-3. REAPER and the distant API
 
-Connecting from outside REAPER needs four things, all handled by
-`reapy.config.configure_reaper()` and all idempotent:
+External connection to REAPER requires four idempotent configuration steps, performed by `reapy.config.configure_reaper()`:
 
 | # | Step | Writes to |
 | --- | --- | --- |
@@ -167,9 +125,7 @@ Connecting from outside REAPER needs four things, all handled by
 | 3 | Register the `activate_reapy_server` ReaScript | `reaper-kb.ini` |
 | 4 | Record that action's id | `reaper-extstate.ini` |
 
-**Close REAPER first.** It rewrites `reaper.ini` when it exits, so anything
-written while it is open is discarded. This is the single most common reason a
-setup "did not take".
+**Close REAPER prior to execution.** REAPER overwrites `reaper.ini` upon exit. Modifications made while REAPER is running will be discarded.
 
 ```bash
 python "${CLAUDE_PLUGIN_ROOT}/reaper/enable_reapy.py" --check    # report only
@@ -177,62 +133,42 @@ python "${CLAUDE_PLUGIN_ROOT}/reaper/enable_reapy.py"            # configure
 python "${CLAUDE_PLUGIN_ROOT}/reaper/enable_reapy.py" --repair   # fix port 2306
 ```
 
-**Port 2306 is not a web interface.** It is `REAPY_SERVER_PORT`, the socket
-reapy's own server binds. An earlier version of the setup script added a web
-interface there, which takes the port before the server can and produces
-`WinError 10053` at connect time. `--repair` removes it.
+**Port 2306 is not a web interface.** It is `REAPY_SERVER_PORT`, used by the reapy server socket. Previous setup scripts assigned a web interface to this port, preventing server binding and resulting in `WinError 10053`. The `--repair` flag resolves this issue.
 
-It also runs **inside** REAPER if the user would rather not close it: *Actions →
-Show action list… → ReaScript: Run…* → `<REAPER resource path>/Scripts/enable_reapy.py`,
-then restart REAPER.
+To execute the script within REAPER: Navigate to *Actions → Show action list… → ReaScript: Run…* → select `<REAPER resource path>/Scripts/enable_reapy.py`. Restart REAPER after execution.
 
 ## 4. The bridge listener
 
-`claude_bridge.lua` goes in `<REAPER resource path>/Scripts/`, and
-`__startup.lua` gets a one-line `dofile()` so REAPER loads it at launch. The
-installer appends that line and backs up an existing `__startup.lua`, and it never
-overwrites one, because plenty of people already have a startup script and
-losing it silently would be unrecoverable.
+`claude_bridge.lua` is located in `<REAPER resource path>/Scripts/`. A `dofile()` statement is appended to `__startup.lua` to ensure REAPER loads the script at launch. The installer backs up existing `__startup.lua` files and appends the line to prevent data loss for users with custom startup scripts.
 
-Check liveness by reading `status.txt` in `<REAPER resource path>/claude_bridge/`:
-a fresh heartbeat means the listener is alive, a stale one means REAPER is
-closed or the script was stopped (*Actions → Close all running scripts* does
-that).
+To verify liveness, read `status.txt` in `<REAPER resource path>/claude_bridge/`. A recent timestamp indicates the listener is active. An old timestamp indicates REAPER is closed or the script was terminated (e.g., via *Actions → Close all running scripts*).
 
 ## Installing from scratch
 
-On Windows, everything above is automated:
+Windows installation automation command:
 
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/install/configure-plugin.ps1"
 ```
 
-It bootstraps Python, installs the REAPER-side files, configures the distant
-API, and runs the health check. It is idempotent, so re-running after a failure is
-safe. Close REAPER before running it.
+This script bootstraps Python, installs REAPER-side files, configures the distant API, and executes the health check. The script is idempotent. REAPER must be closed before execution.
 
-On macOS and Linux the REAPER-side steps are manual: copy
-`reaper/claude_bridge.lua` into `<REAPER resource path>/Scripts/`, add the
-`dofile()` line to `__startup.lua`, and run `reaper/enable_reapy.py`.
+macOS and Linux require manual execution of REAPER-side steps: Copy `reaper/claude_bridge.lua` to `<REAPER resource path>/Scripts/`. Add the `dofile()` command to `__startup.lua`. Execute `reaper/enable_reapy.py`.
 
 ## Which surface is this running on?
 
-The answer changes what is even possible, so establish it before diagnosing.
+Determine the operating surface prior to diagnosis, as capabilities vary by platform.
 
 | Surface | MCP server | File bridge | Notes |
 | --- | --- | --- | --- |
-| **Claude Code** | Yes | Yes | Full access. `reaper-bridge` is on the Bash tool's PATH. |
-| **Claude Desktop** | Yes | Only where shell access exists | Local MCP servers run on the user's machine. |
-| **claude.ai (web)** | No | No | No local machine to reach. The skills load and are useful as reference; the tools cannot exist. |
+| **Claude Code** | Yes | Yes | Full access. `reaper-bridge` is present in the Bash tool PATH. |
+| **Claude Desktop** | Yes | Only where shell access exists | Local MCP servers execute on the local machine. |
+| **claude.ai (web)** | No | No | No local machine access. Skills function as reference material; tools are unavailable. |
 
-If a user on the web app is asking why REAPER tools are missing, that is the
-answer. Nothing is broken, and pointing them at the health check wastes their
-time. Tell them to use Claude Desktop or Claude Code on the machine REAPER runs
-on.
+Users on the web application will not have access to REAPER tools. Do not direct web application users to the health check. Instruct them to use Claude Desktop or Claude Code on the system hosting REAPER.
 
 ## After any change
 
-1. **Restart REAPER** if `reaper.ini` was touched.
-2. **Restart Claude**, or run `/reload-plugins` in Claude Code, since changes to
-   `SKILL.md` apply immediately, but MCP server config does not.
-3. Verify with: *"Check the current REAPER project info."*
+1. Restart REAPER if `reaper.ini` was modified.
+2. Restart Claude or execute `/reload-plugins` in Claude Code. MCP server configuration changes require a restart.
+3. Verify operation using the command: `Check the current REAPER project info.`

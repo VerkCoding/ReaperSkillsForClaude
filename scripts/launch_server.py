@@ -1,34 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Entry point for the `reaper` MCP server. Deliberately Python 2 compatible.
+"""Entry point for the reaper MCP server.
 
-The manifest launches this with the command `python`, and on some machines
-`python` is Python 2 - people who have kept a 2.7 as their default for years
-have a good reason to, and taking it over to install an audio plugin is not our
-call. But `_launcher.py` is modern Python, and Python parses a whole file before
-running any of it, so a single f-string in there would make a 2.7 interpreter
-fail with a SyntaxError before reaching any check that could explain why.
-
-Hence the split. This file is the only thing `python` has to be able to parse,
-so it is written in the intersection of 2 and 3:
-
-    no f-strings, no pathlib, no subprocess.run, no annotations, no `X | None`
-
-It works out which interpreter should really run the server and hands over to
-`_launcher.py`, which is free to be written normally. Under a Python 3 that is
-new enough, there is no re-exec at all - it just imports it.
-
-Nothing is printed to stdout: that belongs to the MCP stdio transport, and one
-stray line corrupts the protocol stream.
+This file is Python 2 and 3 compatible to prevent SyntaxErrors when executed by legacy Python 2 interpreters. This script resolves the appropriate Python 3 interpreter and executes the _launcher.py script. Standard output is reserved for the MCP stdio transport.
 """
 
 import os
 import subprocess
 import sys
 
-# The floor for _launcher.py itself, not for the server. The server runs from
-# the virtualenv and the launcher re-execs into it; this is only "new enough to
-# read the next file".
+# _launcher.py requires a minimum Python version of 3.8.
 MIN_VERSION = (3, 8)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -46,7 +27,7 @@ def log(message):
 
 
 def is_usable(argv):
-    """Can this command run a Python new enough to read _launcher.py?"""
+    """Check if the provided Python interpreter meets the minimum version requirement."""
     try:
         devnull = open(os.devnull, "wb")
     except IOError:
@@ -64,19 +45,14 @@ def is_usable(argv):
 
 
 def candidates():
-    """Where to look for a modern Python, without consulting PATH order.
-
-    The `py` launcher matters most here: it reaches a side-by-side install that
-    PATH deliberately does not mention, which is the whole arrangement this
-    setup is built on.
-    """
+    """Return a list of potential Python interpreter paths for environment resolution."""
     found = []
 
     override = os.environ.get("REAPER_MCP_PYTHON")
     if override:
         found.append([override])
 
-    # The plugin's own virtualenv, which already has everything.
+    # Prioritize the existing virtual environment.
     home = os.path.expanduser("~")
     if os.name == "nt":
         found.append([os.path.join(home, ".reaper-for-claude", "venv", "Scripts", "python.exe")])
@@ -103,49 +79,38 @@ def main():
     args = sys.argv[1:]
 
     if not os.path.isfile(REAL_LAUNCHER):
-        log("Missing " + REAL_LAUNCHER + " - this install is incomplete.")
+        log("File not found: " + REAL_LAUNCHER)
         return 1
 
-    # Already modern enough: import rather than spawn, so the common case costs
-    # nothing and the server keeps this process's stdin and stdout.
+    # Direct import avoids subprocessing overhead if the current interpreter meets version requirements.
     if sys.version_info[:2] >= MIN_VERSION:
         sys.path.insert(0, HERE)
         import _launcher
         return _launcher.main()
 
-    log(
-        "This is Python %d.%d, which is too old to run the REAPER server."
-        % (sys.version_info[0], sys.version_info[1])
-    )
-    log("Looking for a newer one - your default Python is left alone.")
+    log("Current Python version %d.%d is below minimum requirement." % (sys.version_info[0], sys.version_info[1]))
+    log("Searching for alternative Python interpreter.")
 
     for argv in candidates():
         if len(argv) == 1 and not os.path.isfile(argv[0]):
-            # A bare name like "python3" may still resolve; a path that does not
-            # exist cannot.
+            # Bare executable names are skipped if they contain directory separators and the path does not exist.
             if os.sep in argv[0] or (os.altsep and os.altsep in argv[0]):
                 continue
         if not is_usable(argv):
             continue
 
-        log("Using: " + " ".join(argv))
+        log("Selected interpreter: " + " ".join(argv))
         try:
             return subprocess.call(argv + [REAL_LAUNCHER] + args)
         except (OSError, ValueError):
             error = sys.exc_info()[1]
-            log("Could not start it: " + str(error))
+            log("Execution failed: " + str(error))
             continue
 
-    log("")
-    log("No Python 3.8 or newer could be found on this machine.")
-    log("")
-    log("The REAPER server needs one. Your existing Python is not touched -")
-    log("install a newer one alongside it, then restart Claude:")
-    log("")
-    log("    winget install -e --id Python.Python.3.12")
-    log("")
-    log("If you already have one somewhere unusual, point this at it by")
-    log("setting REAPER_MCP_PYTHON to its full path.")
+    log("Error: Python 3.8 or newer is required.")
+    log("Run the following command to install Python 3.12:")
+    log("winget install -e --id Python.Python.3.12")
+    log("Alternatively, set the REAPER_MCP_PYTHON environment variable to the path of a compatible Python executable.")
     return 1
 
 

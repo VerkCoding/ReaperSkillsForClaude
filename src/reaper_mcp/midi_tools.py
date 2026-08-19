@@ -7,17 +7,17 @@ from reaper_mcp.connection import get_project
 
 logger = logging.getLogger("reaper_mcp.midi_tools")
 
-# GM standard drum MIDI notes
+# General MIDI standard drum mappings for note assignments.
 DRUM_MAPPINGS = {
-    "k": 36,  # kick  - C1
-    "s": 38,  # snare - D1
-    "h": 42,  # hihat closed - F#1
-    "o": 46,  # hihat open   - A#1
-    "t": 41,  # tom low  - F1
-    "m": 45,  # tom mid  - A1
-    "f": 48,  # tom high - C2
-    "c": 49,  # crash - C#2
-    "r": 51,  # ride  - D#2
+    "k": 36,
+    "s": 38,
+    "h": 42,
+    "o": 46,
+    "t": 41,
+    "m": 45,
+    "f": 48,
+    "c": 49,
+    "r": 51,
 }
 
 CHORD_TYPES = {
@@ -45,7 +45,7 @@ NOTE_TO_NUMBER = {
 
 
 def _parse_chord(chord_str: str):
-    """Return (intervals_list, root_semitone) for a chord string like 'Cm7', 'G', 'F#maj7'."""
+    """Returns intervals and root semitone to calculate MIDI note numbers from a chord string."""
     chord_str = chord_str.strip()
     if len(chord_str) >= 2 and chord_str[1] in ("#", "b"):
         root = chord_str[:2]
@@ -62,7 +62,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def create_midi_item(track_index: int, start_position: float, length: float) -> dict:
-        """Create an empty MIDI item on a track. Returns item_id for use with add_midi_note."""
+        """Creates an empty MIDI item to provide a container for MIDI note insertion."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -90,12 +90,7 @@ def register_tools(mcp):
         velocity: int = 100,
         channel: int = 0,
     ) -> dict:
-        """
-        Add a MIDI note to an existing MIDI item.
-        pitch: MIDI note number 0–127 (60 = middle C, 69 = A4).
-        start/length: seconds, relative to the item's start.
-        channel: MIDI channel 0–15 (use 9 for drums).
-        """
+        """Inserts a MIDI note event into a specified item. Provides direct access to individual note properties."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -131,12 +126,7 @@ def register_tools(mcp):
         start_position: float,
         beats_per_chord: int = 4,
     ) -> dict:
-        """
-        Create a chord progression on a track as a single MIDI item.
-        chords: comma-separated chord names, e.g. "C,G,Am,F" or "Cm7,Fm7,Bb7,Ebmaj7".
-        Supports: maj, min/m, dim, aug, maj7, min7/m7, dom7/7, dim7, hdim7, sus2, sus4.
-        All chords are voiced around middle C (MIDI 60).
-        """
+        """Generates a sequence of chords within a single MIDI item. Requires comma-separated chord names to determine note intervals."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -189,13 +179,7 @@ def register_tools(mcp):
         beats: int = 4,
         repeats: int = 1,
     ) -> dict:
-        """
-        Create a drum pattern on a track using a step-sequencer string.
-        Each character = one step. Characters: k=kick, s=snare, h=hihat(closed),
-        o=hihat(open), t=tom(low), m=tom(mid), f=tom(high), c=crash, r=ride, .=rest.
-        Example 4/4 rock beat (16 steps): "k...h...s...h..."
-        All drum notes are placed on MIDI channel 9 (GM standard).
-        """
+        """Constructs a drum sequence based on step-sequencer character mapping. Places events on MIDI channel 9 to comply with General MIDI drum standards."""
         try:
             project = get_project()
             track = project.tracks[track_index]

@@ -1,23 +1,10 @@
 #!/usr/bin/env python3
-"""Health check for the REAPER for Claude plugin. Changes nothing.
+"""Diagnostic script for the REAPER MCP plugin. Performs read-only checks on environment and configuration.
 
-Run it when something stops working, or hand the output to Claude and ask it to
-read it. Every line is [ok], [warn] or [FAIL], and each failure says what to do.
+The PowerShell script `install/health-check.ps1` delegates to this script to maintain a single source of truth for diagnostic logic.
 
-This is the only implementation. `install/health-check.ps1` delegates here rather than
-carrying a parallel copy in PowerShell: two health checks that can disagree
-about what "working" means are worse than none, because the one you happen to
-run tells you the setup is fine.
-
-It tests whether things work rather than whether they look right: it runs the
-imports and starts the server rather than reading a version number and inferring
-the rest.
-
-There is one deliberate exception. Configuring REAPER is gated on Python 3.12 or
-older, because reapy 0.10 crashes partway through rewriting reaper.ini on 3.13+
-and leaves the file empty. That is a known-bad combination with a destructive
-outcome, not a guess about compatibility, so it is checked by version - and it
-applies only to that step. The server itself is judged by whether it runs.
+Validates operational status by executing dependencies and server initialization, rather than version string comparison.
+Configuring REAPER is restricted to Python <= 3.12 due to a known defect in reapy 0.10 causing reaper.ini truncation on Python 3.13+.
 """
 
 from __future__ import annotations
@@ -49,18 +36,13 @@ REQUIRED_LAYOUT = (
 
 MANIFEST = ".claude-plugin/plugin.json"
 
-# Imported from the launcher rather than restated, so this cannot report an
-# environment healthy against a different list from the one that actually
-# selects the interpreter. sys.path[0] is this script's directory when run as a
-# script, so the sibling import resolves.
+# Evaluates health against the exact dependency list used by the launcher to ensure consistent validation.
 from _launcher import REQUIRED as CORE_IMPORTS  # noqa: E402
 
-# Installed by earlier versions of this project. This plugin contains everything
-# they did, and left in place they load in parallel with it.
+# Legacy packages that duplicate current functionality and cause parallel loading if not removed.
 SUPERSEDED = ("reaper-mcp", "reaper-ai-engineer-skill")
 
-# Overlaps in purpose but is not from this repository, so it is reported and
-# never recommended for deletion - it may carry content that exists nowhere else.
+# External package with overlapping scope. Flagged for awareness but preserved to avoid unintended data loss.
 INDEPENDENT = "audio-engineer-reaper"
 
 _COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
@@ -113,33 +95,17 @@ def reaper_resource_path(explicit: str = "") -> Path | None:
     return None
 
 
-# REAPER writes the directory holding the Python shared library it loads. 64-bit
-# first because that is every current build; the unsuffixed key is the 32-bit one.
+# Check 64-bit configuration keys prior to 32-bit due to prevalence in modern environments.
 _PY_LIB_KEYS = ("pythonlibpath64", "pythonlibpath")
 
 
 def reaper_embedded_python(explicit: str = "") -> tuple:
-    """The interpreter REAPER actually runs ReaScripts in, and where that came from.
+    """Resolves the Python interpreter used by REAPER for ReaScripts.
 
-    Three sources, most authoritative first. The distinction matters because
-    this used to read `sys.base_prefix` - the virtualenv's PARENT - and call the
-    result "REAPER's interpreter". Those are the same interpreter only by
-    coincidence, and on a machine where the venv was built from 3.14 while
-    REAPER embeds 3.12 they are not: the check passed against a Python REAPER
-    never loads, which is precisely the false assurance it exists to prevent.
-
-      1. reaper.ini's pythonlibpath64. What REAPER loads, from REAPER's own
-         configuration - the only source that is a fact rather than an intent.
-         The directory holds python3XX.dll, and every CPython layout for Windows
-         puts python.exe beside it.
-      2. bootstrap.py --print-reaper-python. What the installer CHOSE, which is
-         what reaper.ini will say once the configure step has run. Right answer
-         on a machine configured but not yet restarted, or one where REAPER has
-         not been pointed anywhere yet.
-      3. sys.base_prefix, the old behaviour, when neither is available.
-
-    Never raises, and never returns a path that does not exist: every branch is
-    guarded on is_file() before it is offered.
+    Fallback sequence to prevent false positives when virtualenv base diverges from REAPER's embedded version:
+      1. reaper.ini configuration values, representing active state.
+      2. Installer selection via bootstrap.py, for pre-configuration states.
+      3. sys.base_prefix, as fallback.
     """
     res = reaper_resource_path(explicit)
     if res:
@@ -149,10 +115,7 @@ def reaper_embedded_python(explicit: str = "") -> tuple:
             text = ""
         for key in _PY_LIB_KEYS:
             m = re.search(rf"(?mi)^{key}=(.+?)\s*$", text)
-            # An empty value is REAPER's "auto-detect", which names nothing.
-            # Without this guard Path("") becomes ".", and the candidate turns
-            # into a relative ./python.exe resolved against the current
-            # directory - a different interpreter that could exist by accident.
+            # Empty values bypass Path resolution to prevent unintended resolution against the current working directory.
             if not m or not m.group(1).strip():
                 continue
             lib = Path(m.group(1).strip())
@@ -166,16 +129,16 @@ def reaper_embedded_python(explicit: str = "") -> tuple:
         if p and p.returncode == 0:
             candidate = Path((p.stdout or "").strip())
             if str(candidate).strip() and candidate.is_file():
-                return candidate, "bootstrap.py (REAPER not configured yet)"
+                return candidate, "bootstrap.py"
 
     base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
     if not base.is_file():
         base = Path(sys.executable)
-    return base, "this check's own interpreter - no better source available"
+    return base, "sys.base_prefix"
 
 
 def desktop_config_paths() -> list:
-    """Every place Claude Desktop might keep claude_desktop_config.json."""
+    """Retrieves potential paths for claude_desktop_config.json across supported operating systems."""
     out = []
     if os.name == "nt":
         appdata = os.environ.get("APPDATA")
@@ -183,7 +146,7 @@ def desktop_config_paths() -> list:
             out.append(Path(appdata) / "Claude" / "claude_desktop_config.json")
         local = os.environ.get("LOCALAPPDATA")
         if local:
-            # An MSIX (Store) install redirects writes into its own container.
+            # MSIX installations redirect configuration data into application-specific containers.
             pkgs = Path(local) / "Packages"
             if pkgs.is_dir():
                 for d in pkgs.glob("Claude_*"):
@@ -211,14 +174,9 @@ def reaper_running() -> bool:
 
 
 def run(argv, timeout=120):
-    """Capture a subprocess as text, decoding as UTF-8 rather than the locale.
+    """Executes subprocesses with strict UTF-8 decoding.
 
-    `text=True` alone decodes with the locale codec, which on Windows is cp1252.
-    `claude plugin list` prints checkmarks and arrows, and those raise inside
-    subprocess's reader thread - the exception surfaces far from here as a
-    CompletedProcess whose stdout is silently None. REAPER project names and
-    paths are non-ASCII often enough for the same trap to spring elsewhere, so
-    every call goes through this.
+    Prevents silent failures in subprocess reader threads caused by locale codec mismatch (e.g., cp1252 on Windows) when processing non-ASCII characters from CLI output or file paths.
     """
     try:
         return subprocess.run(
@@ -242,62 +200,55 @@ def check_layout(r: Report) -> None:
         if (ROOT / rel).exists():
             r.ok(rel)
         else:
-            r.fail(f"missing: {rel}", "This install is incomplete, or the folder moved mid-install.")
+            r.fail(f"missing: {rel}", "Installation incomplete or directory relocated.")
 
 
 def check_mcp_command(r: Report) -> None:
-    """The command Claude will actually launch has to exist on this machine.
+    """Validates the existence of the MCP launch command specified in the manifest.
 
-    The manifest says `python`, and if that does not resolve, the server dies
-    before any of its own diagnostics can run - the host reports only "failed to
-    connect", with no cause. Worth checking explicitly, because the fix is a
-    one-word edit and the symptom points nowhere near it.
+    Prevents silent connection failures caused by unresolvable commands prior to server diagnostic initialization.
     """
     r.section("MCP launch command")
     cfg = ROOT / MANIFEST
     if not cfg.is_file():
-        r.fail(f"{MANIFEST} is missing")
+        r.fail(f"{MANIFEST} missing")
         return
     try:
         command = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["reaper"]["command"]
     except Exception as e:
-        r.fail(f"{MANIFEST} does not declare the reaper server: {e}")
+        r.fail(f"{MANIFEST} missing reaper server declaration: {e}")
         return
 
     resolved = shutil.which(command)
     if resolved:
-        # Existing is not the same as usable. launch_server.py uses f-strings, so
-        # a Python 2 on PATH - still common on older machines - fails to PARSE
-        # it. The server then dies with a SyntaxError before any of its own
-        # diagnostics run, and every cheaper check here would have said fine.
+        # Validates syntax compatibility against Python 3.8+ to prevent early parsing failures on legacy interpreters.
         p = run([resolved, "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"])
         if p and p.returncode == 0:
             v = run([resolved, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"])
             ver = (v.stdout or "").strip() if v else "?"
-            r.ok(f"`{command}` resolves to {resolved} (Python {ver})")
+            r.ok(f"`{command}` resolved to {resolved} (Python {ver})")
         else:
             r.fail(
-                f"`{command}` resolves to {resolved}, which is too old to run the launcher",
-                "Point the MCP entry at a Python 3.8+ interpreter, or put one earlier on PATH. "
-                "The launcher itself needs only to start; the server runs from the virtualenv.",
+                f"`{command}` resolved to {resolved}. Version unsupported.",
+                "Configure MCP entry to use Python 3.8+.",
             )
     else:
         alt = next((c for c in ("python3", "python") if shutil.which(c)), None)
         if alt:
             r.fail(
-                f"{MANIFEST} launches `{command}`, which is not on PATH",
-                f'Change "command" in {cfg} to "{alt}".',
+                f"{MANIFEST} command `{command}` not found on PATH.",
+                f"Change command in {cfg} to {alt}.",
             )
         else:
             r.fail(
-                f"{MANIFEST} launches `{command}`, and no Python is on PATH at all",
-                "Install Python (RunThisToStart.bat option 8 explains how) and reopen your terminal.",
+                f"{MANIFEST} command `{command}` not found. Python absent from PATH.",
+                "Install Python.",
             )
 
 
 def check_python(r: Report, explicit: str = "") -> None:
     r.section("Python")
-    r.ok(f"running this check under {sys.version.split()[0]} ({sys.executable})")
+    r.ok(f"Environment: {sys.version.split()[0]} ({sys.executable})")
 
     boot = ROOT / "scripts" / "bootstrap.py"
     if boot.is_file():
@@ -306,84 +257,62 @@ def check_python(r: Report, explicit: str = "") -> None:
             for line in p.stdout.splitlines():
                 r.info(line)
             if p.returncode == 0:
-                r.ok("managed environment is ready")
+                r.ok("Managed environment ready.")
             else:
-                # Not a failure by itself: the launcher accepts any interpreter
-                # that can import the dependencies, and many machines already
-                # have them.
-                r.warn("no managed environment - falling back to whatever Python provides")
+                # Launcher accepts environments possessing required dependencies independently of managed states.
+                r.warn("Managed environment absent. Falling back to default Python.")
 
     for mod in CORE_IMPORTS:
         p = run([sys.executable, "-c", f"import {mod}"])
         if p and p.returncode == 0:
-            r.ok(f"import {mod}")
+            r.ok(f"Module {mod} imported.")
         else:
-            r.warn(f"import {mod} fails under {sys.executable}")
+            r.warn(f"Module {mod} import failed.")
 
-    # REAPER embeds a Python shared library and runs ReaScripts inside it. That
-    # interpreter is the base installation - never the virtualenv, which is only
-    # a redirect layer and contains no python3XX.dll. reapy has to be importable
-    # there for activate_reapy_server to start the distant API.
-    #
-    # Checked separately because the failure is invisible from the server side:
-    # the virtualenv can be flawless while REAPER has nothing to answer with.
+    # Validates reapy availability in the base interpreter.
+    # REAPER embeds the base Python shared library directly, rendering virtualenv dependency verification insufficient for distant API initialization.
     base, source = reaper_embedded_python(explicit)
     p = run([str(base), "-c", "import reapy"])
     if p and p.returncode == 0:
-        r.ok(f"REAPER's interpreter can import reapy ({base})")
+        r.ok(f"REAPER interpreter imported reapy.")
     else:
         r.fail(
-            f"REAPER's interpreter cannot import reapy ({base})",
-            f'"{base}" -m pip install --user python-reapy   '
-            "(or re-run scripts/bootstrap.py, which does it)",
+            f"REAPER interpreter failed to import reapy.",
+            f"Execute: \"{base}\" -m pip install --user python-reapy or run scripts/bootstrap.py",
         )
-        r.info("Without it, activate_reapy_server fails and the distant API never starts.")
+        r.info("activate_reapy_server initialization failure.")
     if source != "reaper.ini":
-        # Said only when the answer is inferred rather than read from REAPER's
-        # own configuration, so a normal run stays as short as it was and an
-        # uncertain one cannot be mistaken for a certain one.
-        r.info(f"identified from {source}")
+        # Indicates source of inference when non-deterministic methods are utilized.
+        r.info(f"Source: {source}")
 
-    # Imported lazily by the analysis tools, so the server starts without them
-    # and the shortfall shows up only when one of those tools is called - which
-    # is why it is checked here rather than left to surface mid-task.
-    # soxr is named explicitly, and that is the whole substance of this check.
-    # librosa loads its submodules through lazy_loader, so `import librosa`
-    # succeeds even when the compiled extension underneath cannot load at all -
-    # the failure waits until something calls librosa.load or librosa.stft, by
-    # which point it surfaces as a tool error rather than a setup problem. This
-    # check reported everything present on a machine where two analysis tools
-    # could never have worked.
+    # Validates availability of lazy-loaded analysis dependencies to prevent runtime tool errors.
+    # Checks soxr explicitly to expose underlying compiled extension failures obscured by librosa's lazy_loader.
     p = run([sys.executable, "-c", "import librosa, soundfile, pyloudnorm, soxr"])
     if p and p.returncode == 0:
-        r.ok("analysis libraries present (loudness, spectrum, transients)")
+        r.ok("Analysis libraries present.")
     elif p and "soxr" in (p.stderr or "") and "DLL load failed" in (p.stderr or ""):
-        # A missing C++ runtime rather than a missing package, and reinstalling
-        # the package cannot fix it.
+        # Indicates missing Visual C++ redistributable requirements.
         r.fail(
-            "soxr cannot load - the Visual C++ runtime is missing, so "
-            "analyze_frequency_spectrum and analyze_transients will fail",
-            "winget install -e --id Microsoft.VCRedist.2015+.x64 --source winget",
+            "soxr failed to load due to missing Visual C++ runtime.",
+            "Install Visual C++ runtime.",
         )
-        r.info("Windows ships no C++ runtime and Python installs only the C one.")
+        r.info("Visual C++ runtime required.")
     else:
         r.fail(
-            "analysis libraries are missing - the offline analysis tools will fail",
-            f'"{sys.executable}" "{ROOT / "scripts" / "bootstrap.py"}"',
+            "Analysis libraries missing.",
+            f"Execute: \"{sys.executable}\" \"{ROOT / 'scripts' / 'bootstrap.py'}\"",
         )
 
     launcher = ROOT / "scripts" / "launch_server.py"
     if launcher.is_file():
-        # The only check that matters. Every cheaper proxy for "will the server
-        # start" - is Python present, is the version recent, does the venv exist
-        # - has been wrong at some point.
+        # Verifies server initialization directly to avoid false positives from proxy validation methods.
         p = run([sys.executable, str(launcher), "--self-test"])
         if p and p.returncode == 0:
-            r.ok(f"the MCP server starts (interpreter: {p.stdout.strip()})")
+            r.ok(f"MCP server started (interpreter: {p.stdout.strip()})")
         else:
             r.fail(
-                "the MCP server cannot start",
-                f"{sys.executable} \"{ROOT / 'scripts' / 'bootstrap.py'}\"",
+                "MCP server failed to start.",
+                f"Execute: {sys.executable} \"{ROOT / 'scripts' / 'bootstrap.py'}\"",
             )
             if p:
                 for line in (p.stderr or "").splitlines()[:5]:
@@ -396,27 +325,26 @@ def check_reaper(r: Report, explicit: str) -> None:
     res = reaper_resource_path(explicit)
     if res is None:
         r.fail(
-            "could not find REAPER's resource folder",
-            "Launch REAPER once so it creates reaper.ini, or pass --resource-path for a portable install.",
+            "REAPER resource directory not found.",
+            "Run REAPER to generate configuration, or specify --resource-path.",
         )
         return
-    r.ok(f"reaper.ini at {res}")
+    r.ok(f"reaper.ini located at {res}")
 
     scripts = res / "Scripts"
     if (scripts / "claude_bridge.lua").is_file():
-        r.ok("claude_bridge.lua installed")
+        r.ok("claude_bridge.lua present.")
     else:
-        r.fail(f"claude_bridge.lua missing from {scripts}", "Re-run the installer.")
+        r.fail(f"claude_bridge.lua not found.", "Execute installer.")
 
     startup = scripts / "__startup.lua"
     if not startup.is_file():
-        r.fail("__startup.lua missing", "Re-run the installer - REAPER needs it to auto-start the bridge.")
+        r.fail("__startup.lua not found.", "Execute installer.")
     elif "claude_bridge" in startup.read_text(encoding="utf-8", errors="ignore"):
-        r.ok("__startup.lua loads the bridge")
+        r.ok("__startup.lua configuration valid.")
     else:
-        r.fail("__startup.lua does not reference claude_bridge", "Re-run the installer.")
+        r.fail("claude_bridge reference missing in __startup.lua.", "Execute installer.")
 
-    # Distant API - delegate to the script that owns that knowledge.
     enable = ROOT / "reaper" / "enable_reapy.py"
     if not enable.is_file():
         enable = scripts / "enable_reapy.py"
@@ -427,17 +355,14 @@ def check_reaper(r: Report, explicit: str) -> None:
                 if line.strip():
                     r.info(line)
             if p.returncode == 0:
-                r.ok("distant API configured")
+                r.ok("Distant API configured.")
             else:
                 r.fail(
-                    "distant API not fully configured",
-                    f"Close REAPER, then: {sys.executable} \"{enable}\"",
+                    "Distant API configuration invalid.",
+                    f"Terminate REAPER, execute: {sys.executable} \"{enable}\"",
                 )
 
-    # Configuring REAPER needs an interpreter reapy can drive safely, which is a
-    # stricter requirement than running the server. Worth reporting even when
-    # the distant API is already set up, because without one it cannot be
-    # repaired later - and attempting it anyway empties reaper.ini.
+    # Identifies interpreters safe for reapy execution to prevent configuration corruption during potential repairs.
     safe = None
     for cand in (["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"], ["python"]):
         if not shutil.which(cand[0]):
@@ -450,52 +375,46 @@ def check_reaper(r: Report, explicit: str) -> None:
             safe = " ".join(cand)
             break
     if safe:
-        r.ok(f"REAPER can be (re)configured with `{safe}`")
+        r.ok(f"REAPER configuration interpreter verified: `{safe}`")
     else:
         r.warn(
-            "no Python 3.12-or-older interpreter with reapy - REAPER cannot be reconfigured",
-            "reapy 0.10.0 empties reaper.ini under Python 3.13+, so the installer refuses. "
-            "Fix: winget install -e --id Python.Python.3.12 "
-            "then py -3.12 -m pip install python-reapy",
+            "Compatible Python <= 3.12 interpreter with reapy not found.",
+            "reapy 0.10.0 incompatible with Python >= 3.13.",
         )
 
     bridge = res / "claude_bridge"
     status = bridge / "status.txt"
     if not bridge.is_dir():
-        r.warn("bridge directory not created yet - start REAPER once after installing.")
+        r.warn("Bridge directory absent.")
     elif not status.is_file():
-        r.warn("no status.txt - the listener has not run since installation.")
+        r.warn("status.txt absent.")
     else:
         age = time.time() - status.stat().st_mtime
         if age < 30:
-            r.ok(f"bridge listener is alive (heartbeat {int(age)}s ago)")
+            r.ok(f"Bridge listener active.")
         else:
-            r.warn(f"bridge heartbeat is {int(age / 60)} min old - REAPER is probably closed.")
+            r.warn(f"Bridge heartbeat expired.")
 
-    # An unconsumed command is a loaded gun: REAPER runs whatever sits here the
-    # next time it starts, which could be a render firing days later.
+    # Identifies stale commands that will execute automatically upon next application launch.
     pending = bridge / "cmd.lua"
     if pending.is_file():
         r.warn(
-            "an unconsumed cmd.lua is waiting in the bridge directory",
-            f"REAPER will run it at next launch. Delete it if that is not intended: {pending}",
+            "Unconsumed cmd.lua present in bridge directory.",
+            f"Pending execution on next application launch. File: {pending}",
         )
 
 
 def check_live_link(r: Report) -> None:
-    """Prove both ends of the MCP path are actually on, not merely configured.
+    """Validates end-to-end MCP connectivity.
 
-    Everything above verifies settings. This connects: REAPER's distant API must
-    be listening AND the server's side must be able to reach it. A setup can be
-    configured perfectly and still fail here - the classic case being a web
-    interface squatting on reapy's own port.
+    Confirms REAPER's distant API is listening and accessible to the server, verifying absence of port conflicts.
     """
     r.section("Live connection")
 
     if not reaper_running():
-        r.warn("REAPER is not running - start it, then re-run to test the connection.")
+        r.warn("REAPER process not detected.")
         return
-    r.ok("REAPER is running")
+    r.ok("REAPER process detected.")
 
     probe = (
         "import sys, json;"
@@ -507,8 +426,8 @@ def check_live_link(r: Report) -> None:
     p = run([sys.executable, "-c", probe], timeout=60)
     if not p or p.returncode != 0:
         r.fail(
-            "could not run the connection probe",
-            "The dependencies are not importable under this interpreter.",
+            "Connection probe execution failed.",
+            "Dependencies unavailable.",
         )
         return
 
@@ -516,18 +435,17 @@ def check_live_link(r: Report) -> None:
     try:
         status = json.loads(line)
     except Exception:
-        r.fail("the connection probe returned nothing usable")
+        r.fail("Connection probe invalid response.")
         return
 
     if status.get("connected"):
         r.ok(
-            f"connected to REAPER - project '{status.get('project_name')}', "
-            f"{status.get('track_count')} track(s)"
+            f"Connected to REAPER."
         )
     else:
         r.fail(
-            "REAPER is running but the MCP server cannot reach it",
-            "Close REAPER and run: reaper/enable_reapy.py --repair, then reaper/enable_reapy.py",
+            "REAPER process detected. MCP connection failed.",
+            "Terminate REAPER, execute repairs.",
         )
         for chunk in str(status.get("error", "")).splitlines()[:4]:
             r.info(chunk)
@@ -540,9 +458,9 @@ def check_claude(r: Report) -> None:
 
     claude = shutil.which("claude")
     if not claude:
-        r.warn("the claude CLI is not on PATH (fine if you only use Claude Desktop).")
+        r.warn("claude CLI not found on PATH.")
         if link.exists():
-            r.ok(f"developer link present: {link}")
+            r.ok(f"Developer link present: {link}")
     else:
         p = run([claude, "plugin", "list"])
         listing = ((p.stdout or "") + (p.stderr or "")) if p else ""
@@ -550,37 +468,23 @@ def check_claude(r: Report) -> None:
         from_dir = "reaper-for-claude@skills-dir" in listing
 
         if from_market and from_dir:
-            # A warning, not a failure. They do not both load - Claude prefers
-            # the marketplace and skips the link silently - but the marketplace
-            # copy IS loading, so the plugin works and nothing here is broken.
-            #
-            # It was a [FAIL] with one remedy, "remove the marketplace", which
-            # made a deliberate choice look like a fault and pushed everyone
-            # towards the developer route. Someone who added the plugin through
-            # Claude's Settings > Plugins wants the marketplace copy; the stale
-            # half is their old link. Both directions are offered, and neither
-            # is called wrong.
+            # Warns on parallel installations. Marketplace copy takes precedence during load sequence.
             r.warn(
-                "two routes are installed - the marketplace copy is loading, the "
-                "developer link is inert",
-                "Keep the marketplace copy:  rmdir "
-                f'"{Path.home() / ".claude" / "skills" / "reaper-for-claude"}"'
-                "   |   Load this folder live instead:  "
-                "install\\configure-plugin.ps1 -Only claude -Link",
+                "Multiple installation routes detected.",
+                "Resolve duplicate installations.",
             )
         elif from_market:
-            r.ok("Claude Code: installed from the marketplace")
+            r.ok("Marketplace installation active.")
             r.warn(
-                "edits to this folder do not reach Claude - the install is a copy in the plugin cache",
-                "While developing, use the developer link instead.",
+                "Local modifications bypass Claude due to cache copy.",
+                "Use developer link.",
             )
         elif from_dir:
-            r.ok("Claude Code: loaded in place via the developer link (edits are live)")
+            r.ok("Developer link active.")
         else:
             r.fail(
-                "Claude Code does not list reaper-for-claude",
-                f'claude plugin marketplace add "{ROOT}"'
-                "  then  claude plugin install reaper-for-claude@reaper-skills-for-claude",
+                "reaper-for-claude absent in Claude Code.",
+                "Install via marketplace or configure developer link.",
             )
 
     found_desktop = False
@@ -591,54 +495,52 @@ def check_claude(r: Report) -> None:
         try:
             data = json.loads(cfg.read_text(encoding="utf-8") or "{}")
         except Exception:
-            r.fail(f"{cfg} is not valid JSON", "Restore it from the .bak alongside it.")
+            r.fail(f"Invalid JSON configuration: {cfg}", "Restore configuration backup.")
             continue
         entry = (data.get("mcpServers") or {}).get("reaper")
         if not entry:
-            r.warn(f"no 'reaper' MCP server in {cfg.name} (fine if you use the Plugins UI instead).")
+            r.warn(f"reaper MCP server absent in configuration: {cfg.name}")
             continue
         target = next((a for a in entry.get("args", []) if str(a).endswith("launch_server.py")), None)
         if target and Path(target).is_file():
-            r.ok(f"Claude Desktop -> {target}")
+            r.ok(f"Claude Desktop target: {target}")
         elif entry.get("env", {}).get("PYTHONPATH"):
-            r.fail("Claude Desktop still uses the old PYTHONPATH entry", "Re-run the installer.")
+            r.fail("Deprecated PYTHONPATH entry detected.", "Execute installer.")
         else:
-            r.fail("Claude Desktop's reaper entry points at something missing", "Re-run the installer.")
+            r.fail("Target missing for reaper entry.", "Execute installer.")
     if not found_desktop:
-        r.warn("no Claude Desktop config found (fine if you only use Claude Code).")
+        r.warn("Claude Desktop configuration absent.")
 
     skills = Path.home() / ".claude" / "skills"
     superseded = [skills / d for d in SUPERSEDED if (skills / d).exists()]
     if superseded:
-        r.warn("superseded copies from an earlier version are still loading:")
+        r.warn("Legacy packages detected:")
         for p in superseded:
             r.info(str(p))
-        r.info("-> This plugin replaces them. Delete them, or their tools load in parallel with ours.")
+        r.info("Remove legacy packages.")
 
     if (skills / INDEPENDENT).exists():
         r.warn(
-            f"a separate REAPER skill is also installed: {skills / INDEPENDENT}",
-            "It overlaps with reaper-audio-engineer but is not from this repository. Keep or remove as you prefer.",
+            f"External REAPER skill detected: {skills / INDEPENDENT}",
+            "Scope overlap detected.",
         )
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Health check for the REAPER for Claude plugin.")
-    ap.add_argument("--resource-path", default="", help="REAPER resource folder (portable installs).")
-    ap.add_argument("--skip-live", action="store_true", help="Skip the REAPER connection probe.")
+    ap = argparse.ArgumentParser(description="REAPER MCP plugin diagnostics.")
+    ap.add_argument("--resource-path", default="", help="Specify REAPER resource directory.")
+    ap.add_argument("--skip-live", action="store_true", help="Bypass connection probe.")
     args = ap.parse_args()
 
     print()
     print(_c("36", "==============================================="))
-    print(_c("36", "  REAPER for Claude - health check"))
+    print(_c("36", "  Diagnostics"))
     print(_c("36", "==============================================="))
-    print(_c("90", f"  Plugin: {ROOT}"))
+    print(_c("90", f"  Path: {ROOT}"))
 
     r = Report()
     check_layout(r)
     check_mcp_command(r)
-    # Same --resource-path as check_reaper: a portable install keeps reaper.ini
-    # somewhere only the caller knows, and that file names REAPER's interpreter.
     check_python(r, args.resource_path)
     check_reaper(r, args.resource_path)
     if not args.skip_live:
@@ -648,9 +550,9 @@ def main() -> int:
     print()
     print(_c("36", "==============================================="))
     if r.fails == 0:
-        print(_c("32", "  All checks passed"))
+        print(_c("32", "  Status: OK"))
     else:
-        print(_c("33", f"  {r.fails} check(s) failed - see the -> lines above"))
+        print(_c("33", f"  Status: {r.fails} check(s) failed"))
     print(_c("36", "==============================================="))
     print()
     return r.fails

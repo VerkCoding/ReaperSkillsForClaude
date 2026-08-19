@@ -1,25 +1,19 @@
-# Line endings are load-bearing here, so none of this is left to chance.
-#
-# Git on Windows commonly runs with core.autocrlf=true, which rewrites line
-# endings on checkout. That is harmless for most files and fatal for two kinds
-# in this repository, so every type is pinned explicitly rather than inherited
-# from whatever the cloner has configured.
+# Line endings are explicitly defined to prevent Git configuration variations
+# (e.g., core.autocrlf=true) from causing execution or parsing errors.
 
 * text=auto
 
-# bin/reaper-bridge is a shell script run by the Bash tool. With CRLF endings
-# the shebang becomes "#!/bin/sh\r" and the interpreter is not found - the error
-# points at the file, not at the line endings, which makes it a slow one to
-# diagnose.
+# Enforces LF line endings for the shell script to ensure the shebang 
+# (!/bin/sh) is correctly interpreted in Bash environments without \r characters.
 bin/reaper-bridge text eol=lf
 
-# cmd.exe mis-parses labels and goto in a .bat file with LF-only endings, and
-# fails in ways that look like logic errors rather than encoding ones.
+# Enforces CRLF line endings for batch files. LF-only endings can cause cmd.exe 
+# to misinterpret labels and goto statements, leading to execution failures.
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
-# PowerShell reads either, but CRLF is the Windows convention and keeps diffs
-# clean for contributors on Windows.
+# Enforces CRLF line endings for PowerShell scripts to align with Windows defaults
+# and maintain uniform diffs across contributors.
 *.ps1 text eol=crlf
 
 *.py   text eol=lf
@@ -29,7 +23,7 @@ bin/reaper-bridge text eol=lf
 *.toml text eol=lf
 *.txt  text eol=lf
 
-# Not text, and must never be normalised.
+# Binary files are excluded from line ending normalization to prevent data corruption.
 *.png  binary
 *.jpg  binary
 *.wav  binary

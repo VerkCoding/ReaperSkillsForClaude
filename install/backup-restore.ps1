@@ -1,47 +1,26 @@
 <#
 .SYNOPSIS
-  Back up, or restore, every file this setup is capable of changing.
+  Back up or restore configuration files modified by this setup.
 
 .DESCRIPTION
-  "Revert Everything" is only honest if a snapshot was taken before anything
-  moved, so install-everything.ps1 calls this first, every time, before its first write.
+  This script records the initial state of specific configuration files before modification.
+  It differentiates between files that existed prior to setup and files created during setup.
+  This allows the revert process to restore original files and delete created files.
 
-  Two kinds of entry are recorded, and the difference is what makes a clean
-  revert possible:
+  Only specific installer-modified configuration files are tracked. User projects, media,
+  plugin settings, and external application data remain unmodified.
 
-    existed = true    the file was already there, and a copy is stored.
-                      Restoring means putting the copy back.
-    existed = false   the file did not exist, so the setup created it.
-                      Restoring means deleting it.
-
-  Without that distinction, a revert either leaves our files behind or deletes
-  files that were the user's to begin with.
-
-  What is never touched: REAPER projects, media, plugin settings, presets, and
-  anything Claude has stored. This tracks the specific configuration files the
-  installer writes to, and nothing else.
-
-  Exactly one snapshot matters: the state of the machine BEFORE this setup ever
-  touched it. It lives in a directory called `original` and is written once.
-
-  This is not a detail. Eight different failure messages across these scripts
-  tell the user to "re-run [1]", and every run used to take a fresh snapshot and
-  restore the NEWEST one. So the second run photographed the machine we had
-  already modified, and Revert then restored our own half-finished install -
-  quietly, with no error, having also pruned the real original away after ten
-  runs. The backup silently stopped being a backup at exactly the moment the
-  design told people to lean on it hardest.
-
-  So: written once, never overwritten, never pruned.
+  A single backup named `original` is created. This prevents subsequent runs from overwriting
+  the initial state data, ensuring the revert process always restores the pre-installation state.
 
 .PARAMETER Backup
-  Create the original snapshot if there is not one already. Prints its directory.
+  Create the original snapshot if one does not exist. Outputs the directory path.
 
 .PARAMETER Restore
-  Restore the original snapshot, or the one named by -From.
+  Restore the original snapshot, or the snapshot specified by -From.
 
 .PARAMETER List
-  Show the snapshots that exist.
+  Display existing snapshots.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File backup-restore.ps1 -Backup
@@ -51,32 +30,22 @@ param(
     [Parameter(ParameterSetName = 'Backup')]  [switch]$Backup,
     [Parameter(ParameterSetName = 'Restore')] [switch]$Restore,
     [Parameter(ParameterSetName = 'Restore')] [string]$From,
-    # $List is never read, and must stay. It is the default parameter set, so
-    # listing is what happens when nothing else is asked for - and the switch
-    # itself is what makes `-List` a valid thing to type.
+    # Required to enable -List parameter syntax and define the default action.
     [Parameter(ParameterSetName = 'List')]    [switch]$List,
     [string]$ReaperResourcePath
 )
 
 $ErrorActionPreference = 'Stop'
 
-# How this talks, and the log it writes. Same function names the rest of
-# this file already calls - see lib-console.ps1.
+# Provides standard output and logging functions.
 . (Join-Path $PSScriptRoot 'lib-console.ps1')
 
-# For Get-ClaudeProfilePath and Test-ClaudeSignedIn, recorded in the manifest.
+# Required to access application state verification functions.
 . (Join-Path $PSScriptRoot 'lib-app-control.ps1')
 
-# Open the log - or join the parent's, which is what happens when
-# install-everything.ps1 and revert-everything.ps1 call this. Without it every
-# Write-* below wrote to the console only, so the one file people are told to
-# send when a revert goes wrong held no record of WHICH file could not be put
-# back. Assigned away because this script's stdout is its return value: the
-# snapshot directory, read by the caller.
-#
-# Named for the operation, and only for the two that change something. -List
-# reads, and a listing that creates a log file - then prunes real backup and
-# restore logs out of the ten kept - costs more than it records.
+# Initializes logging to capture operations for troubleshooting. Standard output is reserved
+# for returning the snapshot directory path to the caller. Logging is bypassed for read-only
+# operations to prevent log rotation of historical modification data.
 $logName = if ($Backup) { 'backup' } elseif ($Restore) { 'restore' } else { $null }
 if ($logName) { $null = Start-RunLog $logName }
 
@@ -91,18 +60,17 @@ function Get-ReaperPath {
 
 function Get-TrackedPaths {
     <#
-      Every file the installer can create or modify. Listed in one place so a
-      new write anywhere in the setup has one obvious spot to be declared, and
-      the revert cannot silently fall behind.
+      Centralized definition of all tracked files ensures revert operations remain synchronized
+      with installation changes.
     #>
     $paths = @()
 
     $reaper = Get-ReaperPath
     if ($reaper) {
-        $paths += Join-Path $reaper 'reaper.ini'            # distant API, Python ReaScript
-        $paths += Join-Path $reaper 'reaper-kb.ini'         # activate_reapy_server action
-        $paths += Join-Path $reaper 'reaper-extstate.ini'   # that action's id
-        $paths += Join-Path $reaper 'Scripts\__startup.lua' # bridge loader appended
+        $paths += Join-Path $reaper 'reaper.ini'
+        $paths += Join-Path $reaper 'reaper-kb.ini'
+        $paths += Join-Path $reaper 'reaper-extstate.ini'
+        $paths += Join-Path $reaper 'Scripts\__startup.lua'
         $paths += Join-Path $reaper 'Scripts\claude_bridge.lua'
         $paths += Join-Path $reaper 'Scripts\enable_reapy.py'
     }
@@ -116,7 +84,7 @@ function Get-TrackedPaths {
             }
     }
 
-    # `claude plugin marketplace add` writes here.
+    # Modified by plugin marketplace operations.
     $paths += Join-Path $env:USERPROFILE '.claude\settings.json'
 
     return $paths | Select-Object -Unique
@@ -124,16 +92,14 @@ function Get-TrackedPaths {
 
 function Get-InstalledApps {
     <#
-      Recorded for reporting only. A revert restores configuration; it never
-      uninstalls an application, because by then the user may have projects,
-      chats or repositories depending on it. Knowing what was already present
-      lets the revert tell them exactly which installs were ours to remove by
-      hand if they want to.
+      Application presence is recorded to inform the user which software was installed
+      by the setup process. Automated uninstallation is avoided to prevent deletion of
+      user data or dependencies.
     #>
     $ids = @('Python.Python.3.12', 'Git.Git', 'Cockos.REAPER', 'Anthropic.Claude', 'Anthropic.ClaudeCode')
     $result = [ordered]@{}
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        foreach ($id in $ids) { $result[$id] = $null }   # unknown, not false
+        foreach ($id in $ids) { $result[$id] = $null } # Null indicates indeterminate status.
         return $result
     }
     foreach ($id in $ids) {
@@ -145,12 +111,9 @@ function Get-InstalledApps {
 
 function Get-OriginalSnapshot {
     <#
-      The pre-setup snapshot, or $null if this machine has never had one.
-
-      Machines set up before this changed have timestamped directories instead.
-      There the OLDEST is the pristine one, for the same reason the newest is
-      not: each later run photographed a machine the previous run had modified.
-      It is promoted in place so this only has to be worked out once.
+      Retrieves the initial configuration state. For legacy configurations using timestamped
+      directories, the oldest directory represents the pre-setup state and is renamed to
+      standardize the structure.
     #>
     $original = Join-Path $Store 'original'
     if (Test-Path (Join-Path $original 'manifest.json')) { return $original }
@@ -162,10 +125,10 @@ function Get-OriginalSnapshot {
 
     try {
         Rename-Item -LiteralPath $oldest.FullName -NewName 'original' -ErrorAction Stop
-        Write-Info "Promoted the earliest snapshot ($($oldest.Name)) to the original."
+        Write-Info "Renamed earliest snapshot $($oldest.Name) to original."
         return $original
     } catch {
-        # Could not rename - use it where it stands rather than lose it.
+        # Fallback to current path if rename operation fails.
         return $oldest.FullName
     }
 }
@@ -174,13 +137,12 @@ function Get-OriginalSnapshot {
 if ($Backup) {
     $dir = Get-OriginalSnapshot
     if ($dir) {
-        # Already have the one that matters. Taking another now would photograph
-        # a machine this setup has already changed.
+        # Prevents overwriting the pre-installation state with post-installation data.
         $when = try {
             (Get-Content (Join-Path $dir 'manifest.json') -Raw | ConvertFrom-Json).created
-        } catch { 'an earlier run' }
-        Write-Ok "Original configuration already backed up ($when)."
-        Write-Info "Keeping it - that is the one [2] Revert Everything restores."
+        } catch { 'unknown' }
+        Write-Ok "Original configuration backup exists. Created: $when."
+        Write-Info "Retaining existing backup for revert operations."
         Write-Output $dir
         exit 0
     }
@@ -196,8 +158,7 @@ if ($Backup) {
         $exists = Test-Path $p -PathType Leaf
         $stored = $null
         if ($exists) {
-            # Flat names with an index: two REAPER installs, or the plain and
-            # MSIX Claude configs, share a filename and would overwrite here.
+            # Index prefix prevents filename collisions for identically named files in different paths.
             $stored = "{0:d2}_{1}" -f $i, (Split-Path -Leaf $p)
             Copy-Item -LiteralPath $p -Destination (Join-Path $files $stored) -Force
         }
@@ -209,12 +170,8 @@ if ($Backup) {
         reaperPath          = Get-ReaperPath
         entries             = $entries
         appsPresentBefore   = Get-InstalledApps
-        # Which of Claude's own state directories were here before any of this
-        # ran, and whether an account was already attached. Recorded as fact
-        # rather than inferred later, because after the setup has installed
-        # Claude there is no way to tell its profile from one the user has had
-        # for a year. Revert needs exactly that distinction - see the note in
-        # revert-everything.ps1.
+        # Records pre-installation application state to distinguish between pre-existing
+        # user data and data generated during setup. Required for revert validation.
         claudeProfilesBefore = @(Get-ClaudeProfilePath)
         claudeSignedInBefore = [bool](Test-ClaudeSignedIn)
     }
@@ -224,10 +181,9 @@ if ($Backup) {
         (New-Object System.Text.UTF8Encoding $false))
 
     $saved = ($entries | Where-Object { $_.existed }).Count
-    Write-Ok "Original configuration backed up: $dir"
-    Write-Info "$saved existing file(s) copied, $($entries.Count - $saved) noted as absent."
-    # Nothing is pruned here any more. There is one snapshot, it is the only one
-    # that can undo this setup, and it is not ours to delete.
+    Write-Ok "Backup completed: $dir"
+    Write-Info "Copied $saved existing files. Logged $($entries.Count - $saved) absent files."
+    # Retains single initial snapshot for accurate state restoration.
 
     Write-Output $dir
     exit 0
@@ -235,16 +191,16 @@ if ($Backup) {
 
 # ---------------------------------------------------------------------------
 if ($Restore) {
-    # The original, not the newest. See the note at the top of this file.
+    # Targets the initial snapshot to ensure restoration of original state.
     $dir = if ($From) { $From } else { Get-OriginalSnapshot }
     if (-not $dir -or -not (Test-Path (Join-Path $dir 'manifest.json'))) {
-        Write-Err "No snapshot found under $Store"
-        Write-Info "A snapshot is taken automatically at the start of [1] Install everything."
+        Write-Err "Snapshot directory not found: $Store"
+        Write-Info "Backup is required before restoration."
         exit 1
     }
 
     $manifest = Get-Content (Join-Path $dir 'manifest.json') -Raw | ConvertFrom-Json
-    Write-Info "Restoring snapshot from $($manifest.created)"
+    Write-Info "Restoring snapshot dated $($manifest.created)."
 
     $restored = 0; $removed = 0; $failed = 0
     foreach ($e in $manifest.entries) {
@@ -257,18 +213,18 @@ if ($Restore) {
                     $restored++
                 }
             } elseif (Test-Path $e.path -PathType Leaf) {
-                # Absent before, present now: the setup created it.
+                # Deletes files generated during installation to restore original state.
                 Remove-Item -LiteralPath $e.path -Force
                 $removed++
             }
         } catch {
-            Write-Warn2 "Could not restore $($e.path): $_"
+            Write-Warn2 "Restore failed for $($e.path): $_"
             $failed++
         }
     }
 
-    Write-Ok "$restored file(s) restored, $removed created file(s) removed."
-    if ($failed) { Write-Warn2 "$failed file(s) could not be restored - see above." }
+    Write-Ok "Restored $restored files. Removed $removed files."
+    if ($failed) { Write-Warn2 "Failed to process $failed files." }
 
     Write-Output ($manifest.appsPresentBefore | ConvertTo-Json -Compress)
     exit $(if ($failed) { 1 } else { 0 })
@@ -277,14 +233,14 @@ if ($Restore) {
 # ---------------------------------------------------------------------------
 $snaps = Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
 if (-not $snaps) {
-    Write-Info "No snapshots under $Store"
+    Write-Info "No snapshots found in $Store."
     exit 0
 }
 Write-Host ""
-Write-Host "  Snapshots (newest first):" -ForegroundColor Cyan
+Write-Host "Snapshots:" -ForegroundColor Cyan
 foreach ($s in $snaps) {
     $m = Get-Content (Join-Path $s.FullName 'manifest.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
     $n = if ($m) { ($m.entries | Where-Object { $_.existed }).Count } else { '?' }
-    Write-Host ("    {0}   {1} file(s)" -f $s.Name, $n)
+    Write-Host ("{0} {1} files" -f $s.Name, $n)
 }
 Write-Host ""

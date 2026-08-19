@@ -15,36 +15,28 @@ def _db_to_linear(db: float) -> float:
 
 
 def _is_null(pointer) -> bool:
-    """Did REAPER hand back a null pointer?
+    """Check if REAPER returned a null pointer.
 
-    It cannot be asked with `if not pointer`. The ReaScript bridge returns
-    pointers as STRINGS, so a null one arrives as
-    '(TrackEnvelope*)0x0000000000000000' - which is a non-empty string, and
-    therefore true. `if not envelope` was never once going to fire.
-
-    This is the same trap python-reaper-tools.md documents for EnumProjects,
-    which "returns a pointer string past the end of the list ... which is
-    truthy". Same mechanism, different call, and it silently cost both
-    automation tools their only guard: they went on to insert a point into a
-    null envelope, which does nothing, and reported success.
+    The ReaScript bridge returns pointers as strings. A null pointer is formatted
+    as a string containing '0x0000000000000000', which evaluates to True in Python.
+    This check prevents operations on null envelopes that would otherwise fail silently.
     """
     return not pointer or "0x0000000000000000" in str(pointer)
 
 
 def _envelope_or_error(track, name: str, shown_as: str):
-    """A named track envelope, or the dict explaining how to make it exist.
+    """Retrieve a named track envelope or an error dictionary.
 
-    REAPER creates a track envelope when it is first shown in the UI, and there
-    is no ReaScript call to show one, so this genuinely cannot be done for the
-    user - only explained.
+    REAPER instantiates a track envelope only when it is exposed in the user interface.
+    As there is no API method to expose an envelope, the user must perform this action manually.
     """
     envelope = RPR.GetTrackEnvelopeByName(track.id, name)
     if _is_null(envelope):
         return None, {
             "success": False,
             "error": (
-                f"{name} envelope not found. Show it first: right-click the track "
-                f"in REAPER and choose '{shown_as}'."
+                f"{name} envelope not found. The envelope must be shown first: right-click the track "
+                f"in REAPER and select '{shown_as}'."
             ),
         }
     return envelope, None
@@ -54,9 +46,9 @@ def register_tools(mcp):
 
     @mcp.tool()
     def add_volume_automation(track_index: int, position: float, value_db: float) -> dict:
-        """
-        Add a volume automation point on a track.
-        The volume envelope must be visible in REAPER (right-click track > Show envelope).
+        """Add a volume automation point on a track.
+        
+        The volume envelope must be visible in REAPER.
         position: time in seconds. value_db: volume level in dB.
         """
         try:
@@ -75,7 +67,7 @@ def register_tools(mcp):
             if after <= before:
                 return {
                     "success": False,
-                    "error": f"REAPER kept {after} envelope point(s); the point was not added.",
+                    "error": f"REAPER retained {after} envelope points. The point was not added.",
                 }
             return {
                 "success": True,
@@ -89,8 +81,8 @@ def register_tools(mcp):
 
     @mcp.tool()
     def add_pan_automation(track_index: int, position: float, pan: float) -> dict:
-        """
-        Add a pan automation point on a track.
+        """Add a pan automation point on a track.
+        
         The pan envelope must be visible in REAPER.
         pan: -1.0 (full left) to 1.0 (full right).
         """
@@ -110,7 +102,7 @@ def register_tools(mcp):
             if after <= before:
                 return {
                     "success": False,
-                    "error": f"REAPER kept {after} envelope point(s); the point was not added.",
+                    "error": f"REAPER retained {after} envelope points. The point was not added.",
                 }
             return {
                 "success": True,
@@ -133,7 +125,7 @@ def register_tools(mcp):
             dst = project.tracks[dest_track_index]
             send_idx = RPR.CreateTrackSend(src.id, dst.id)
             if send_idx < 0:
-                return {"success": False, "error": "Failed to create send"}
+                return {"success": False, "error": "Failed to create send."}
             RPR.SetTrackSendInfo_Value(src.id, 0, send_idx, "D_VOL", _db_to_linear(volume_db))
             return {
                 "success": True,
@@ -191,9 +183,9 @@ def register_tools(mcp):
 
     @mcp.tool()
     def create_bus(name: str, track_indices: list) -> dict:
-        """
-        Create a new bus track and route the given tracks to it via sends.
-        track_indices: list of track indices to feed into the bus.
+        """Create a new bus track and route the specified tracks to it via sends.
+        
+        track_indices: list of track indices to route into the bus.
         """
         try:
             project = get_project()

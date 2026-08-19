@@ -1,63 +1,19 @@
 <#
 .SYNOPSIS
-  Download everything the setup needs, now, into downloadCache.
+  Download required setup files to downloadCache.
 
 .DESCRIPTION
-  [1] Install Everything downloads as it goes. That is right for one machine on
-  a normal connection, and wrong in three situations this exists for:
+  Downloads files required for installation to allow offline installation or avoid repeated downloads.
 
-    * The machine that has to be set up cannot reach the internet, or is behind
-      something that blocks the vendors. Fill the cache on a machine that can,
-      copy the folder across, and [1] installs from disk.
+  Packages winget extracts rather than installs are not supported for offline installation and require an active internet connection on the target machine.
 
-    * The machine gets wiped between runs - Windows Sandbox, a test VM, a lab
-      image. Without a cache every single run re-downloads the same 252 MB
-      winget bundle, and repeating that often enough is how an address gets
-      rate-limited and then blocked. Which is not hypothetical; it is why this
-      script was written.
-
-    * Several machines are being set up and downloading once is simply kinder
-      than downloading five times.
-
-  What it fetches
-  ---------------
-    winget 1.8.1911 and its two dependencies   (~265 MB, from Microsoft)
-    Python, Git, REAPER, Claude Desktop        (via `winget download`)
-
-  The winget packages come from pinned Microsoft URLs. The versions are not
-  incidental - see $RfcBootstrapFiles in lib-download-cache.ps1.
-
-  Anything already in the cache is left alone, so this is safe to re-run and
-  cheap when it has nothing to do. Nothing is installed. Nothing on this machine
-  is changed outside the downloadCache folder.
-
-  What it will not fetch
-  ----------------------
-  Packages winget extracts rather than installs - Claude Code is one - are
-  downloaded, found to be unusable from disk, and deleted again with a note.
-  Installing those means reproducing winget's own bookkeeping (its Packages
-  directory, its Links folder, its PATH entry, its tracking file), and a
-  half-right version of that leaves a `claude` that winget cannot repair. Those
-  still need a real winget on the target machine.
-
-  Files you already have
-  ----------------------
-  Anything already on disk is used where it lies and not downloaded again -
-  including files downloaded by hand under their own names, and files sitting
-  beside this repository rather than inside it. That last one matters: the
-  folder shared into a Sandbox is normally the one CONTAINING the clone, so
-  that is where installers actually accumulate.
-
-  Those are left where they are rather than copied, because duplicating 207 MB
-  to tidy it up is a poor trade. Pass -Consolidate when the point is to carry
-  one self-contained folder to another machine.
+  Existing files on disk are used and not downloaded again.
 
 .PARAMETER Force
   Re-download files that are already cached.
 
 .PARAMETER Consolidate
-  Copy files found outside downloadCache into it, so the folder can be carried
-  to another machine on its own.
+  Copy files found outside downloadCache into it.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File fill-download-cache.ps1
@@ -66,90 +22,68 @@
 param([switch]$Force, [switch]$Consolidate)
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference    = 'SilentlyContinue'   # PS 5.1 progress bars make downloads several times slower
+$ProgressPreference    = 'SilentlyContinue' # Prevent progress bars from slowing down downloads.
 
-# How this talks, and the log it writes. Same function names the rest of
-# this file already calls - see lib-console.ps1.
 . (Join-Path $PSScriptRoot 'lib-console.ps1')
-
 . (Join-Path $PSScriptRoot 'lib-app-control.ps1')
 . (Join-Path $PSScriptRoot 'lib-download-cache.ps1')
 
-# Long downloads, unattended by design - a stray click must not pause them.
+# Prevent pausing execution on terminal click.
 [void](Disable-ConsoleQuickEdit)
 
 $stepLog = Start-RunLog 'prepare-offline'
-Write-Banner "REAPER for Claude - prepare offline files"
-if ($stepLog) { Write-Info "log  $stepLog" }
+Write-Banner "Download Cache Process"
+if ($stepLog) { Write-Info "Log: $stepLog" }
 
 $dir = Get-CacheDir -Create
 if (-not $dir) {
-    Write-Err "Could not create $RfcCacheDir"
-    Write-Info "This needs somewhere to put the files. Check the folder is writable."
+    Write-Err "Directory creation failed for $RfcCacheDir."
+    Write-Info "Ensure write permissions are available."
     exit 1
 }
-Write-Info "Into: $dir"
-Write-Info "Nothing is installed and nothing outside that folder is touched."
+Write-Info "Target directory: $dir"
 
 try {
-    # Old Windows PowerShell still negotiates TLS 1.0, which these hosts refuse.
+    # Establish TLS 1.2 connection for endpoints that require it.
     [Net.ServicePointManager]::SecurityProtocol =
         [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch {
-    Write-Warn2 "Could not force TLS 1.2; continuing."
+    Write-Warn2 "Failed to set TLS 1.2."
 }
 
 $failed  = @()
-$outside = @()   # found, but not inside downloadCache
+$outside = @()
 
 function Register-CacheLocation {
     <#
-      Note where a file that already exists actually lives, and copy it into
-      downloadCache if -Consolidate says to. Returns $true when it ends up
-      inside the cache.
-
-      One place for this, because every kind of file that can already be here
-      has to be accounted for the same way. A file left out of it is a file
-      -Consolidate does not copy and the summary does not mention - which is a
-      run that prints CACHE READY over a folder that is missing something, and
-      only fails later on the offline machine where nothing can fix it.
+      Record the presence of a file and apply consolidation logic if specified.
     #>
     param([string]$Path, [string]$Name, [string]$Label)
 
     $mb = (Get-Item -LiteralPath $Path).Length / 1MB
     if ((Split-Path -Parent $Path) -ieq $dir) {
-        Write-Ok ("{0}: already here ({1:N1} MB)." -f $Label, $mb)
+        Write-Ok ("{0} exists ({1:N1} MB)." -f $Label, $mb)
         return $true
     }
 
-    # Found, but not in downloadCache - downloaded by hand, or left beside the
-    # repository rather than inside it. Not downloaded again either way.
-    Write-Ok ("{0}: already on disk ({1:N1} MB), not downloaded." -f $Label, $mb)
-    Write-Info "  $Path"
+    Write-Ok ("{0} found at alternate path ({1:N1} MB). Download skipped." -f $Label, $mb)
+    Write-Info "Path: $Path"
     if (-not $Consolidate) {
-        # Deliberately not copied by default. Duplicating 207 MB to tidy it is a
-        # poor trade when the file is already somewhere the setup looks, and the
-        # folder it is in is usually the one being shared.
-        Write-Info "  Outside downloadCache, so it travels only if that folder does."
-        Write-Info "  Re-run with -Consolidate to copy it in."
+        # File is skipped because consolidation was not requested.
         $script:outside += $Label
         return $false
     }
     if (Save-ToCache -Path $Path -Name $Name) {
-        Write-Ok ("{0}: copied into downloadCache." -f $Label)
+        Write-Ok ("{0} copied to cache." -f $Label)
         return $true
     }
-    Write-Warn2 ("{0}: could not be copied in; leaving it where it is." -f $Label)
+    Write-Warn2 ("{0} copy operation failed." -f $Label)
     return $false
 }
 
-# ---------------------------------------------------------------------------
-# 1. The winget client. The big one, and the one that matters most: it is what
-#    a wiped machine needs before it can fetch anything else at all.
-# ---------------------------------------------------------------------------
-Write-Step "winget and its dependencies"
+Write-Step "Winget dependencies"
 
-# -Force clears the cache ONCE, here, before anything is fetched.
+# Clear existing cached files when Force parameter is used.
 if ($Force) {
     foreach ($n in $RfcBootstrapFiles.Name) {
         Remove-Item (Join-Path $dir $n) -Force -ErrorAction SilentlyContinue
@@ -158,9 +92,9 @@ if ($Force) {
 
 $missing = Get-MissingBootstrap
 if ($missing.Count -eq 0) {
-    Write-Ok "Every winget package is already on disk."
+    Write-Ok "Winget packages are present."
 } else {
-    Write-Info ("Missing: {0}." -f ($missing -join ', '))
+    Write-Info ("Missing packages: {0}." -f ($missing -join ', '))
 }
 
 foreach ($f in $RfcBootstrapFiles) {
@@ -170,33 +104,19 @@ foreach ($f in $RfcBootstrapFiles) {
         continue
     }
 
-    # Downloaded to TEMP and copied in by Get-BootstrapFile, so a download that
-    # dies halfway cannot leave a truncated file in the cache under a name every
-    # later run will trust.
+    # Use a temporary directory to avoid corrupted states on aborted downloads.
     $tmp = Join-Path $env:TEMP ("rfc-fill-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     try {
         [void](Get-BootstrapFile -File $f -Path $tmp)
-        Write-Ok "$($f.Label) cached."
+        Write-Ok "$($f.Label) download completed."
     } catch {
-        Write-Err "$($f.Label): $($_.Exception.Message.Split([Environment]::NewLine)[0])"
-        # A sentence, not a bare name. Write-Result prints this list numbered
-        # under "N thing(s) still to do", and a list of nouns there never says
-        # what happened to them - which is what the line that used to name them
-        # said, and the only thing it said that Write-Result does not.
-        $failed += "$($f.Label) could not be downloaded"
+        Write-Err "$($f.Label) download failed: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+        $failed += "$($f.Label) download failure"
     } finally {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
 }
 
-# ---------------------------------------------------------------------------
-# 2. The applications, through winget itself.
-#
-#    `winget download` writes the installer and a merged manifest beside it,
-#    and that manifest is the point: it carries the silent switches and success
-#    codes for the file next to it. It is what lets setup-all install REAPER
-#    from disk without anybody having to know that REAPER's installer takes /S.
-# ---------------------------------------------------------------------------
 Write-Step "Applications"
 
 $wingetOk = $false
@@ -205,33 +125,24 @@ if (Get-Command winget -ErrorAction SilentlyContinue) {
 }
 
 if (-not $wingetOk) {
-    Write-Warn2 "winget does not work on THIS machine, so the applications cannot be"
-    Write-Warn2 "downloaded here. The winget files above are cached either way, which"
-    Write-Warn2 "is the part a machine without winget cannot get for itself."
+    Write-Warn2 "Winget is unavailable. Application downloads skipped."
 } else {
     foreach ($app in (Get-AppList)) {
         $existing = Find-CachedPackage -Id $app.Id
 
-        # A fragment beside the manifest is an interrupted download, not a
-        # cached package and not a package that has no payload by design. Left
-        # unseparated it reads as the latter, and the branch below would print
-        # "not installable from disk - noted, skipping" on this run and every
-        # run after it, so the package would never be cached again and nothing
-        # would ever say why.
+        # Remove incomplete download fragments.
         if ($existing -and $existing.Partial -and -not $existing.Installer) {
-            Write-Warn2 "$($app.Name): an interrupted download was in the way - fetching it again."
+            Write-Warn2 "$($app.Name): Incomplete download detected. Retrying."
             foreach ($p in $existing.Partial) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
             $existing = $null
         }
 
         if ($existing -and -not $Force) {
             if ($existing.Installer) {
-                Write-Ok "$($app.Name) $($existing.Version): already cached."
+                Write-Ok "$($app.Name) $($existing.Version): Cached."
             } else {
-                # Manifest kept, payload dropped: an earlier run established
-                # this one cannot be installed from disk. Downloading it again
-                # would only re-establish that.
-                Write-Info "$($app.Name): not installable from disk - noted, skipping."
+                # Skip package types that require extraction by winget.
+                Write-Info "$($app.Name): Unsupported for offline installation. Skipped."
             }
             continue
         }
@@ -249,69 +160,46 @@ if (-not $wingetOk) {
             continue
         }
 
-        # $null covers two different things, and they are not both failures.
-        # A package winget extracts rather than installs leaves its manifest
-        # behind as a note; anything else genuinely did not download.
+        # Track failure for packages that winget installs rather than extracts.
         $after = Find-CachedPackage -Id $app.Id
         if ($after -and -not $after.Installer -and -not $after.Partial) {
-            Write-Info "  That one still needs a working winget on the target machine."
+            Write-Info "Offline installation not supported for this package."
         } else {
-            $failed += "$($app.Name) could not be downloaded"
+            $failed += "$($app.Name) download failure"
         }
     }
 }
 
-# ---------------------------------------------------------------------------
-# 3. Say what is there, in the folder itself as well as on screen. Somebody
-#    finding a 400 MB directory in six months deserves to know what it is.
-# ---------------------------------------------------------------------------
 $files = @(Get-ChildItem $dir -File -ErrorAction SilentlyContinue)
 $total = ($files | Measure-Object -Property Length -Sum).Sum / 1MB
 
 $readme = @"
-REAPER for Claude - downloadCache
-=================================
+downloadCache directory
 
-Installer files, kept so a re-run does not download them again.
+Contents: Installer files.
+Generated by: install\fill-download-cache.ps1.
 
-Made by install\fill-download-cache.ps1. Used automatically by
-RunThisToStart.bat [1] Install Everything: anything in here is installed from
-disk instead of being fetched.
-
-Safe to delete. Deleting it only means the next install downloads again.
-
-To set up a machine that cannot reach the internet, copy this whole folder to
-the same place beside RunThisToStart.bat on that machine.
-
-Last filled: $((Get-Date).ToString('yyyy-MM-dd HH:mm'))
+Timestamp: $((Get-Date).ToString('yyyy-MM-dd HH:mm'))
 "@
 try {
     [System.IO.File]::WriteAllText((Join-Path $dir 'README.txt'), $readme,
         (New-Object System.Text.UTF8Encoding $false))
 } catch { }
 
-Write-Result -Problems $failed -DoneWord $(if ($failed.Count -eq 0) { 'CACHE READY' } else { 'CACHE PARTLY FILLED' })
+Write-Result -Problems $failed -DoneWord $(if ($failed.Count -eq 0) { 'CACHE_COMPLETE' } else { 'CACHE_INCOMPLETE' })
 Write-Info ("{0} file(s), {1:N0} MB in {2}" -f $files.Count, $total, $dir)
 
 if ($outside.Count -gt 0) {
     Write-Host ""
-    Write-Info "Already on disk, outside downloadCache: $($outside -join ', ')"
-    Write-Info "The setup finds them there, so nothing needs doing. To make"
-    Write-Info "downloadCache carry everything on its own, re-run with -Consolidate."
+    Write-Info "Files located outside downloadCache: $($outside -join ', ')"
 }
 
 if ($failed.Count -gt 0) {
-    # Once, not twice. Write-Result above already listed every failure, numbered,
-    # from this same array - repeating them here as a comma-joined sentence made
-    # two problems read as four. The entries themselves now carry the verb, so
-    # nothing was lost with the second copy. What is left is the part it does
-    # not say.
-    Write-Info "Run this again later - whatever did work is kept and skipped."
+    Write-Info "Rerun required for failed items."
 }
 
 Write-Host ""
-Write-Info "Run [1] Install Everything on this machine, or copy the downloadCache"
-Write-Info "folder beside RunThisToStart.bat on the machine you are setting up."
+Write-Info "Process completed."
 Write-Host ""
 
 exit $(if ($failed.Count -eq 0) { 0 } else { 1 })

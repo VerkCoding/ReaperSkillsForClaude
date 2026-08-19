@@ -5,8 +5,7 @@ logger = logging.getLogger("reaper_mcp.server")
 
 mcp = FastMCP("reaper-mcp")
 
-# Import each tool module's register_tools function and call it with the mcp instance.
-# The imports must happen after mcp is created to avoid circular dependencies.
+# Delayed imports prevent circular dependencies during mcp instantiation.
 from reaper_mcp.project_tools import register_tools as _reg_project
 from reaper_mcp.track_tools import register_tools as _reg_track
 from reaper_mcp.midi_tools import register_tools as _reg_midi

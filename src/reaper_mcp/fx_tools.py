@@ -13,28 +13,19 @@ def register_tools(mcp):
     @mcp.tool()
     def add_fx(track_index: int, fx_name: str) -> dict:
         """
-        Add an FX plugin to a track. Works for both instruments (VSTi) and effects (VST/AU).
-        Use the exact plugin name as shown in REAPER's FX browser.
-        Built-in Cockos plugins: ReaEQ, ReaComp, ReaDelay, ReaVerb, ReaLimit, ReaSynth,
-        ReaSamplOmatic5000, ReaTune, ReaGate, ReaFIR, ReaXcomp.
+        Add an FX plugin to a track.
         """
         try:
             project = get_project()
             track = project.tracks[track_index]
-            # reapy 0.10 hands back an FX object, not the index REAPER's own API
-            # returns, and it raises for a name it cannot find rather than
-            # answering -1. Comparing the result to a number - the obvious
-            # reading of the ReaScript docs - raises a TypeError instead of
-            # adding anything.
+            # reapy returns an FX object instead of the index and raises ValueError if the name is not found.
+            # We catch ValueError to handle missing plugins instead of checking for -1.
             try:
                 fx = track.add_fx(fx_name)
             except ValueError:
                 return {
                     "success": False,
-                    "error": (
-                        f"Plugin not found: '{fx_name}'. Use the exact name from "
-                        "REAPER's FX browser."
-                    ),
+                    "error": f"Plugin not found: '{fx_name}'.",
                 }
             return {
                 "success": True,
@@ -64,8 +55,7 @@ def register_tools(mcp):
         track_index: int, fx_index: int, param_index: int, value: float
     ) -> dict:
         """
-        Set a normalized parameter value (0.0–1.0) on an FX plugin.
-        Use get_fx_parameters to discover available parameters and their indices.
+        Set a normalized parameter value on an FX plugin.
         """
         try:
             if not 0.0 <= value <= 1.0:
@@ -75,12 +65,7 @@ def register_tools(mcp):
             fx = track.fxs[fx_index]
             param_name = fx.params[param_index].name
 
-            # Set through ReaScript, not through reapy. reapy's FXParam
-            # subclasses float, so assigning to an attribute it does not define
-            # succeeds against a throwaway object and never reaches REAPER - the
-            # call reported success and changed nothing. Its own `normalized`
-            # setter is no better: it reads `parent_fx.id`, which FX does not
-            # have, and raises.
+            # ReaScript is used directly because reapy's FXParam attribute assignment does not persist to REAPER.
             RPR.TrackFX_SetParamNormalized(track.id, fx_index, param_index, value)
             applied = RPR.TrackFX_GetParamNormalized(track.id, fx_index, param_index)
 
@@ -98,16 +83,14 @@ def register_tools(mcp):
 
     @mcp.tool()
     def get_fx_parameters(track_index: int, fx_index: int) -> dict:
-        """Get all parameters for an FX plugin, including names, indices, and current values."""
+        """Get parameters for an FX plugin."""
         try:
             project = get_project()
             track = project.tracks[track_index]
             fx = track.fxs[fx_index]
             params = []
             for i in range(fx.n_params):
-                # reapy names these `normalized` and `formatted`; there is no
-                # `normalized_value` or `formatted_value`, and reading them
-                # raised rather than returning anything.
+                # Use normalized and formatted properties to avoid exceptions from non-existent fields.
                 param = fx.params[i]
                 params.append({
                     "index": i,
@@ -127,7 +110,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def list_track_fx(track_index: int) -> dict:
-        """List all FX plugins on a track."""
+        """List FX plugins on a track."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -146,7 +129,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def bypass_fx(track_index: int, fx_index: int, bypassed: bool) -> dict:
-        """Enable or bypass (disable) an FX plugin on a track."""
+        """Enable or disable an FX plugin on a track."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -170,22 +153,15 @@ def register_tools(mcp):
             track = project.tracks[track_index]
             fx = track.fxs[fx_index]
 
-            # TrackFX_SetPreset, not `fx.preset_name = ...`. The assignment
-            # succeeds on any name at all - including one no plugin has - and
-            # reaches REAPER for none of them, so this reported loading presets
-            # that do not exist. Reading the name back is what makes the answer
-            # worth anything: REAPER returns the preset it actually has.
+            # Use TrackFX_SetPreset because attribute assignment on fx.preset_name does not validate existence.
+            # Reading the preset name back verifies whether the requested preset was loaded.
             RPR.TrackFX_SetPreset(track.id, fx_index, preset_name)
             loaded = RPR.TrackFX_GetPreset(track.id, fx_index, "", 256)[3]
 
             if str(loaded).strip().lower() != preset_name.strip().lower():
                 return {
                     "success": False,
-                    "error": (
-                        f"{fx.name} has no preset named {preset_name!r} - REAPER is still "
-                        f"on {loaded!r}. Preset names are the ones in the plugin's own "
-                        "preset menu, and a stock plugin often ships none."
-                    ),
+                    "error": f"Preset '{preset_name}' not found for {fx.name}. Current preset is '{loaded}'.",
                     "preset": loaded,
                 }
             return {

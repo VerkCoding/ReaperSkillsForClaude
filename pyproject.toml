@@ -20,14 +20,12 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 
-# requirements.txt and requirements-core.txt are authoritative - bootstrap.py
-# installs from those, and hashes them to decide when to reinstall. This list
-# exists so `pip install -e .` works for development and must be kept in step
-# with them.
+# This list must mirror requirements.txt and requirements-core.txt to support
+# local development via `pip install -e .`. The requirements files serve as the
+# authoritative source for bootstrap.py hashing and dependency resolution.
 #
-# The mcp upper bound is not optional: mcp 2.0 removed mcp.server.fastmcp, the
-# API every tool module is written against, so an unpinned install produces a
-# server that cannot import.
+# The upper version constraint on mcp (<2.0.0) is required due to the deprecation
+# of the mcp.server.fastmcp API in version 2.0.
 dependencies = [
     "mcp>=1.0.0,<2.0.0",
     "python-reapy>=0.10.0",

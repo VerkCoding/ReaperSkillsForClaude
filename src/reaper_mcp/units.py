@@ -1,17 +1,15 @@
-"""Conversions between REAPER's native units and the units the tools expose.
+"""Conversions between REAPER native units and MCP tool units.
 
-REAPER stores track and master volume as a linear gain factor (1.0 == 0 dB),
-while the MCP tools speak dB. reapy 0.10 exposes no volume/pan/mute/solo
-properties on Track, so callers reach these values through the low-level
-ReaScript accessors (D_VOL, D_PAN, B_MUTE, I_SOLO) and convert here.
+REAPER stores track volume as a linear gain factor. The tools use dB.
+Reapy 0.10 lacks volume, pan, mute, and solo properties on Track objects.
+Low-level ReaScript accessors handle these properties.
 """
 
 import math
 
 from reapy import reascript_api as RPR
 
-# REAPER's practical floor; a silent track reads a linear gain of 0.0, which
-# has no finite dB value.
+# Linear gain of 0.0 corresponds to a silent track and has no finite dB value.
 DB_FLOOR = -150.0
 
 
@@ -26,12 +24,12 @@ def linear_to_db(gain: float) -> float:
 
 
 def get_volume_db(track) -> float:
-    """Read a track's volume in dB. Works for regular and master tracks."""
+    """Read track volume in dB."""
     return linear_to_db(RPR.GetMediaTrackInfo_Value(track.id, "D_VOL"))
 
 
 def set_volume_db(track, db: float) -> float:
-    """Set a track's volume in dB and return the value REAPER settled on."""
+    """Set track volume in dB. Returns the applied value."""
     RPR.SetMediaTrackInfo_Value(track.id, "D_VOL", db_to_linear(db))
     return get_volume_db(track)
 
@@ -42,7 +40,7 @@ def set_solo(track, soloed: bool) -> bool:
 
 
 def track_state(track) -> dict:
-    """Read volume/pan/mute/solo for a track via ReaScript."""
+    """Read track volume, pan, mute, and solo states."""
     return {
         "volume_db": get_volume_db(track),
         "pan": RPR.GetMediaTrackInfo_Value(track.id, "D_PAN"),

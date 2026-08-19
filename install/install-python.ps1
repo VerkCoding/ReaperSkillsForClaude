@@ -1,26 +1,16 @@
 <#
 .SYNOPSIS
-  Install Python, with or without winget.
+  Install Python via winget or direct download.
 
 .DESCRIPTION
-  winget is the pleasant path, not a requirement. It is missing on Windows
-  Server, on images built without the Store, and inside Windows Sandbox, and
-  repairing it depends on PowerShell Gallery - which fails on exactly the same
-  machines, with:
-
-      Unable to download from URI 'https://go.microsoft.com/fwlink/?LinkID=627338'
-
-  That is the inbox PackageManagement module failing to fetch its provider list.
-  Chasing it is a detour: the goal here is a working Python, and python.org
-  serves the same installer winget would have downloaded. So this tries winget,
-  and falls straight through to a direct download when it is unavailable or
-  unhappy.
-
-  Everything is per-user, so no elevation is needed.
+  Provides winget or direct download installation of Python. Winget is unavailable
+  in Windows Server and Windows Sandbox environments. The script defaults to 
+  direct download when winget is inaccessible.
+  Direct download from python.org uses the same installer as winget.
+  Installation is scoped per-user to avoid elevation requirements.
 
 .PARAMETER Version
-  Python version to fetch directly. Defaults to 3.12, because numba and llvmlite
-  - which librosa needs - routinely lag new Python releases by months.
+  Python version to install. Defaults to 3.12 for compatibility with numba and llvmlite dependencies.
 
 .PARAMETER Force
   Install even if a working Python is already on PATH.
@@ -35,10 +25,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference    = 'SilentlyContinue'   # PS 5.1 progress bars make downloads several times slower
+# Disabling progress bars in PS 5.1 prevents download performance degradation.
+$ProgressPreference    = 'SilentlyContinue'
 
-# How this talks, and the log it writes. Same function names the rest of
-# this file already calls - see lib-console.ps1.
+# Load shared console functions.
 . (Join-Path $PSScriptRoot 'lib-console.ps1')
 
 function Test-Python {
@@ -52,10 +42,8 @@ function Test-Python {
 }
 
 function Update-SessionPath {
-    # PATH is read once at process start, so an install from a moment ago is
-    # invisible here. Only prepend the new directory - rebuilding PATH from the
-    # registry returns REG_EXPAND_SZ values whose literal %SystemRoot% will not
-    # be re-expanded, which breaks every later command in this session.
+    # PATH must be prepended for the current session. Reading from registry 
+    # retrieves unexpanded REG_EXPAND_SZ values which can break subsequent commands.
     $short = 'Python' + ($Version -split '\.')[0] + ($Version -split '\.')[1]
     $roots = @(
         (Join-Path $env:LOCALAPPDATA "Programs\Python\$short"),
@@ -75,15 +63,12 @@ Write-Banner "Python - install"
 
 $existing = Test-Python
 if ($existing -and -not $Force) {
-    Write-Ok "$existing is already installed and on PATH. Nothing to do."
+    Write-Ok "$existing is installed and on PATH. Exiting."
     exit 0
 }
 
-# ---------------------------------------------------------------------------
-# 1. winget, if it is genuinely working.
-#    Present on PATH is not the same as working: a half-registered App Installer
-#    leaves the shim behind and fails on every call.
-# ---------------------------------------------------------------------------
+# Winget execution test. The executable shim may be present but non-functional 
+# if App Installer is improperly registered.
 $wingetOk = $false
 if (Get-Command winget -ErrorAction SilentlyContinue) {
     try {
@@ -94,11 +79,9 @@ if (Get-Command winget -ErrorAction SilentlyContinue) {
 
 if ($wingetOk) {
     Write-Info "Using winget."
-    # -e forces an exact ID match: there is no Python.Python.3, and a loose
-    # match on that string can resolve to Python 3.0.
-    # --custom appends to winget's own silent switches; --override would replace
-    # them. InstallAllUsers=0 rather than --scope user, because this is a burn
-    # bundle with no user-scope installer declared and --scope user would fail.
+    # Exact ID matching prevents resolving to unintended legacy versions like Python 3.0.
+    # --custom appends silent switches without removing default ones.
+    # InstallAllUsers=0 avoids --scope user failures due to the burn bundle missing user-scope installer declarations.
     $major = ($Version -split '\.')[0..1] -join '.'
     & winget install -e --id "Python.Python.$major" --source winget `
         --accept-package-agreements --accept-source-agreements `
@@ -110,27 +93,23 @@ if ($wingetOk) {
         Write-Ok "$now installed."
         exit 0
     }
-    Write-Warn2 "winget finished but Python is still not visible; trying a direct download."
+    Write-Warn2 "Python is not visible after winget installation. Attempting direct download."
 } else {
-    Write-Info "winget is unavailable or not responding; downloading from python.org."
+    Write-Info "Winget is unavailable. Downloading from python.org."
 }
 
-# ---------------------------------------------------------------------------
-# 2. Direct from python.org. This is the same installer winget fetches - its
-#    manifest points at exactly this URL - so nothing is lost by skipping the
-#    middleman, and the whole PSGallery dependency disappears with it.
-# ---------------------------------------------------------------------------
+# Direct download removes the dependency on PowerShell Gallery while retrieving the same installer.
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
 $file = "python-$Version-$arch.exe"
 $url  = "https://www.python.org/ftp/python/$Version/$file"
 $dest = Join-Path $env:TEMP $file
 
 try {
-    # Old Windows PowerShell still negotiates TLS 1.0, which python.org refuses.
+    # python.org requires TLS 1.2 or higher.
     [Net.ServicePointManager]::SecurityProtocol =
         [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch {
-    Write-Warn2 "Could not force TLS 1.2; continuing."
+    Write-Warn2 "Failed to set TLS 1.2."
 }
 
 Write-Info "Downloading $url"
@@ -138,28 +117,25 @@ try {
     Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
 } catch {
     Write-Err "Download failed: $_"
-    Write-Info "Check the connection, or install by hand from"
-    Write-Info "https://www.python.org/downloads/ - tick 'Add python.exe to PATH'."
+    Write-Info "Manual installation URL: https://www.python.org/downloads/. Select 'Add python.exe to PATH'."
     exit 1
 }
 
 $size = (Get-Item $dest).Length
 if ($size -lt 5MB) {
-    # A proxy login page or an error body would land here as a small file that
-    # then fails to execute with a meaningless error.
-    Write-Err "The download is only $([int]($size/1KB)) KB - that is not the installer."
-    Write-Info "A proxy or captive portal probably returned a page instead of the file."
+    # A proxy or captive portal response may have been saved instead of the executable.
+    Write-Err "File size $([int]($size/1KB)) KB is below expected installer size."
     exit 1
 }
 Write-Ok "Downloaded $([int]($size/1MB)) MB."
 
-Write-Info "Installing (per-user, no elevation needed). This takes a minute..."
+Write-Info "Starting per-user installation."
 $p = Start-Process -FilePath $dest -Wait -PassThru -ArgumentList @(
     '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_test=0'
 )
 if ($p.ExitCode -ne 0) {
     Write-Err "The installer exited with code $($p.ExitCode)."
-    Write-Info "Run it by hand to see the error: $dest"
+    Write-Info "Manual execution path: $dest"
     exit 1
 }
 
@@ -170,11 +146,10 @@ $now = Test-Python
 if ($now) {
     Write-Ok "$now installed."
     Write-Host ""
-    Write-Host "  Close this window and run RunThisToStart.bat again so it picks" -ForegroundColor Gray
-    Write-Host "  up the new PATH." -ForegroundColor Gray
+    Write-Host "Restart the process using RunThisToStart.bat to apply the updated PATH." -ForegroundColor Gray
     exit 0
 }
 
-Write-Err "Python was installed but is still not on PATH in this session."
-Write-Info "Close this window and run RunThisToStart.bat again."
+Write-Err "Python was installed but is not on PATH."
+Write-Info "Restart the process using RunThisToStart.bat."
 exit 1

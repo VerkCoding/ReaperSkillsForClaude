@@ -1,3 +1,2 @@
-# Kept in step with .claude-plugin/plugin.json, which is what the host and
-# the marketplace actually read. This is here for convention only.
+# Duplicates the version in .claude-plugin/plugin.json to satisfy Python packaging conventions.
 __version__ = "1.0.0"

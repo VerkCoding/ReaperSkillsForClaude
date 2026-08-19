@@ -14,7 +14,7 @@ def register_tools(mcp):
     @mcp.tool()
     def create_track(name: str, track_type: str = "audio") -> dict:
         """
-        Create a new track at the end of the project.
+        Create a track at the end of the project.
         track_type: audio, midi, instrument, folder
         """
         try:
@@ -24,8 +24,10 @@ def register_tools(mcp):
             track = project.tracks[idx]
 
             if track_type in ("midi", "instrument"):
-                RPR.SetMediaTrackInfo_Value(track.id, "I_RECINPUT", 4096)  # All MIDI inputs
+                # I_RECINPUT value 4096 configures track to accept all MIDI inputs.
+                RPR.SetMediaTrackInfo_Value(track.id, "I_RECINPUT", 4096)
             elif track_type == "folder":
+                # I_FOLDERDEPTH value 1 configures track as a parent folder.
                 RPR.SetMediaTrackInfo_Value(track.id, "I_FOLDERDEPTH", 1)
 
             return {
@@ -35,12 +37,12 @@ def register_tools(mcp):
                 "type": track_type,
             }
         except Exception as e:
-            logger.error(f"create_track failed: {e}")
+            logger.error(f"create_track error: {e}")
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
     def delete_track(track_index: int) -> dict:
-        """Delete a track by its index."""
+        """Delete track by index."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -51,7 +53,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def rename_track(track_index: int, name: str) -> dict:
-        """Rename a track."""
+        """Rename track."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -62,7 +64,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def set_track_volume(track_index: int, volume_db: float) -> dict:
-        """Set track volume in dB. Range: roughly -150 to +12 dB."""
+        """Set track volume in dB."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -76,7 +78,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def set_track_pan(track_index: int, pan: float) -> dict:
-        """Set track pan. -1.0 = full left, 0.0 = center, 1.0 = full right."""
+        """Set track pan."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -91,7 +93,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def set_track_mute(track_index: int, muted: bool) -> dict:
-        """Mute or unmute a track."""
+        """Set track mute state."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -106,7 +108,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def set_track_solo(track_index: int, soloed: bool) -> dict:
-        """Solo or unsolo a track."""
+        """Set track solo state."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -120,7 +122,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def get_track_info(track_index: int) -> dict:
-        """Get detailed information about a track including FX and items."""
+        """Get track information."""
         try:
             project = get_project()
             track = project.tracks[track_index]
@@ -155,7 +157,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def list_tracks() -> dict:
-        """List all tracks in the current project with their basic parameters."""
+        """List all tracks."""
         try:
             project = get_project()
             tracks = []
@@ -174,10 +176,11 @@ def register_tools(mcp):
 
     @mcp.tool()
     def set_track_color(track_index: int, r: int, g: int, b: int) -> dict:
-        """Set track color using RGB values (0–255 each)."""
+        """Set track color."""
         try:
             project = get_project()
             track = project.tracks[track_index]
+            # Custom colors require setting bit 24 (0x1000000).
             color = RPR.ColorToNative(r, g, b) | 0x1000000
             RPR.SetMediaTrackInfo_Value(track.id, "I_CUSTOMCOLOR", color)
             return {"success": True, "track_index": track_index, "r": r, "g": g, "b": b}

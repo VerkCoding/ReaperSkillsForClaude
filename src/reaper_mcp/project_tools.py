@@ -12,55 +12,35 @@ logger = logging.getLogger("reaper_mcp.project_tools")
 
 
 def _read_time_signature() -> tuple:
-    """The project's time signature at the start of the timeline, as (num, denom).
+    """Read the project time signature at the start of the timeline.
 
-    Deliberately not ``reapy.Project.time_signature``. That property is
-    documented as returning the time signature but its two values are ``(bpm,
-    bpi)`` - the tempo and the numerator - so formatting them as "n/d" reports a
-    120 BPM project in 4/4 as "120.0/4.0". It is also read-only, which is why
-    setting it raised.
-
-    ``TimeMap_GetTimeSigAtTime`` answers the question that was being asked. It
-    fills its output arguments in place and reapy hands back the argument list,
-    so the numerator and denominator are at 2 and 3.
+    Avoids reapy.Project.time_signature because it returns tempo and numerator (bpm, bpi) rather than numerator and denominator, and is read-only. TimeMap_GetTimeSigAtTime is used to access the correct parameters.
     """
     out = RPR.TimeMap_GetTimeSigAtTime(0, 0.0, 0, 0, 0)
     return int(out[2]), int(out[3])
 
 
 def _refuse_if_dirty(what: str) -> dict:
-    """Guard the two commands that make REAPER ask a modal question.
+    """Prevent execution of commands that trigger a modal save prompt.
 
-    Opening or replacing a project with unsaved changes makes REAPER put up
-    "Save unsaved project before closing?" - three buttons, and no way to answer
-    it from here. While it waits REAPER runs no deferred scripts, so the reapy
-    server stops answering and every tool call hangs until somebody clicks it.
-
-    Refusing is strictly better than that: the caller gets a sentence telling
-    them what to do, instead of a connection that has silently died. Answering
-    the question automatically is not on the table - one of those buttons throws
-    away the user's work.
+    Opening or replacing a dirty project triggers a blocking UI prompt in REAPER. This prompt halts deferred script execution and stops the reapy server from responding, causing tool calls to hang. Aborting execution prevents connection deadlock.
     """
     if not RPR.IsProjectDirty(0):
         return {}
     return {
         "success": False,
         "error": (
-            f"The open project has unsaved changes, so {what} would make REAPER "
-            "open a modal 'Save unsaved project before closing?' prompt. While "
-            "that prompt is waiting, no REAPER tool can respond at all - so this "
-            "stopped rather than starting it.\n"
-            "Save first with save_project, or discard the changes in REAPER, "
-            "then try again."
+            f"The open project has unsaved changes. Executing {what} triggers a modal prompt. "
+            "Tool execution is suspended until the prompt is resolved. "
+            "Save the project or discard changes before proceeding."
         ),
     }
 
 
 def _marker_at_zero() -> int:
-    """Index of the tempo/time-signature marker at the start, or -1 for none.
+    """Return the index of the tempo/time-signature marker at the start position, or -1.
 
-    ``SetTempoTimeSigMarker`` takes -1 to mean "insert a new one", so this
-    doubles as the argument to pass: edit the marker that is there, or make one.
+    The return value is formatted to be compatible with SetTempoTimeSigMarker, which accepts -1 to indicate insertion of a new marker.
     """
     for i in range(RPR.CountTempoTimeSigMarkers(0)):
         marker = RPR.GetTempoTimeSigMarker(0, i, 0, 0, 0, 0, 0, 0, 0)
@@ -70,18 +50,9 @@ def _marker_at_zero() -> int:
 
 
 def _write_tempo(bpm: float) -> float:
-    """Set the project tempo, through the marker at 0 when there is one.
+    """Set the project tempo.
 
-    ``reapy.Project.bpm`` is only correct while the project has no tempo marker
-    at the start. Once one exists - and ``_write_time_signature`` creates one,
-    because that is where REAPER keeps the time signature - the marker wins:
-    assigning to ``bpm`` leaves the tempo where it was AND inserts a second
-    marker at the same position, so the project quietly accumulates markers
-    while appearing not to respond.
-
-    So the two tools have to agree about where the tempo lives. Setting a time
-    signature and then a tempo is an ordinary thing to ask for, and it used to
-    half-work in a way nothing reported.
+    Modifies the tempo marker at position 0 if it exists. Reapy's Project.bpm assignment fails to update existing tempo markers and creates duplicate markers instead. This ensures consistency between tempo and time signature modifications.
     """
     existing = _marker_at_zero()
     if existing < 0:
@@ -96,20 +67,9 @@ def _write_tempo(bpm: float) -> float:
 
 
 def _write_time_signature(numerator: int, denominator: int) -> tuple:
-    """Set the time signature at the start of the project, leaving the tempo alone.
+    """Set the time signature at the start of the project.
 
-    Named apart from the tool that calls it on purpose: the tool is bound in
-    ``register_tools``'s scope under the obvious name, so a module-level helper
-    sharing it would be shadowed by the closure and the tool would call itself.
-
-    REAPER keeps the time signature in tempo/time-signature markers rather than
-    in a project field, so this edits the marker at position 0 - creating it
-    only if there is not one already, since inserting a second marker at the
-    same spot on every call would litter the timeline.
-
-    The current BPM is passed straight back in because SetTempoTimeSigMarker
-    writes tempo and signature together; omitting it would silently retempo the
-    project.
+    Uses SetTempoTimeSigMarker because REAPER stores time signatures in tempo markers. The existing tempo is passed back into the function to prevent unintended tempo modification.
     """
     project = get_project()
     RPR.SetTempoTimeSigMarker(
@@ -158,11 +118,8 @@ def register_tools(mcp):
             project_path = str(Path(project_path).expanduser().resolve())
             os.makedirs(os.path.dirname(project_path), exist_ok=True)
 
-            # Main_SaveProjectEx, because reapy's Project.save takes no path -
-            # its only argument is `force_save_as`, a bool. Passing a filename
-            # to it put a string where REAPER's binding wanted an int, so every
-            # call with a path died on "'str' object cannot be interpreted as
-            # an integer" before saving anything.
+            # reapy's Project.save only accepts a boolean force_save_as parameter.
+            # Main_SaveProjectEx is used to specify a file path.
             RPR.Main_SaveProjectEx(0, project_path, 0)
 
             if not os.path.isfile(project_path):
@@ -171,11 +128,8 @@ def register_tools(mcp):
                     "error": f"REAPER reported no error but {project_path} was not written",
                 }
 
-            # SaveProjectEx writes the file but leaves the project marked dirty,
-            # so the next load_project or create_project would still trip
-            # REAPER's save prompt - having just saved. A plain save afterwards
-            # clears the flag, and cannot prompt for a filename because the call
-            # above has already given the project one.
+            # Main_SaveProjectEx leaves the project dirty flag set.
+            # Main_SaveProject clears the dirty flag to prevent unexpected save prompts.
             if RPR.IsProjectDirty(0):
                 RPR.Main_SaveProject(0, False)
 
@@ -262,7 +216,7 @@ def register_tools(mcp):
 
     @mcp.tool()
     def set_time_signature(numerator: int, denominator: int) -> dict:
-        """Set the project time signature, e.g. 4/4, 3/4, 6/8. The tempo is unchanged."""
+        """Set the project time signature."""
         try:
             if numerator < 1 or denominator < 1:
                 return {"success": False, "error": "numerator and denominator must be positive"}
