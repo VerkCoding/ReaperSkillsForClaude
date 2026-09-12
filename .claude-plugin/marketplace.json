@@ -2,7 +2,6 @@
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "reaper-skills-for-claude",
   "description": "REAPER tooling for Claude: the audio-engineering playbook, the setup doctor, and the REAPER MCP server.",
-  "homepage": "https://github.com/VerkCoding/ReaperSkillsForClaude",
   "owner": {
     "name": "Mark",
     "email": "markjrk1997@gmail.com"
@@ -25,7 +24,8 @@
         "midi",
         "music-production",
         "dsp"
-      ]
+      ],
+      "homepage": "https://github.com/VerkCoding/ReaperSkillsForClaude"
     }
   ]
 }
