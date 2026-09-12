@@ -9,6 +9,8 @@
     "email": "markjrk1997@gmail.com"
   },
   "license": "MIT",
+  "homepage": "https://github.com/VerkCoding/ReaperSkillsForClaude",
+  "repository": "https://github.com/VerkCoding/ReaperSkillsForClaude",
   "keywords": [
     "reaper",
     "daw",
@@ -19,13 +21,5 @@
     "music-production",
     "dsp"
   ],
-  "mcpServers": {
-    "reaper": {
-      "command": "python",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/launch_server.py"],
-      "env": {
-        "REAPER_MCP_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
-      }
-    }
-  }
+  "mcpServers": "./.mcp.json"
 }

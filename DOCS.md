@@ -130,6 +130,7 @@ If the process hangs during `Building wheel for llvmlite`, pip is compiling LLVM
 ```
 ReaperSkillsForClaude/              
 ├── .claude-plugin/                 
+├── .mcp.json                       
 ├── skills/                         
 │   ├── reaper-core-setup/          
 │   ├── reaper-mcp/                 
@@ -151,7 +152,7 @@ Directory structure principles:
 - **`skills/` contains documentation files.**
 - **`scripts/` contains cross-platform executables.**
 - **`install/` contains Windows-specific PowerShell scripts.**
-- **The MCP server is declared in `plugin.json`.**
+- **The MCP server is declared in `.mcp.json` and referenced by `plugin.json`.**
 
 ### Two interpreters
 
@@ -303,14 +304,34 @@ To manually install the plugin:
 | Surface | Command |
 | --- | --- |
 | **Claude Code** | `/plugin marketplace add <this folder>` then `/plugin install reaper-for-claude@reaper-skills-for-claude` |
-| **Claude Desktop / claude.ai** | Customize → Plugins → Personal plugins → **+** → Add marketplace |
+| **Claude Desktop** | Settings → Integrations → Add Integration → Add from custom MCP server |
 
-For Claude Desktop and claude.ai, provide the remote repository URL:
+For Claude Desktop, provide the remote repository URL:
 
 ```
 https://github.com/VerkCoding/ReaperSkillsForClaude.git
 ```
 
+Claude Desktop reads the `.mcp.json` file at the repository root to discover the MCP server. After syncing, run `python scripts/bootstrap.py` to install dependencies, then restart Claude Desktop.
+
+Alternatively, edit `claude_desktop_config.json` directly:
+
+```json
+{
+  "mcpServers": {
+    "reaper": {
+      "command": "python",
+      "args": ["C:\\path\\to\\ReaperSkillsForClaude\\scripts\\launch_server.py"],
+      "env": {
+        "REAPER_MCP_PLUGIN_ROOT": "C:\\path\\to\\ReaperSkillsForClaude"
+      }
+    }
+  }
+}
+```
+
+Replace `C:\path\to\ReaperSkillsForClaude` with the actual location. Close Claude Desktop fully (including the system tray) before editing.
+
 ### Porting
 
-The core server components and Lua scripts are cross-platform. Adding macOS or Linux support requires a platform-specific installer and updating the `command` field in `plugin.json` from `python` to `python3`.
+The core server components and Lua scripts are cross-platform. Adding macOS or Linux support requires a platform-specific installer and updating the `command` field in `.mcp.json` from `python` to `python3`.

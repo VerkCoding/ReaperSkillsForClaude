@@ -21,8 +21,32 @@ The claude.ai web application cannot access a local MCP server because it runs i
 
 ## Install
 
-**Windows.** The components installed are cross-platform. See
-[Porting](DOCS.md#porting) for other operating systems.
+### Claude Desktop (quick start)
+
+1. Open Claude Desktop → **Settings** → **Integrations** (or **Developer**)
+2. Click **Add Integration** → **Add from custom MCP server** (or **Edit Config**)
+3. Paste the repository URL:
+
+```
+https://github.com/VerkCoding/ReaperSkillsForClaude.git
+```
+
+4. After syncing, run the dependency bootstrap from a terminal:
+
+```bash
+python scripts/bootstrap.py
+```
+
+5. Start **REAPER** (with the distant API configured on port 2307), restart **Claude Desktop**, and prompt:
+
+> Check the current REAPER project info
+
+> [!NOTE]
+> If dependencies are not installed, the server starts in diagnostic mode and provides a `reaper_setup_status` tool explaining what to do. REAPER must be running with the distant API enabled for the tools to function.
+
+### Full install (Windows)
+
+The full installer handles everything: Python, Git, REAPER configuration, Claude setup, and the dependency environment.
 
 **1.** Clone the repository:
 
