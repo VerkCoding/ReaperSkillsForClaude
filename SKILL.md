@@ -1,5 +1,5 @@
 ---
-name: reaper-for-claude
+name: reaper-skills-for-claude
 description: |
   Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement. Controls REAPER via MCP and ReaScript.
 license: MIT

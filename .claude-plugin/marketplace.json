@@ -5,13 +5,12 @@
     "name": "Mark",
     "url": "https://github.com/VerkCoding"
   },
-  "description": "REAPER tooling for Claude: the audio-engineering playbook, the setup doctor, and the REAPER MCP server.",
+  "description": "REAPER tooling for Claude: audio engineering, setup doctor, and REAPER MCP server.",
   "plugins": [
     {
       "name": "reaper-skills-for-claude",
       "source": "./",
       "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",
-      "version": "1.0.0",
       "license": "MIT",
       "keywords": [
         "reaper",
@@ -22,18 +21,12 @@
         "midi",
         "music-production",
         "dsp"
-      ],
-      "skills": [
-        "./skills/reaper-audio-engineer",
-        "./skills/reaper-core-setup",
-        "./skills/reaper-mcp"
       ]
     },
     {
       "name": "reaper-for-claude",
       "source": "./",
       "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",
-      "version": "1.0.0",
       "license": "MIT",
       "keywords": [
         "reaper",
@@ -44,11 +37,6 @@
         "midi",
         "music-production",
         "dsp"
-      ],
-      "skills": [
-        "./skills/reaper-audio-engineer",
-        "./skills/reaper-core-setup",
-        "./skills/reaper-mcp"
       ]
     }
   ]

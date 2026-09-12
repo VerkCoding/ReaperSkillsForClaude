@@ -1,16 +1,15 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "reaper-for-claude",
-  "version": "1.0.0",
+  "name": "reaper-skills-for-claude",
   "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",
+  "version": "1.0.0",
   "author": {
     "name": "Mark",
-    "email": "markjrk1997@gmail.com",
     "url": "https://github.com/VerkCoding"
   },
-  "license": "MIT",
   "homepage": "https://github.com/VerkCoding/ReaperSkillsForClaude",
   "repository": "https://github.com/VerkCoding/ReaperSkillsForClaude",
+  "license": "MIT",
   "keywords": [
     "reaper",
     "daw",
@@ -22,6 +21,7 @@
     "dsp"
   ],
   "skills": [
+    "./",
     "./skills/reaper-audio-engineer",
     "./skills/reaper-core-setup",
     "./skills/reaper-mcp"
