@@ -145,7 +145,7 @@ To verify liveness, read `status.txt` in `<REAPER resource path>/claude_bridge/`
 
 **REAPER loads `claude_bridge.lua` once, at startup.** Editing or reinstalling the file changes nothing until REAPER restarts, because the listener in memory is the version loaded at launch. Running the startup action again does not reload it either; it starts a second listener. The script now claims a generation number so an older instance retires instead of two of them competing for the same command file.
 
-If `reaper-bridge` reports "Python was not found; run without arguments to install from the Microsoft Store", the wrapper has selected the Windows Store alias instead of a real interpreter. It resolves on PATH and satisfies `command -v`, then refuses to run. The wrapper now executes each candidate before committing to it and prefers the plugin virtual environment; setting `REAPER_MCP_PYTHON` to a full interpreter path also resolves it.
+If `scripts/reaper-bridge` reports "Python was not found; run without arguments to install from the Microsoft Store", the wrapper has selected the Windows Store alias instead of a real interpreter. It resolves on PATH and satisfies `command -v`, then refuses to run. The wrapper now executes each candidate before committing to it and prefers the plugin virtual environment; setting `REAPER_MCP_PYTHON` to a full interpreter path also resolves it.
 
 ## Installing from scratch
 
@@ -165,7 +165,7 @@ Determine the operating surface prior to diagnosis, as capabilities vary by plat
 
 | Surface | MCP server | File bridge | Notes |
 | --- | --- | --- | --- |
-| **Claude Code** | Yes | Yes | Full access. `reaper-bridge` is present in the Bash tool PATH. |
+| **Claude Code** | Yes | Yes | Full access. Run the bridge as `"${CLAUDE_PLUGIN_ROOT}/scripts/reaper-bridge"`. |
 | **Claude Desktop** | Yes | Only where shell access exists | Local MCP servers execute on the local machine. |
 | **claude.ai (web)** | No | No | No local machine access. Skills function as reference material; tools are unavailable. |
 

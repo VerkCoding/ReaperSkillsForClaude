@@ -139,9 +139,9 @@ ReaperSkillsForClaude/
 │   ├── launch_server.py            
 │   ├── bootstrap.py                
 │   ├── bridge.py                   
+│   ├── reaper-bridge               
 │   ├── benchmark_tools.py          
 │   └── doctor.py                   
-├── bin/reaper-bridge               
 ├── src/reaper_mcp/                 
 ├── reaper/                         
 └── install/                        
@@ -189,10 +189,10 @@ The plugin uses two independent communication routes with REAPER:
 - **The file bridge** executes Lua scripts within REAPER for operations unsupported by the standard API, such as offline DSP measurement and plugin parameter resolution.
 
 ```bash
-reaper-bridge --code 'return reaper.GetAppVersion()'
+"${CLAUDE_PLUGIN_ROOT}/scripts/reaper-bridge" --code 'return reaper.GetAppVersion()'
 ```
 
-The `reaper-bridge` executable accepts Lua code directly to avoid UTF-8 BOM parsing errors caused by temporary files.
+The wrapper lives in `scripts/` rather than a top-level `bin/` directory because claude.ai rejects plugins that ship `bin/` executables. The `reaper-bridge` wrapper accepts Lua code directly to avoid UTF-8 BOM parsing errors caused by temporary files.
 
 Before importing reapy, the server polls for REAPER's published server port. This read operation prevents reapy from incorrectly triggering the ReaScript action multiple times.
 

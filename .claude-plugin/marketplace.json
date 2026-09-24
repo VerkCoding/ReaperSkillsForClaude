@@ -8,22 +8,6 @@
   "description": "REAPER tooling for Claude: audio engineering, setup doctor, and REAPER MCP server.",
   "plugins": [
     {
-      "name": "reaper-skills-for-claude",
-      "source": "./",
-      "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",
-      "license": "MIT",
-      "keywords": [
-        "reaper",
-        "daw",
-        "audio",
-        "mixing",
-        "mastering",
-        "midi",
-        "music-production",
-        "dsp"
-      ]
-    },
-    {
       "name": "reaper-for-claude",
       "source": "./",
       "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",

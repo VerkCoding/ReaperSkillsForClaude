@@ -5,7 +5,7 @@
 
 # Enforces LF line endings for the shell script to ensure the shebang 
 # (!/bin/sh) is correctly interpreted in Bash environments without \r characters.
-bin/reaper-bridge text eol=lf
+scripts/reaper-bridge text eol=lf
 
 # Batch files are stored with CRLF bytes and excluded from normalization (-text)
 # rather than declared "text eol=crlf". LF-only endings can cause cmd.exe to

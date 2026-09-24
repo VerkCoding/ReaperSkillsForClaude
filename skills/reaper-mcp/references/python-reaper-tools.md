@@ -463,7 +463,7 @@ Both of these live in `claude_bridge.lua`, which REAPER loads at startup. **Edit
 
 ### Interpreter selection
 
-`bin/reaper-bridge` must run a candidate interpreter before committing to it. On Windows, `python3` resolves to the Microsoft Store App Execution Alias: it satisfies `command -v`, then refuses to run and exits 49 with "Python was not found". Selecting on presence alone made the wrapper unusable unless `REAPER_MCP_PYTHON` was set by hand, even with a working Python on PATH.
+`scripts/reaper-bridge` must run a candidate interpreter before committing to it. On Windows, `python3` resolves to the Microsoft Store App Execution Alias: it satisfies `command -v`, then refuses to run and exits 49 with "Python was not found". Selecting on presence alone made the wrapper unusable unless `REAPER_MCP_PYTHON` was set by hand, even with a working Python on PATH.
 
 ## What a Call Costs
 

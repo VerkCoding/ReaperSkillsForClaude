@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "reaper-skills-for-claude",
+  "name": "reaper-for-claude",
   "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": {
     "name": "Mark",
     "url": "https://github.com/VerkCoding"
@@ -21,18 +21,10 @@
     "dsp"
   ],
   "skills": [
-    "./",
+    "./skills/reaper-overview",
     "./skills/reaper-audio-engineer",
     "./skills/reaper-core-setup",
     "./skills/reaper-mcp"
   ],
-  "mcpServers": {
-    "reaper": {
-      "command": "python",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/launch_server.py"],
-      "env": {
-        "REAPER_MCP_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
-      }
-    }
-  }
+  "mcpServers": "./.mcp.json"
 }

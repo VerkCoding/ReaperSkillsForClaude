@@ -51,10 +51,10 @@ Two habits follow:
 Pass Lua code directly. Do not use a temporary file. Windows PowerShell 5.1 writes a UTF-8 BOM, resulting in a `PARSE_ERROR` from the bridge.
 
 ```bash
-reaper-bridge --code 'return reaper.GetAppVersion()'
+"${CLAUDE_PLUGIN_ROOT}/scripts/reaper-bridge" --code 'return reaper.GetAppVersion()'
 ```
 
-If `reaper-bridge` is not on the PATH, call the script directly:
+If the wrapper cannot run (no `sh`, or it picks the wrong interpreter), call the script directly:
 
 ```bash
 python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.py" --code 'return reaper.GetAppVersion()'
