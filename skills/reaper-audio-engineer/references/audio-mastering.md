@@ -91,7 +91,7 @@ When using multiple references, use the variance between them as tolerance.
 | YouTube | ~ -14 LUFS | Platform specified |
 | Tidal, Amazon | ~ -14 LUFS | Platform specified |
 
-Verify platform specifications at delivery time and document the date.
+Verify platform specifications at delivery time and document the date. Per-platform detail with sources (true peak ceilings, podcast mono targets, broadcast): [gain-staging.md](./topics/gain-staging.md), section 9.
 
 ### 5.2 Normalisation
 

@@ -102,6 +102,8 @@ If correlation is negative after delay compensation, invert polarity and remeasu
 
 ## 8. G2: static balance
 
+**Targets.** Input levels per source and headroom per stage: [gain-staging.md](./topics/gain-staging.md), sections 4 and 5. On tracks carrying sonible smart:chain, read [plugin-sonible-smartchain.md](./topics/plugin-sonible-smartchain.md) before changing item levels: a level change upstream of a learned instance requires a new learn.
+
 **Measurement window.** Select a representative time selection. Maintain this exact window for all G2 measurements.
 
 **Level table.** Execute `render_stems`, measure LUFS-I or RMS of each stem over the selected window, and calculate the difference relative to the primary element defined in the brief.
@@ -135,6 +137,8 @@ If correlation is negative after delay compensation, invert polarity and remeasu
 
 ## 10. G4: compression
 
+**Starting settings.** Compressor type, ratio, attack, release and gain reduction per source: [compression.md](./topics/compression.md), Part 4.
+
 **Crest factor target.** Measure initial crest factor and define the target crest factor prior to processing.
 
 **Threshold.** Determine based on the level distribution to target a specific proportion of the signal.
@@ -165,6 +169,8 @@ If correlation is negative after delay compensation, invert polarity and remeasu
 **Exit condition for G5:** Documented list of adjustments and their corresponding justifications from the brief.
 
 ## 12. G6: space
+
+**Starting settings.** Reverb types, the reverb bus set and settings per source: [reverb.md](./topics/reverb.md).
 
 **Routing.** Utilize sends to effects buses with `create_send`.
 

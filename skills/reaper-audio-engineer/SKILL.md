@@ -4,7 +4,9 @@ description: >-
   Audio engineering rules for work inside REAPER: mixing, mastering, gain
   staging, EQ decisions, compression and dynamics, panning and stereo width, 
   automation, reverb sends, loudness and LUFS targets, and evaluating measurements.
-  Use for audio decisions. Use reaper-mcp for calling tools, running Lua, or debugging.
+  Includes target numbers per source and plugin-specific workflows such as
+  sonible smart:chain. Use for audio decisions. Use reaper-mcp for calling tools,
+  running Lua, or debugging.
 ---
 
 # REAPER Audio Engineer
@@ -56,6 +58,24 @@ The following resources form a sequence. Reference the document corresponding to
 - **[Mastering](./references/audio-mastering.md)**: Instructions for mix bus and master bus processing, spectral matching, limiting, LUFS targets, true peak targets, mid/side processing, bit depth, dither, stems, and deliverables.
 
 For instructions on retrieving measurements from REAPER, refer to **reaper-mcp**. The documents [Rendering Secrets](../reaper-mcp/references/rendering.md) and [Plugin Control](../reaper-mcp/references/plugin-control.md) describe potential errors in data collection.
+
+## Topic library
+
+A topic document holds the target numbers and working methods for one subject. The process documents above say how to measure and verify; a topic document says what to aim for. Read the topic before choosing a value in its subject.
+
+| Document | Covers | Read when |
+|---|---|---|
+| [Gain staging](./references/topics/gain-staging.md) | Levels per source and per stage, meters, headroom, loudness targets per platform | Setting input or bus levels, checking headroom, level-matched A/B, choosing a delivery loudness |
+| [Compression](./references/topics/compression.md) | Compressor types, settings per source and bus, sidechain, parallel, de-ess, multiband, genre chains | Adding or adjusting a compressor, limiter or ducking |
+| [Reverb](./references/topics/reverb.md) | Reverb parameters and types, send/return set-up, depth, settings per source, tempo-matched pre-delay and decay | Adding space, building reverb buses, fixing a muddy or distant mix |
+| [sonible smart:chain](./references/topics/plugin-sonible-smartchain.md) | Gain staging and balance with smart:chain: learn, groups and layers, Auto Level | Only when a track carries `VST3: smartChain (sonible)` |
+
+Rules for topic documents:
+
+- They are written for hands-on work in the REAPER interface. Each ends with "Applying in this plugin", which maps its steps to MCP tools and the bridge. Act through that section; take numbers and reasoning from the body.
+- Their numbers are starting points (Tier 3, as defined in [Recording and intake](./references/audio-recording.md)) unless the document cites a standard. Measure before and after, as the process documents require.
+- Each number has one owner: levels, meters and loudness belong to gain staging; compressor settings to compression; reverb and its ducking to reverb. A plugin document takes its targets from those. When documents disagree, the owner wins; report the disagreement.
+- Steps inside a plugin's own interface, such as smart:chain's learn button, are the user's to perform. Name the step, wait for confirmation, then measure.
 
 ## Troubleshooting
 

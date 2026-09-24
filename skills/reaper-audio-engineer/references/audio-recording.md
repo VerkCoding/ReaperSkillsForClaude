@@ -175,7 +175,7 @@ Clipping occurs at specific points:
 2. **Fixed-point and analog-modeled plugins**: Certain plugins operate with a calibrated reference level (e.g., equivalent to 0 VU). Input signals exceeding this level will generate distortion.
 3. **Integer format rendering**: Output rendering to integer formats will apply hard clipping at 0 dBFS.
 
-Set input gain to optimize signal-to-noise ratio within the analog hardware's operating range. Calibration standards typically set the analog reference at -18 to -20 dBFS (Tier 1). Target peak levels of -18 to -12 dBFS are reference values (Tier 3) dependent on specific hardware calibration.
+Set input gain to optimize signal-to-noise ratio within the analog hardware's operating range. Calibration standards typically set the analog reference at -18 to -20 dBFS (Tier 1). Target peaks of -12 to -6 dBFS in the loudest passage are the working convention (Tier 3), dependent on specific hardware calibration; see [gain-staging.md](./topics/gain-staging.md), section 4, stage 0.
 
 Measure peak levels during the highest amplitude section and set gain to prevent 0 dBFS exceedance at the ADC (Tier 1).
 
