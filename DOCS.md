@@ -149,7 +149,7 @@ ReaperSkillsForClaude/
 
 Directory structure principles:
 
-- **`skills/` contains documentation files.**
+- **`skills/` contains documentation files.** Knowledge documents live in `skills/reaper-audio-engineer/references/topics/`; to add one, follow [CONTRIBUTING.md](CONTRIBUTING.md).
 - **`scripts/` contains cross-platform executables.**
 - **`install/` contains Windows-specific PowerShell scripts.**
 - **The MCP server is declared in `.mcp.json` and referenced by `plugin.json`.**

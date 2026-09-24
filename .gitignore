@@ -14,7 +14,10 @@ venv/
 .agents/
 
 # Excludes Claude Code machine-specific state and auto-generated settings modifications.
-.claude/
+# .claude/CLAUDE.md is the exception: shared project instructions. A CLAUDE.md at the
+# repository root would sit at the plugin root, where `claude plugin validate` warns about it.
+.claude/*
+!.claude/CLAUDE.md
 
 # Excludes the installer download cache to avoid committing large vendor binaries.
 downloadCache/

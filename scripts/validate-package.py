@@ -90,6 +90,37 @@ for skill_path in skill_paths:
     if skill_version and skill_version.group(1) != plugin_version:
         raise SystemExit(f"Version mismatch: {skill_path}/SKILL.md ({skill_version.group(1)}) != plugin.json ({plugin_version})")
 
+    # Topic documents (CONTRIBUTING.md): kebab-case names, listed in SKILL.md, ending with the mapping section
+    skill_text = read_package_file(skill_file)
+    for topic in sorted((skill_dir / "references" / "topics").glob("*.md")):
+        where = topic.relative_to(ROOT).as_posix()
+        if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*\.md", topic.name):
+            raise SystemExit(f"Rename {where}: topic documents use ASCII kebab-case names")
+        if f"references/topics/{topic.name}" not in skill_text:
+            raise SystemExit(f"Add {where} to the Topic library in {skill_path}/SKILL.md")
+        if not re.search(r"(?m)^## Applying in this plugin\s*$", read_package_file(topic)):
+            raise SystemExit(f"Add the mapping section to {where} (template in CONTRIBUTING.md, section 4)")
+
+# Skill documents are in English (CONTRIBUTING.md, section 2): letters used only by Vietnamese mark an untranslated import.
+# Relative links in skill documents must resolve inside the plugin. Code blocks are skipped.
+VIETNAMESE = re.compile("[\u1ea0-\u1ef9\u0102\u0103\u0110\u0111\u01a0\u01a1\u01af\u01b0]")
+for doc in sorted((ROOT / "skills").rglob("*.md")):
+    where = doc.relative_to(ROOT).as_posix()
+    text = read_package_file(doc)
+    untranslated = VIETNAMESE.search(text)
+    if untranslated:
+        line = text.count("\n", 0, untranslated.start()) + 1
+        raise SystemExit(f"Translate {where} into English: Vietnamese text at line {line} (CONTRIBUTING.md, section 2)")
+    prose = re.sub(r"(?ms)^```.*?^```", "", text)
+    for target in re.findall(r"\]\(([^)\s]+)\)", prose):
+        if target.startswith("#") or re.match(r"[a-z][a-z0-9+.-]*:", target):
+            continue
+        resolved = (doc.parent / target.split("#", 1)[0]).resolve()
+        if not resolved.exists():
+            raise SystemExit(f"Broken link in {where}: {target}")
+        if ROOT != resolved and ROOT not in resolved.parents:
+            raise SystemExit(f"Link leaves the plugin in {where}: {target}")
+
 # The version is duplicated for Python packaging conventions
 for path, pattern in (
     (ROOT / "pyproject.toml", r'(?m)^version\s*=\s*"([^"]+)"'),
