@@ -214,7 +214,11 @@ def check_mcp_command(r: Report) -> None:
         r.fail(f"{MANIFEST} missing")
         return
     try:
-        command = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["reaper"]["command"]
+        servers = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]
+        if isinstance(servers, str):
+            # plugin.json may point at a file such as ./.mcp.json instead of declaring servers inline.
+            servers = json.loads((ROOT / servers).read_text(encoding="utf-8"))["mcpServers"]
+        command = servers["reaper"]["command"]
     except Exception as e:
         r.fail(f"{MANIFEST} missing reaper server declaration: {e}")
         return

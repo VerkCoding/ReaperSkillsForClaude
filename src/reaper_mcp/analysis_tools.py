@@ -2,10 +2,8 @@ import os
 import logging
 
 import numpy as np
-import reapy
-from reapy import reascript_api as RPR
 
-from reaper_mcp.connection import get_project
+from reaper_mcp.connection import RPR, get_project, reapy
 
 logger = logging.getLogger("reaper_mcp.analysis_tools")
 

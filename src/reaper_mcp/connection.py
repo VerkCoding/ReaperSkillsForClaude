@@ -7,7 +7,10 @@ deferred scripts. To avoid triggering this dialog, the connection logic verifies
 the socket state and limits reconnection attempts.
 """
 
+import importlib.abc
+import importlib.machinery
 import logging
+import sys
 import threading
 import time
 
@@ -25,10 +28,13 @@ WEB_INTERFACE_PORT = 2307
 RECONNECT_INTERVAL_SEC = 20.0
 MAX_CONSECUTIVE_FAILURES = 3
 
-COLD_START_WAIT_SEC = 60.0
 WARM_WAIT_SEC = 3.0
 
-_first_connect = True
+ACTIVATION_WAIT_SEC = 15.0
+ACTIVATION_COOLDOWN_SEC = 60.0
+ACTION_TIMEOUT_SEC = 5.0
+
+_last_activation = None
 
 _SETUP_HINT = (
     "Ensure REAPER is running and the distant API is enabled.\n"
@@ -57,31 +63,144 @@ _DIALOG_HINT = (
     "during startup, rendering, plugin scanning, or project loading."
 )
 
+_NO_SERVER_HINT = (
+    "REAPER's web interface answers, but the reapy server never started. REAPER starts "
+    "it by running the `activate_reapy_server` action, so that action is missing from "
+    "REAPER's action list (reaper-kb.ini), or Python ReaScript failed to load it."
+)
+
+
+def _bound_activation(web_interface) -> None:
+    """Replace reapy's unbounded server lookup with one that gives up.
+
+    reapy 0.10 answers an empty `server_port` by running the activate action and
+    asking again, recursively and with no limit, and runs the action without a
+    timeout. When REAPER cannot start the server, the lookup never returns and runs
+    the action twice a second. That hung `import reapy`, and with it the server.
+    This version waits up to ACTIVATION_WAIT_SEC, and runs the action at most once
+    per ACTIVATION_COOLDOWN_SEC: running it while the server starts opens REAPER's
+    "ReaScript task control" dialog.
+    """
+    network_errors = (web_interface.URLError, web_interface.timeout)
+    undefined = web_interface.UndefinedExtStateError
+    disabled = web_interface.DisabledDistAPIError
+
+    def perform_action(self, action_id):
+        web_interface.request.urlopen(self._url + str(action_id), timeout=ACTION_TIMEOUT_SEC).close()
+
+    def get_reapy_server_port(self):
+        try:
+            return self.ext_state["server_port"]
+        except network_errors:
+            raise disabled
+        except undefined:
+            pass
+
+        global _last_activation
+        now = time.monotonic()
+        if _last_activation is None or now - _last_activation >= ACTIVATION_COOLDOWN_SEC:
+            _last_activation = now
+            try:
+                self.activate_reapy_server()
+            except network_errors:
+                raise disabled
+
+        deadline = time.monotonic() + ACTIVATION_WAIT_SEC
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            try:
+                return self.ext_state["server_port"]
+            except undefined:
+                continue
+            except network_errors:
+                break
+
+        logger.warning("%s", _NO_SERVER_HINT)
+        raise disabled
+
+    web_interface.WebInterface.perform_action = perform_action
+    web_interface.WebInterface.get_reapy_server_port = get_reapy_server_port
+
+
+class _ReapyActivationGuard(importlib.abc.MetaPathFinder):
+    """Patch reapy's web interface module as it loads.
+
+    reapy connects at import time, from module code that runs right after this
+    module loads, so there is no later point at which to patch it.
+    """
+
+    NAME = "reapy.tools.network.web_interface"
+
+    def find_spec(self, fullname, path, target=None):
+        if fullname != self.NAME:
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+        if spec is None or spec.loader is None:
+            return spec
+        exec_module = spec.loader.exec_module
+
+        def exec_and_bound(module):
+            exec_module(module)
+            _bound_activation(module)
+
+        spec.loader.exec_module = exec_and_bound
+        return spec
+
+
+def _install_reapy_guard() -> None:
+    loaded = sys.modules.get(_ReapyActivationGuard.NAME)
+    if loaded is not None:
+        _bound_activation(loaded)
+    elif not any(isinstance(f, _ReapyActivationGuard) for f in sys.meta_path):
+        sys.meta_path.insert(0, _ReapyActivationGuard())
+
+
+_install_reapy_guard()
+
 
 def _import_reapy():
     """Import reapy and handle associated errors.
 
-    The wait occurs before the import because the import statement triggers
-    the connection logic in `reapy/tools/network/machines.py`. Delaying the
-    import prevents the REAPER action from executing prematurely.
+    The import runs the connection logic in `reapy/tools/network/machines.py`,
+    which starts the reapy server when it is not running. The short wait first
+    lets a start that another client already requested publish its port, so the
+    action does not run twice. Nothing in REAPER starts the server on its own, so
+    a longer wait would only delay the first tool call.
     """
-    global _first_connect
-    import sys  # noqa: PLC0415
-
     if "reapy" not in sys.modules:
-        _wait_for_server(COLD_START_WAIT_SEC if _first_connect else WARM_WAIT_SEC)
-        _first_connect = False
+        _wait_for_server(WARM_WAIT_SEC)
 
     try:
         import reapy  # noqa: PLC0415
         return reapy
     except Exception as e:
-        import sys
         v = f"{sys.version_info.major}.{sys.version_info.minor}"
         raise RuntimeError(
             f"Failed to import reapy under Python {v}: {e}. "
             "Execute scripts/bootstrap.py to build the environment."
         ) from e
+
+
+class _Deferred:
+    """Stand-in for reapy, or one of its modules, that imports it on first use.
+
+    Importing reapy connects to REAPER. The tool modules imported it at module level,
+    so the server could not answer `initialize` until REAPER did. They use these
+    instead, and the first attribute access imports reapy through _import_reapy.
+    """
+
+    def __init__(self, *path: str) -> None:
+        self._path = path
+
+    def __getattr__(self, name: str):
+        target = _import_reapy()
+        for part in self._path:
+            target = getattr(target, part)
+        return getattr(target, name)
+
+
+reapy = _Deferred()
+RPR = _Deferred("reascript_api")
 
 
 def _server_state(timeout_sec: float = 0.5) -> str:
@@ -153,7 +272,9 @@ def _connect(reapy) -> None:
     _wait_for_server(WARM_WAIT_SEC)
 
     try:
-        reapy.connect()
+        # connect() keeps what the first attempt found, including no connection at
+        # all when REAPER was closed then. reconnect() looks REAPER up again.
+        reapy.reconnect()
     except Exception as e:
         raise RuntimeError(f"Connection to REAPER failed: {e}\n{_SETUP_HINT}") from e
 
@@ -222,11 +343,18 @@ def get_project():
         _consecutive_failures += 1
     _reset()
 
-    if _server_state() == "down":
+    state = _server_state()
+    if state == "down":
         raise RuntimeError(
             "REAPER application or web interface is unavailable.\n\n"
             "Ensure REAPER is running and the web interface is configured on port "
             f"{WEB_INTERFACE_PORT}.\n\n"
+            f"Underlying error: {last_error}"
+        ) from last_error
+
+    if state == "starting":
+        raise RuntimeError(
+            f"{_NO_SERVER_HINT}\n\n{_SETUP_HINT}\n\n{_DIALOG_HINT}\n\n"
             f"Underlying error: {last_error}"
         ) from last_error
 

@@ -23,6 +23,8 @@ from pathlib import Path
 # Analysis libraries (soundfile, librosa, pyloudnorm) are excluded to prevent server failure due to specific missing modules.
 # `mcp.server.fastmcp` is specified to ensure compatibility with mcp 2.0+ which dropped the `fastmcp` submodule.
 REQUIRED = ("mcp.server.fastmcp", "reapy", "numpy")
+# Importing reapy connects to REAPER and waits on it, so the probe only locates it.
+LOCATE_ONLY = ("reapy",)
 
 RELAUNCH_FLAG = "REAPER_MCP_RELAUNCHED"
 PROBE_TIMEOUT = 30
@@ -126,7 +128,11 @@ def probe(candidate, root: Path) -> str:
     Distinguishes between a missing module (returns "failed" rapidly) and a slow file system cache (returns "timeout").
     """
     argv = as_argv(candidate)
-    code = "import " + ", ".join(REQUIRED)
+    imported = [m for m in REQUIRED if m not in LOCATE_ONLY]
+    code = (
+        "import importlib.util, sys; import " + ", ".join(imported) + "; "
+        f"sys.exit(0 if all(importlib.util.find_spec(m) for m in {LOCATE_ONLY!r}) else 1)"
+    )
     try:
         proc = subprocess.run(
             argv + ["-c", code],

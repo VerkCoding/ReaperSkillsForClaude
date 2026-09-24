@@ -5,10 +5,7 @@ import struct
 from contextlib import contextmanager
 from pathlib import Path
 
-import reapy
-from reapy import reascript_api as RPR
-
-from reaper_mcp.connection import get_project
+from reaper_mcp.connection import RPR, get_project, reapy
 from reaper_mcp.units import set_solo
 
 logger = logging.getLogger("reaper_mcp.render_tools")

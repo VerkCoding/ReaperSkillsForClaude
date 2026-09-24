@@ -1,10 +1,7 @@
 import os
 import logging
 
-import reapy
-from reapy import reascript_api as RPR
-
-from reaper_mcp.connection import get_project
+from reaper_mcp.connection import RPR, get_project, reapy
 from reaper_mcp.units import get_volume_db, set_volume_db
 
 logger = logging.getLogger("reaper_mcp.mastering_tools")
