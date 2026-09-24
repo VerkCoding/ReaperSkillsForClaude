@@ -7,7 +7,7 @@ Low-level ReaScript accessors handle these properties.
 
 import math
 
-from reapy import reascript_api as RPR
+from reaper_mcp.connection import RPR
 
 # Linear gain of 0.0 corresponds to a silent track and has no finite dB value.
 DB_FLOOR = -150.0

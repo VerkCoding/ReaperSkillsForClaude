@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "reaper-for-claude",
   "description": "Claude works inside REAPER as an audio engineer: mixing, mastering, MIDI, FX, rendering, and real DSP measurement.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": {
     "name": "Mark",
     "url": "https://github.com/VerkCoding"
