@@ -11,7 +11,9 @@ INSTRUCTIONS = (
     "reported. Before changing the project through the bridge, tell the user and name what "
     "the tools lack. Never run tool calls and bridge calls in parallel. After the bridge adds, "
     "deletes or moves tracks, FX or sends, call list_tracks before the next tool that takes an "
-    "index. success: true is a claim, not proof: read values that matter back."
+    "index. success: true is a claim, not proof: read values that matter back; a reply "
+    "with unconfirmed changed nothing in REAPER. Each change is one undo step, and the "
+    "first change to a saved project writes a backup copy beside it."
 )
 
 mcp = FastMCP("reaper-mcp", instructions=INSTRUCTIONS)

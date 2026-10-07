@@ -83,18 +83,20 @@ Rules for Lua bridge execution:
 
 If `${CLAUDE_PLUGIN_ROOT}` is not substituted, locate the plugin directory manually (e.g., `scripts/bridge.py` under `~/.claude/plugins/` or the repository) and use the absolute path.
 
-## Undo
+## Undo, backups and unconfirmed writes
 
-The tools added for envelopes, markers, the time selection, send routing, items and FX order record one undo point per call, named `MCP: <tool>`; each bridge command records `Claude bridge command`. The older tools, such as `set_track_volume`, `add_fx` and `create_send`, record none.
+Every tool that changes the project records one undo point per call, named `MCP: <tool>`; each bridge command records `Claude bridge command`. Transport, cursor, render, recording and project-file tools record none, since REAPER keeps none of that in undo history.
 
 - `undo` steps back through REAPER's history and names each step it undid. It stops at a step it did not make, which is the user's own edit; pass `any_step` only when the user asked for that.
-- Undoing restores the whole state saved at the previous undo point. A change an older tool made since then is reverted with it, so say so before undoing after a mix of old and new tools.
+- Undoing restores the whole state saved at the previous undo point, so a change made with raw calls through reapy since then is reverted with it. Tools and bridge commands record their own changes, so this only concerns code outside both.
+- **Backup.** Before the first change the server makes to a saved project, it writes a copy, unsaved changes included, as `<name>.mcp-backup-<time>.rpp` next to the project file, and keeps the newest five. The reply that made it carries `backup` with the path; tell the user once. A project never saved is not backed up. `REAPER_MCP_BACKUP=0` in the server's environment turns this off.
+- **`unconfirmed`.** REAPER adds an undo point only when the project changed. A reply with `success: true` and `unconfirmed` left no `MCP: <tool>` step: the value was already set, or the write did not reach REAPER. Read the value back before reporting it as done.
 
 ## Verify writes
 
 The `reapy` library can accept attribute assignments that do not affect REAPER. Operations like `fx.params[0].normalized_value = 0.6` and `track.armed = True` may succeed in Python without raising an error while having no effect.
 
-A `success: true` response does not guarantee execution. Read the value back through `reascript_api` to confirm. Refer to [Driving REAPER from Python](./references/python-reaper-tools.md#verified-reapy-traps).
+A `success: true` response does not guarantee execution. An `unconfirmed` field in the reply means REAPER recorded no change; without it, some change was recorded, not necessarily the one asked for. Read the value back through `reascript_api` to confirm. Refer to [Driving REAPER from Python](./references/python-reaper-tools.md#verified-reapy-traps).
 
 ## System hangs
 
@@ -117,6 +119,12 @@ python scripts/benchmark_tools.py
 ```
 
 Run this script after modifying tool modules. Asserts must be based on independently read values, not on success reports.
+
+`scripts/check_undo.py` calls every tool that changes the project in a scratch tab, undoes once, and compares the saved project text before and after; it also checks the backup and the `unconfirmed` flag. A new tool that changes the project gets `@records_undo()` beneath `@mcp.tool()` (or `items=True` if it creates MIDI items) and an entry in that script's plan.
+
+```bash
+python scripts/check_undo.py
+```
 
 ## Troubleshooting
 

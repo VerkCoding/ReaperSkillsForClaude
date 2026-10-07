@@ -322,11 +322,12 @@ def records_undo(items: bool = False, own_step: bool = False, verify: bool = Tru
     * with own_step=True the tool records its own step (undo_step inside), for a tool
       that must not hold REAPER while it renders.
 
-    Before the first change to a project, the project is backed up. A call reported
-    as successful that left no "MCP: <tool>" step at the top of the undo history
-    reached nothing in REAPER, the way a reapy attribute assignment does: the reply
-    then carries "unconfirmed". verify=False skips that check, for tools whose change
-    REAPER does not keep in undo history.
+    Before the first change to a project, the project is backed up. REAPER adds an
+    undo point only when the project differs from the last one it recorded, so a call
+    reported as successful that left no "MCP: <tool>" step changed nothing: either the
+    value was already set, or the write never reached REAPER, the way a reapy
+    attribute assignment does. The reply then carries "unconfirmed". verify=False
+    skips that check, for tools whose change REAPER does not keep in undo history.
     """
     def decorate(fn):
         step = UNDO_PREFIX + fn.__name__
@@ -356,8 +357,8 @@ def records_undo(items: bool = False, own_step: bool = False, verify: bool = Tru
                 top = undo_top()
                 if top != step:
                     result["unconfirmed"] = (
-                        f"REAPER recorded no change for this call (latest undo step: {top!r}), "
-                        "so the write may not have taken effect. Read the value back."
+                        "REAPER recorded no change for this call: the value was already set, "
+                        "or the write did not reach REAPER. Read the value back."
                     )
             return result
 

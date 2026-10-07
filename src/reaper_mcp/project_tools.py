@@ -3,7 +3,7 @@ import time
 import logging
 from pathlib import Path
 
-from reaper_mcp.connection import RPR, get_project, reapy, records_undo
+from reaper_mcp.connection import RPR, get_project, reapy, records_undo, undo_step
 from reaper_mcp.units import project_tempo
 
 logger = logging.getLogger("reaper_mcp.project_tools")
@@ -75,6 +75,12 @@ def _marker_at_zero() -> int:
 
 
 def _write_tempo(bpm: float) -> float:
+    """Set the project tempo and return it as REAPER now reads it."""
+    _apply_tempo(bpm)
+    return project_tempo()
+
+
+def _apply_tempo(bpm: float) -> None:
     """Set the project tempo.
 
     Modifies the tempo marker at position 0 if it exists. Reapy's Project.bpm assignment fails to update existing tempo markers and creates duplicate markers instead. This ensures consistency between tempo and time signature modifications.
@@ -89,10 +95,15 @@ def _write_tempo(bpm: float) -> float:
         )
         RPR.UpdateTimeline()
     _mark_dirty()
-    return project_tempo()
 
 
 def _write_time_signature(numerator: int, denominator: int) -> tuple:
+    """Set the time signature at the start of the project and return it as REAPER now reads it."""
+    _apply_time_signature(numerator, denominator)
+    return _read_time_signature()
+
+
+def _apply_time_signature(numerator: int, denominator: int) -> None:
     """Set the time signature at the start of the project.
 
     Uses SetTempoTimeSigMarker because REAPER stores time signatures in tempo markers. The existing tempo is passed back into the function to prevent unintended tempo modification.
@@ -106,7 +117,6 @@ def _write_time_signature(numerator: int, denominator: int) -> tuple:
     )
     RPR.UpdateTimeline()
     _mark_dirty()
-    return _read_time_signature()
 
 
 def register_tools(mcp):
@@ -256,26 +266,33 @@ def register_tools(mcp):
             logger.error(f"get_project_info failed: {e}")
             return {"success": False, "error": str(e)}
 
+    # The tempo map is recomputed only once REAPER is released, so these tools read
+    # tempo and time signature back after their undo step: read inside it, a tempo
+    # change following a time-signature change still reported the old tempo.
     @mcp.tool()
-    @records_undo()
+    @records_undo(own_step=True)
     def set_tempo(bpm: float) -> dict:
         """Set the project tempo in BPM."""
         try:
             if bpm <= 0:
                 return {"success": False, "error": f"bpm must be positive, got {bpm}"}
-            return {"success": True, "tempo": _write_tempo(bpm)}
+            with undo_step("set_tempo"):
+                _apply_tempo(bpm)
+            return {"success": True, "tempo": project_tempo()}
         except Exception as e:
             logger.error(f"set_tempo failed: {e}")
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
-    @records_undo()
+    @records_undo(own_step=True)
     def set_time_signature(numerator: int, denominator: int) -> dict:
         """Set the project time signature."""
         try:
             if numerator < 1 or denominator < 1:
                 return {"success": False, "error": "numerator and denominator must be positive"}
-            num, denom = _write_time_signature(numerator, denominator)
+            with undo_step("set_time_signature"):
+                _apply_time_signature(numerator, denominator)
+            num, denom = _read_time_signature()
             return {"success": True, "time_signature": f"{num}/{denom}"}
         except Exception as e:
             logger.error(f"set_time_signature failed: {e}")

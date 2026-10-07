@@ -403,13 +403,43 @@ RPR.Undo_EndBlock2(0, "MCP: probe block", -1)
 # History shows "ReaScript: Run", not "MCP: probe block"; redo restores 0.7, not 0.6.
 ```
 
-REAPER closed the open block at the end of the first defer cycle, under its own name, holding the state from before the write. Run the whole block inside `inside_reaper()` and the step is named as given and holds the right state. `connection.undo_step()` does this for the tools; a block that changes nothing adds no step.
+REAPER closed the open block at the end of the first defer cycle, under its own name, holding the state from before the write. Run the whole block inside `inside_reaper()` and the step is named as given and holds the right state. `connection.undo_step()` does this for the tools.
+
+REAPER adds a step only when the project differs from the state saved at the last one. A block that makes no call adds none, and so does a block that writes a value the project already has: setting a volume to 0.3 twice left one step, not two.
 
 ### Undoing restores the previous step's whole state
 
-`Undo_DoUndo2` does not reverse the last step alone: it restores the full state saved at the step before. A write that made no undo point in between is reverted with it. Measured: a volume written as 1.0 without an undo point, followed by a recorded step, came back as the 0.7 of the step before when that step was undone. The older tools make no undo points, so their changes since the last step disappear when a newer tool's step is undone. A test that sets up with raw calls and then undoes a tool must record its setup as a step first.
+`Undo_DoUndo2` does not reverse the last step alone: it restores the full state saved at the step before. A write that made no undo point in between is reverted with it. Measured: a volume written as 1.0 without an undo point, followed by a recorded step, came back as the 0.7 of the step before when that step was undone. Since 1.3.0 every tool that changes the project records a step (`connection.records_undo`), so this only bites raw calls: a test that sets up with raw calls and then undoes a tool must record its setup as a step first.
 
 `Undo_CanUndo2` and `Undo_CanRedo2` raise inside Python ReaScript when there is nothing to undo or redo: the generated wrapper calls `.decode()` on a null result. Catch the error rather than expecting `None`.
+
+### A block records every change except a new MIDI item
+
+Measured from reapy on REAPER 7.82, each change followed by one Undo, passing when the project came back exactly and the step before it was untouched:
+
+| Change | Block (`Undo_BeginBlock2` … `EndBlock2(-1)`) | `Undo_OnStateChange2` | `Undo_OnStateChangeEx2(-1)` |
+| --- | --- | --- | --- |
+| Track volume | pass | fail | pass |
+| Insert track | pass | pass | pass |
+| Add FX | pass | fail | fail |
+| Add marker | pass | fail | pass |
+| Envelope point | pass | pass | pass |
+| New MIDI item (`CreateNewMIDIItemInProj`) | **fail** | pass | fail |
+| Note into an existing item | pass | pass | pass |
+| Move item | pass | pass | pass |
+| Delete item | pass | pass | pass |
+
+Inside a block, `CreateNewMIDIItemInProj` leaves no step at all, so the next Undo reverts the step before it and the item stays. Every other change, including splits, moves to another track, take pitch and rate, `InsertMedia` and preset loads, records correctly in a block. So `records_undo` uses a block by default and `Undo_OnStateChange2` (`items=True`) for the three tools that create MIDI items. `TrackFX_AddByName` outside a block records its own "Add FX" step, which the block absorbs. The Lua bridge does not have the MIDI gap: a chunk that creates a MIDI item is undone by one Undo.
+
+`scripts/check_undo.py` repeats this for every tool: it saves the `.rpp` before a call, undoes once, and compares.
+
+### The state change count is not a change detector
+
+`GetProjectStateChangeCount` does not move when reapy writes outside a block, and moves by one at every `Undo_EndBlock2`, including an empty block. It cannot tell a write that landed from one that did not. Whether a step was added can: after a successful call, `records_undo` checks that `MCP: <tool>` is the top of the undo history and otherwise adds `unconfirmed` to the reply. A value that was already set is flagged as well, which is accurate: REAPER recorded no change. The check works one way only. REAPER compares the whole project with the last step, so a change left unrecorded since then, such as a selection or a raw call, gives even an empty call a step: `unconfirmed` proves nothing changed, while its absence does not prove the call's own change landed.
+
+### Backups before the first change
+
+`Main_SaveProjectEx` writing a copy without rebinding the project (see [Saving and Opening Projects](#saving-and-opening-projects)) is what makes a backup safe: on a saved, dirty project it took 32 ms, left the project bound to its file, dirty, with its undo history, and the copy held the unsaved change. `connection.backup_before_first_change` writes `<name>.mcp-backup-<time>.rpp` beside the project before the first change this server makes to it, keeps the newest five, and skips a project that was never saved.
 
 ## Envelopes
 
