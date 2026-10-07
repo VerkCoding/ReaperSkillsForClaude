@@ -145,6 +145,8 @@ Shape is `index/9`:
 
 All 24 bands report `Used` and `Enabled` regardless of state. Unused bands reset to parked defaults: 1000.0 Hz at 0.00 dB. When rewriting a curve, write `0` to offset +0 for every unused band to prevent previous curves from remaining active.
 
+**Write `Used` and `Enabled` before a band's other parameters.** Writing Frequency, Gain or Q to a band that is not yet in use has no audible effect, and on Pro-Q 3 and Pro-C 2 it crashed REAPER (`STATUS_ACCESS_VIOLATION`; two minidumps at the same offset inside Pro-Q 3). This was found by the xDarkzX Reaper-MCP project (CHANGELOG 0.6.3), not here, and is untested on Pro-Q 4 and Pro-C 3; treat them the same. In practice, write a FabFilter plugin's parameters in ascending index order, which puts +0 and +1 first for every band. `set_fx_parameter` writes one parameter per call, so call it in that order too. A write that changes nothing is an ordering problem, not a sign that the plugin window must be open: headless writes work.
+
 Useful globals: `556` Output Level, `559` Bypass, `738` Wet.
 
 ## FabFilter Pro-C 3
@@ -195,5 +197,7 @@ reaper.GetTrackSendInfo_Value(tr, 0, s, "I_DSTCHAN")   -- 2 corresponds to chann
 reaper.TrackFX_GetPinMappings(tr, fx, 0, 2)            -- 0x4 maps to pin 2
 reaper.TrackFX_GetPinMappings(tr, fx, 0, 3)            -- 0x8 maps to pin 3
 ```
+
+`set_send_routing` with `dest_channels` "3/4" sets the first two and raises `I_NCHAN` when it is too low; `get_fx_pins` reads the third, listing each pin's name and channels.
 
 Check all three variables. Plugins may report sidechain as enabled while receiving no input.

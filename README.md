@@ -2,7 +2,7 @@
 
 This project integrates Claude with the REAPER DAW. It provides tools for mixing, mastering, MIDI, FX, rendering, and DSP measurement.
 
-The integration consists of three agent skills and an MCP server containing 58 REAPER tools. It supports Claude Code, Claude Desktop, and claude.ai.
+The integration consists of three agent skills and an MCP server containing 71 REAPER tools. It supports Claude Code, Claude Desktop, and claude.ai.
 
 ```
 You:    Master this to -14 LUFS, keep the transients.
@@ -12,7 +12,7 @@ Claude: [measures the actual loudness, sets the chain, renders, measures again]
 | | Claude Code | Claude Desktop | claude.ai (web) |
 | --- | --- | --- | --- |
 | Skills: setup, channel, craft | yes | yes | yes |
-| MCP server, 58 REAPER tools | yes | yes | **no** |
+| MCP server, 71 REAPER tools | yes | yes | **no** |
 | Lua file bridge | yes | where shell access exists | **no** |
 
 The claude.ai web application cannot access a local MCP server because it runs in the browser.
@@ -110,7 +110,7 @@ The plugin currently operates on Windows. The following items remain incomplete:
 This plugin uses code and concepts from three other REAPER projects.
 
 **[xDarkzx/Reaper-MCP](https://github.com/xDarkzx/Reaper-MCP)**
-(Apache-2.0): Provided the concept of exposing a large tool surface (composition, mixing, mastering, QC, ReaScript automation) to the AI.
+(Apache-2.0): Provided the concept of exposing a large tool surface (composition, mixing, mastering, QC, ReaScript automation) to the AI, and the idea behind the 1.2.0 envelope, marker, item and undo tools: batch calls that report errors per entry. Those tools were written for this plugin; no code was copied.
 
 **[bonfire-systems/reaper-mcp](https://github.com/bonfire-systems/reaper-mcp)**
 (MIT): Provided the original MCP server implementation and the initial set of tools.

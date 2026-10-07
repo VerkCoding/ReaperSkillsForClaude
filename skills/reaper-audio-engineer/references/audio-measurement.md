@@ -21,7 +21,7 @@ These methods execute without playback and bypass the audio device, providing da
 | Loudness, true peak, clipping, dynamics, spectrum, stereo field of the whole project | `analyze_loudness`, `detect_clipping`, `analyze_dynamics`, `analyze_frequency_spectrum`, `analyze_stereo_field`. Each renders the project and measures the file. |
 | The same for one file already on disk | `CalculateNormalization` through the bridge, below. No render required. |
 | A bus, a section, or a chain in isolation | Render it, then measure. See [Rendering from the bridge](../../reaper-mcp/references/rendering.md). |
-| Per-bar structure, band balance, resonance hunting, automation rides | The bridge. No tool covers these. |
+| Per-bar structure, band balance, resonance hunting, the levels behind an automation ride | The bridge. No tool covers these. The ride itself is written with `add_envelope_points`. |
 
 The analysis tools return calibrated figures: band levels are RMS in dBFS that sum to the overall signal RMS, true peak is oversampled, and dynamics are measured across channels. They refuse an empty project rather than reporting silence. What they cannot do is measure part of a project, so anything narrower than "the whole mix" means rendering or reading samples yourself.
 
@@ -157,23 +157,11 @@ local d = target - level                 -- Clamp output difference bounds
 
 Technical constraints:
 
-Volume envelopes store scaled values rather than linear amplitude:
+Write the ride with one `add_envelope_points` call, one `{"time": t, "db": d}` per point. The tool creates the envelope when it is missing and converts into its scaling, then reads every point back. Check the result with `get_envelope_points`.
 
-```lua
-local env = reaper.GetTrackEnvelopeByName(tr, "Volume")
-if not env then
-  reaper.SetOnlyTrackSelected(tr)
-  reaper.Main_OnCommand(40406, 0)        -- Initialize volume envelope visibility
-  env = reaper.GetTrackEnvelopeByName(tr, "Volume")
-end
-local mode = reaper.GetEnvelopeScalingMode(env)
-reaper.InsertEnvelopePoint(env, t, reaper.ScaleToEnvelopeMode(mode, 10^(dB/20)), 0, 0, false, true)
--- Sort points required after bulk insert
-```
+Volume envelopes store scaled values rather than linear amplitude. When reading envelope points through the bridge, apply `ScaleFromEnvelopeMode` before interpreting the data as decibels to avoid incorrect scaling assumptions.
 
-Reading envelope points returns scaled values. Apply `ScaleFromEnvelopeMode` before interpreting the data as decibels to avoid incorrect scaling assumptions.
-
-Automation placement: Apply the automation on the source track, preceding the channel compressor. This feeds a normalized signal into the dynamics processor. If the routing is post-fader, the volume envelope applies to the send.
+Automation placement: Apply the automation on the source track, preceding the channel compressor: that is the `Volume (Pre-FX)` envelope, since `Volume` acts after the FX chain. This feeds a normalized signal into the dynamics processor. If the routing is post-fader, the volume envelope applies to the send.
 
 Output the gate threshold, target level, and resulting range. If the automation remains clamped at maximum or minimum values for extended periods, the gate threshold is too low and includes non-target audio. Adjust the threshold and reprocess.
 

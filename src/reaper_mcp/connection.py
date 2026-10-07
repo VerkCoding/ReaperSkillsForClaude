@@ -7,6 +7,7 @@ deferred scripts. To avoid triggering this dialog, the connection logic verifies
 the socket state and limits reconnection attempts.
 """
 
+import contextlib
 import importlib.abc
 import importlib.machinery
 import logging
@@ -201,6 +202,48 @@ class _Deferred:
 
 reapy = _Deferred()
 RPR = _Deferred("reascript_api")
+
+# Undo points made by the tools carry this prefix, which is how the undo tool tells
+# them apart from the user's own edits.
+UNDO_PREFIX = "MCP: "
+
+
+def is_null(pointer) -> bool:
+    """Check for a null pointer from ReaScript.
+
+    Pointers come back as strings such as '(TrackEnvelope*)0x0000000000000000',
+    which are truthy in Python.
+    """
+    return not pointer or "0x0000000000000000" in str(pointer)
+
+
+def held():
+    """Keep REAPER serving this client until the block exits.
+
+    A call from outside REAPER waits for the reapy server's next defer cycle,
+    about 30 ms. Inside this block a call takes under a millisecond, so batch
+    tools read and write inside it. REAPER does nothing else meanwhile, so the
+    block must not wait on anything outside REAPER.
+    """
+    return reapy.inside_reaper()
+
+
+@contextlib.contextmanager
+def undo_step(tool: str):
+    """Make the REAPER calls in the block one undo point named "MCP: <tool>".
+
+    Calls from outside REAPER create no undo point. An undo block opened by one
+    call and closed by a later one does not work either: REAPER closes it at the
+    end of the first defer cycle as "ReaScript: Run", holding the state from
+    before the change. Holding REAPER keeps the whole block in one cycle. A block
+    that changes nothing adds no undo point.
+    """
+    with held():
+        RPR.Undo_BeginBlock2(0)
+        try:
+            yield
+        finally:
+            RPR.Undo_EndBlock2(0, UNDO_PREFIX + tool, -1)
 
 
 def _server_state(timeout_sec: float = 0.5) -> str:

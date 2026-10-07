@@ -194,10 +194,10 @@ If correlation is negative after delay compensation, invert polarity and remeasu
 **Level automation:**
 1. Measure short-term level via a sliding window.
 2. Define target level values per section.
-3. Generate envelope points (`add_volume_automation`) based on the delta between measured and target levels.
+3. Generate envelope points (`add_envelope_points`) based on the delta between measured and target levels.
 4. Apply rate limiting to envelope changes.
 
-The envelope must be visible in REAPER before points can be written; the tool returns an error naming the right-click item when it is not. `add_volume_automation` takes decibels and converts into the envelope's own scaling. Writing points yourself through the bridge means doing that conversion, since a volume envelope stores fader-scaled values and a raw linear gain lands near silence. See [Measurement Toolkit](./audio-measurement.md#writing-a-measured-automation-ride).
+`add_envelope_points` writes every point in one call and creates the envelope when it is missing. Give each point `db`, or `value` as linear gain (1.0 = 0 dB); the tool converts into the envelope's own scaling. Writing points yourself through the bridge means doing that conversion, since a volume envelope stores fader-scaled values and a raw linear gain lands near silence. Read the ride back with `get_envelope_points`, and remove one with `clear_envelope_points` rather than writing points over it. See [Measurement Toolkit](./audio-measurement.md#writing-a-measured-automation-ride).
 
 **Macro automation.** Adjust bus or master levels between sections based on the brief.
 

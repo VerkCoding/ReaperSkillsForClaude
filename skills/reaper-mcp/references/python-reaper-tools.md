@@ -2,7 +2,7 @@
 
 The MCP tools interface with REAPER through reapy, a wrapper for the ReaScript API. Some functions return incorrect results or fail silently without raising errors.
 
-The behaviours below were established by executing all 58 MCP tools against REAPER and then reading REAPER's own state back, either through `reascript_api`, through the Lua bridge, or by inspecting the `.rpp` and rendered audio files the operation produced. A tool's own return value was never accepted as evidence. That pass found 37 defects across the nine tool modules; three tools had never worked at all while reporting success on every call.
+The behaviours below were established by executing the MCP tools against REAPER and then reading REAPER's own state back, either through `reascript_api`, through the Lua bridge, or by inspecting the `.rpp` and rendered audio files the operation produced. A tool's own return value was never accepted as evidence. The first pass, over the original 58 tools in nine modules, found 37 defects; three tools had never worked at all while reporting success on every call. The 13 tools added in 1.2.0 were built on the findings in [Undo Points and Holding REAPER](#undo-points-and-holding-reaper) and the sections after it, measured on REAPER 7.82.
 
 Environment: REAPER 7.79/x64, reapy 0.10.0, Python 3.12.10, numpy 2.5.2, soundfile 0.14.0, librosa 1.0.0, scipy 1.18.0, pyloudnorm.
 
@@ -19,6 +19,10 @@ Environment: REAPER 7.79/x64, reapy 0.10.0, Python 3.12.10, numpy 2.5.2, soundfi
 - [Loop Bounding](#loop-bounding)
 - [Tempo and Time Signature Markers](#tempo-and-time-signature-markers)
 - [Plugin Parameters](#plugin-parameters)
+- [Undo Points and Holding REAPER](#undo-points-and-holding-reaper)
+- [Envelopes](#envelopes)
+- [Markers and Regions](#markers-and-regions)
+- [Items, Sends, FX Order and Pins](#items-sends-fx-order-and-pins)
 - [Render Settings State](#render-settings-state)
 - [Measuring Rendered Audio](#measuring-rendered-audio)
 - [Bridge Protocol](#bridge-protocol)
@@ -58,9 +62,13 @@ A read-back is only evidence if the failure mode produces a different value. The
 | `TrackFX_GetParamNormalized` | returns `-1.0` | `if applied < 0.0: fail` |
 | `TrackFX_Delete` | returns falsy | `if not RPR.TrackFX_Delete(...): fail` |
 | `RemoveTrackSend` | returns falsy | `if not RPR.RemoveTrackSend(...): fail` |
-| `SetTrackSendInfo_Value` | no return value | compare against `GetTrackNumSends` first |
+| `SetTrackSendInfo_Value` | returns falsy for a send that does not exist | `if not RPR.SetTrackSendInfo_Value(...): fail` |
 | `InsertEnvelopePoint` | no return value | compare `CountEnvelopePoints` before and after |
 | `InsertMedia` | no usable return | diff the track's item ids before and after |
+| `SplitMediaItem` | returns a null pointer outside the item or exactly at its start | `if _is_null(right): fail` |
+| `DeleteTrackMediaItem` | returns falsy | check the track's item count dropped by one |
+| `TrackFX_CopyToTrack` | no return; a destination past the end moves the FX to the end | validate the slot, then compare FX GUIDs in order |
+| `GetRegionOrMarker(0, -1, guid)` | returns a null pointer for an unknown GUID | treat null as deleted |
 
 Reporting `-1.0` as the applied value presents a refused write as a successful one. Treat a negative read-back as failure.
 
@@ -206,6 +214,18 @@ Python ReaScript returns `(retval, *arguments)` with output parameters filled in
 | `MIDI_GetNote(take, i, 0,0,0,0,0,0,0)` | `[5]` start ppq, `[6]` end ppq, `[7]` channel, `[8]` pitch, `[9]` velocity |
 | `Envelope_Evaluate(env, t, 0, 0, 0, 0, 0, 0)` | `[5]` value. Takes **eight** arguments; fewer raises `TypeError` |
 | `GetSetProjectInfo_String(0, key, " " * 1024, False)` | `[3]` value |
+| `GetEnvelopePoint(env, i, 0, 0, 0, 0, 0)` | `[3]` time, `[4]` stored value, `[5]` shape, `[6]` tension |
+| `Envelope_FormatValue(env, value, "", 64)` | `[2]` display text, such as `-6.02dB` or `50%L` |
+| `GetEnvelopeName(env, "", 256)` | `[2]` name |
+| `GetSetEnvelopeInfo_String(env, "ACTIVE", "", False)` | `[3]` `"1"` or `"0"`; `VISIBLE` and `ARM` work the same way |
+| `TrackFX_GetIOSize(track, fx, 0, 0)` | `[0]` plug-in type, -1 for no such FX; `[3]` input pins, `[4]` output pins |
+| `TrackFX_GetPinMappings(track, fx, is_output, pin, 0)` | `[0]` channels 1-32 as bits, `[5]` channels 33-64 |
+| `TrackFX_GetNamedConfigParm(track, fx, "in_pin_2", "", 256)` | `[4]` pin name, such as `Auxiliary Input L` |
+| `GetSet_LoopTimeRange2(0, False, is_loop, 0, 0, False)` | `[3]` start, `[4]` end |
+| `GetSetRegionOrMarkerInfo_String(0, marker, "P_NAME", "", False)` | `[4]` value |
+| `CountProjectMarkers(0, 0, 0)` | `[0]` total, `[2]` markers, `[3]` regions |
+| `ColorFromNative(color, 0, 0, 0)` | `[1]` red, `[2]` green, `[3]` blue |
+| `guidToString(guid_pointer, "")` | `[1]` GUID text. Takes two arguments; three raise `TypeError` |
 
 ## Modal Dialogs Freeze Everything
 
@@ -365,6 +385,97 @@ Mappings differ per parameter and are not always increasing. ReaLimit's Threshol
 
 Parameter counts are not stable: ReaEQ reported 19 parameters before loading a preset and 16 after, because its band count changes. Do not cache parameter indices across preset loads.
 
+## Undo Points and Holding REAPER
+
+### A call from outside REAPER waits for a defer cycle
+
+The reapy server runs as a deferred script, so each call waits for REAPER's next defer cycle: 31 ms per call, measured over 20 calls of `CountTracks`. `reapy.inside_reaper()` makes REAPER serve only this client until the block exits: 0.38 ms per call over 200 calls. Reading 500 markers at six calls each takes about 90 seconds without it and about a second inside it. REAPER does nothing else while held, so a held block must not wait on anything outside REAPER.
+
+### Calls from outside REAPER make no undo point
+
+A write through reapy changes the project without adding an undo step. An undo block spread across separate calls fails differently:
+
+```python
+RPR.SetMediaTrackInfo_Value(tr, "D_VOL", 0.7)       # no undo point
+RPR.Undo_BeginBlock2(0)
+RPR.SetMediaTrackInfo_Value(tr, "D_VOL", 0.6)
+RPR.Undo_EndBlock2(0, "MCP: probe block", -1)
+# History shows "ReaScript: Run", not "MCP: probe block"; redo restores 0.7, not 0.6.
+```
+
+REAPER closed the open block at the end of the first defer cycle, under its own name, holding the state from before the write. Run the whole block inside `inside_reaper()` and the step is named as given and holds the right state. `connection.undo_step()` does this for the tools; a block that changes nothing adds no step.
+
+### Undoing restores the previous step's whole state
+
+`Undo_DoUndo2` does not reverse the last step alone: it restores the full state saved at the step before. A write that made no undo point in between is reverted with it. Measured: a volume written as 1.0 without an undo point, followed by a recorded step, came back as the 0.7 of the step before when that step was undone. The older tools make no undo points, so their changes since the last step disappear when a newer tool's step is undone. A test that sets up with raw calls and then undoes a tool must record its setup as a step first.
+
+`Undo_CanUndo2` and `Undo_CanRedo2` raise inside Python ReaScript when there is nothing to undo or redo: the generated wrapper calls `.decode()` on a null result. Catch the error rather than expecting `None`.
+
+## Envelopes
+
+### Each envelope stores its own units
+
+Established by inserting a point and reading REAPER's display of it with `Envelope_FormatValue`:
+
+| Envelope | Stored value | Display |
+| --- | --- | --- |
+| Volume, Volume (Pre-FX), Trim Volume | fader-scaled gain: `ScaleToEnvelopeMode(1, 0.5)` = 592.4 | `-6.02dB`; a raw 0.5 shows `-inf dB` |
+| Pan, Pan (Pre-FX) | pan inverted: 0.5 | `50%L`, while a track `D_PAN` of 0.5 is 50% right |
+| Mute | 0 or 1 | 0 is `MUTE`, 1 is `UNMUTE` |
+| Width | -1 to 1 unchanged | 0.5 is `50.0%` |
+| FX parameter | the parameter's native value, not the normalised one | JS Volume Adjustment, range -150 to 150: a point at -6 evaluates to -6.0 |
+
+For an FX parameter, convert a normalised value with `low + value * (high - low)`, where `low` and `high` are `TrackFX_GetParam(...)[4:6]`. For stock VST plugins the range is 0 to 1 and the conversion is the identity, which hides the mistake until a JSFX is automated.
+
+`add_pan_automation` wrote pan without the inversion until 1.2.0, so every point landed on the opposite side. Its benchmark counted points and could not see it; it now also reads REAPER's display of the point.
+
+### Creating, finding and clearing
+
+- `GetTrackEnvelopeByName` returns an envelope that exists even when it is hidden and inactive. It returns null only when the envelope was never created, which is when to create it.
+- There is no API call that creates a track envelope. Showing it does: run the action on the track alone, then put the selection back. Volume 40406, Pan 40407, Volume (Pre-FX) 40408, Pan (Pre-FX) 40409, Mute 40867, Trim Volume 42020. Width and Width (Pre-FX) have no "show" action; "Track: Select width envelope" (41870) and "Track: Select pre-FX width envelope" (41869) create them. Creating a volume envelope adds a point at 0 s holding the current level.
+- `GetFXEnvelope(track, fx, param, True)` creates an FX parameter envelope, and un-bypasses one that exists.
+- `GetSetEnvelopeInfo_String(env, "ACTIVE", "0", True)` bypasses an envelope; its points then do nothing.
+- `DeleteEnvelopePointRange(env, 1.0, 2.0)` deleted the point at 1.0 and kept the one at 2.0: the end is excluded. Widen the range by a small margin to include it.
+- `InsertEnvelopePoint` at a time that already holds a point adds a second point, and accepts negative times.
+
+## Markers and Regions
+
+`EnumProjectMarkers3` cannot return a marker's name in Python: the name is a `char**` output, and the generated wrapper returns the argument it was given. Every marker read that way is unnamed. REAPER 7's ProjectMarker API works: `GetNumRegionsOrMarkers`, `GetRegionOrMarker(0, index, "")`, `GetRegionOrMarkerInfo_Value` with `D_STARTPOS`, `D_ENDPOS`, `I_INDEX`, `I_NUMBER`, `B_ISREGION`, `I_CUSTOMCOLOR`, and `GetSetRegionOrMarkerInfo_String` with `P_NAME` and `GUID`. Setting `P_NAME` to `""` clears the name.
+
+- A marker's index is its place in time order. Moving one renumbers the others, so address a batch by GUID: `GetRegionOrMarker(0, -1, guid)`.
+- Markers and regions are numbered separately, and two markers may share a displayed number. The number does not identify a marker.
+- Setting a region's `D_STARTPOS` past its end swaps the bounds: start 9 on a 1-2 region gave 2-9. Set the bound that moves away from the other one first.
+- `AddRegionOrMarker` returns the new `ProjectMarker*`, so its GUID can be read at once.
+- The time selection and the loop points are linked by default: setting either through `GetSet_LoopTimeRange2` set both.
+
+## Items, Sends, FX Order and Pins
+
+### Items re-sort as soon as they move
+
+Setting `D_POSITION` re-sorts the track's item list at once, before `UpdateArrange`: moving the first of two items past the second swapped their indices. A batch that reads indices as it goes edits the wrong items after the first move. Resolve every index to its `MediaItem*` before changing anything, and read `IP_ITEMNUMBER` afterwards for the new indices.
+
+### Send channels
+
+| Field | Encoding |
+| --- | --- |
+| `I_SRCCHAN` | -1 no audio. Low 10 bits: first channel, 0-based. Bits above: 0 stereo pair, 1 mono, n for 2n channels |
+| `I_DSTCHAN` | Low 10 bits: first channel, 0-based. Bit 1024 mixes the source to one channel |
+| `I_SENDMODE` | 0 post-fader, 1 pre-FX, 3 pre-fader post-FX. 2 is a legacy value still accepted |
+
+A send into channels 3/4 does not raise the destination track's channel count: `I_DSTCHAN` = 2 left `I_NCHAN` at 2, so the sidechain carried nothing. Raise `I_NCHAN` as well. The destination track's state chunk shows the same fields, `AUXRECV <source> <mode> <volume> <pan> <mute> <mono> <phase> <srcchan> <dstchan>`, which makes it an independent witness for a send write.
+
+### FX order
+
+`TrackFX_CopyToTrack(track, src, track, dest, True)` leaves the FX in slot `dest`: from EQ, Comp, Gate, Delay, moving 0 to 2 gave Comp, Gate, EQ, Delay. A destination past the end moved the FX to the end without complaint. `TrackFX_GetFXGUID` returns a `GUID*` pointer; convert it with `guidToString(pointer, "")` to compare chains.
+
+### Pins
+
+`TrackFX_GetPinMappings` returns a bitmask per pin, bit n for track channel n + 1. ReaComp reports four input pins mapped 1, 2, 4, 8 (channels 1 to 4) by default, named `Main Input L/R` and `Auxiliary Input L/R` through `TrackFX_GetNamedConfigParm(track, fx, "in_pin_N")`. A pin index past the end reads 0.
+
+### reapy refuses pointer strings in ValidatePtr2
+
+`RPR.ValidatePtr2(project, item, "MediaItem*")` raises `TypeError: 'str' object cannot be interpreted as an integer` inside reapy's own wrapper. Track deletions with a count instead, and never read from a pointer that may have been deleted.
+
 ## Render Settings State
 
 Render fields are stored in project state, and any tool that renders modifies them. Save and restore them with a context manager. Note which fields are strings:
@@ -479,12 +590,13 @@ Execution timings per MCP tool call (measured on a Windows VM with an empty proj
 | Render (3-second project) | ~1.9 s |
 | Analysis tool (render and measure) | ~1.9-3.5 s |
 | Parameter solve by display bisection | ~1-3 s per parameter |
+| A tool built on `inside_reaper` (`edit_items`, `get_envelope_points`, `list_markers`) | ~25-60 ms |
 
 Tool calls execute `get_project()` and `n_tracks`. `list_tracks` performs four ReaScript reads per track. Batch reads using the Lua bridge to minimize round trips.
 
 ## Benchmark Script
 
-`scripts/benchmark_tools.py` executes 58 tools against REAPER, asserts results, logs execution time, and restores state.
+`scripts/benchmark_tools.py` executes 71 tools against REAPER, asserts results, logs execution time, and restores state.
 
 ```bash
 python scripts/benchmark_tools.py                    # Default: skips project-replacing tools
@@ -493,7 +605,7 @@ python scripts/benchmark_tools.py --scratch          # Run in a new project tab
 python scripts/benchmark_tools.py --json out.json
 ```
 
-The script executes within the active project on tracks prefixed `__bench__`. It restores tempo, time signature, markers, master volume, master FX, and cursor position.
+The script executes within the active project on tracks prefixed `__bench__`. It restores tempo, time signature, markers, master volume, master FX, and cursor position. The envelope, marker, selection, routing, undo and item groups run last, in `run_edit_plan`, on two tracks of their own; they remove their markers and restore the time selection, loop and repeat state. Their undo test leaves its steps at the top of the project's undo history.
 
 The `--scratch` flag creates a new project tab for testing `save_project`, `load_project`, `create_project`, and `start_recording`. Execution is blocked if the current project has unsaved changes.
 

@@ -529,8 +529,8 @@ Claude does not turn knobs: parameters are set through a tool or the Lua bridge,
 | Third-party compressors (FET, Opto, Vari-Mu) | Dump the parameter names and values before setting anything ([plugin-control.md](../../../reaper-mcp/references/plugin-control.md), "Find the parameter first") |
 | Release by tempo | The tempo from `get_project_info`; onset spacing from `analyze_transients` ([audio-mixing.md](../audio-mixing.md), section 10) |
 | Check what the comp is doing | Crest factor and LUFS before and after, on a rendered stem, compared at the same loudness ([audio-mixing.md](../audio-mixing.md), sections 3 and 10) |
-| Sidechain (kick → bass, vocal → reverb, ghost kick) | `create_send`, then Lua: the destination track's `I_NCHAN` ≥ 4, the send's `I_DSTCHAN` = 2 (channels 3/4), and the plugin's pin mapping. Check all three conditions in [plugin-control.md](../../../reaper-mcp/references/plugin-control.md), "Sidechain routing" |
-| Send mode (Pre-Fader, Post-Fader, Pre-FX) | Lua `I_SENDMODE`: 0 post-fader, 1 pre-FX, 3 post-FX before the fader. `create_send` uses the default from REAPER's Preferences |
+| Sidechain (kick → bass, vocal → reverb, ghost kick) | `create_send`, then `set_send_routing` with `dest_channels` "3/4", which also raises the destination track to 4 channels; read the plugin's pin mapping with `get_fx_pins`. Check all three conditions in [plugin-control.md](../../../reaper-mcp/references/plugin-control.md), "Sidechain routing" |
+| Send mode (Pre-Fader, Post-Fader, Pre-FX) | `set_send_routing` `mode`: post-fader, pre-fader (post-FX) or pre-fx. `create_send` uses the default from REAPER's Preferences |
 | A ghost trigger track that doesn't reach the speakers | Lua `B_MAINSEND` = 0 on that track |
 | Parallel compression on a separate bus | `create_track`, `create_send`, `add_fx`, balance with `set_track_volume` |
 | Toggling for A/B | `bypass_fx` |

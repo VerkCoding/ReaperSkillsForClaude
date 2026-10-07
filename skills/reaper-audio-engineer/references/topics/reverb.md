@@ -489,8 +489,8 @@ Claude builds the buses and sends and sets parameters through a tool or the Lua 
 | Create a reverb return | `create_track`, `rename_track`, `add_fx` in the order ReaEQ → reverb → ReaComp if ducking is needed |
 | Wet 100%, Dry off, HPF/LPF on the return | Dump the parameter names, then set them by their displayed value ([plugin-control.md](../../../reaper-mcp/references/plugin-control.md)); the ReaEQ bands are under "Stock Cockos plugins" in the same document |
 | Create a send, set the send level | `create_send` (sets `volume_db` as well), `set_send_volume`, check with `list_sends` |
-| Send type (Post-Fader, Pre-Fader, Pre-FX) | Lua `I_SENDMODE`: 0 post-fader, 1 pre-FX, 3 post-FX before the fader. `create_send` uses the default from REAPER's Preferences |
-| Send pan | Lua `D_PAN` of the send |
+| Send type (Post-Fader, Pre-Fader, Pre-FX) | `set_send_routing` `mode`: post-fader, pre-fader (post-FX) or pre-fx. `create_send` uses the default from REAPER's Preferences |
+| Send pan | `set_send_routing` `pan` |
 | Ducking by the vocal or the kick | Sidechain routing as in "Applying in this plugin" in [compression.md](compression.md) |
 | Pre-delay and decay from the BPM | The tempo from `get_project_info`; onset spacing from `analyze_transients` ([audio-mixing.md](../audio-mixing.md), section 12) |
 | Checking mono and width | `analyze_stereo_field` for the whole mix |

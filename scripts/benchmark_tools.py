@@ -309,10 +309,15 @@ class Bench:
         group: str,
         expect=None,
         may_fail: str = "",
+        refuses: bool = False,
         times: int = 1,
         budget: float | None = None,
     ) -> dict:
-        """Execute a tool, validate the response against expected behavior, and log the result."""
+        """Execute a tool, validate the response against expected behavior, and log the result.
+
+        With refuses=True the call passes only when the tool reports failure, for inputs
+        it must reject; expect then checks the refusal.
+        """
         times = max(1, times)
         budget = budget or self.timeout * (times if times > 1 else 1)
 
@@ -334,6 +339,14 @@ class Bench:
             detail = note or f"no reply within {budget:.0f}s"
             self.results.append(Result(tool, group, FAIL, ms, detail, samples))
             return {}
+
+        if refuses:
+            problem = "accepted input it should refuse" if payload.get("success") else (
+                expect(payload) if expect else None)
+            status = FAIL if problem else OK
+            detail = problem or f"refused: {str(payload.get('error', ''))[:120]}"
+            self.results.append(Result(tool, group, status, ms, detail, samples))
+            return payload
 
         if not payload.get("success"):
             error = str(payload.get("error", "no error reported"))
@@ -594,11 +607,13 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
 
     from reaper_mcp.connection import get_project
     from reaper_mcp.project_tools import _read_time_signature, _write_tempo, _write_time_signature
-    from reaper_mcp.units import get_volume_db, set_volume_db
+    from reaper_mcp.units import get_volume_db, project_tempo, set_volume_db
 
     # --- state to put back -------------------------------------------------
     project = get_project()
-    original_tempo = project.bpm
+    # Quarter-note BPM, the unit _write_tempo takes. project.bpm is scaled by the
+    # time signature denominator and would double the tempo of a 7/8 project here.
+    original_tempo = project_tempo()
     original_cursor = project.cursor_position
     original_master_db = get_volume_db(project.master_track)
     original_master_fx = project.master_track.n_fxs
@@ -682,7 +697,8 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
                   f"(a file at {saved.name}, IsProjectDirty), wanted (True, 0)")
 
         b.call("load_project", {"project_path": str(saved)}, group=g)
-        b.confirm(lambda: RPR.GetProjectName(0, "", 512)[2],
+        # Python ReaScript returns [proj, name, buf_sz]; the name is [1].
+        b.confirm(lambda: RPR.GetProjectName(0, "", 512)[1],
                   lambda name: saved.stem.lower() in str(name).lower(),
                   f"the open project name, wanted one containing {saved.stem!r}")
 
@@ -878,6 +894,7 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
            may_fail="the pan envelope must be shown in REAPER first")
     b.confirm(lambda: _envelope_points(audio_ix, "Pan"), lambda n: n > 0,
               "points on the Pan envelope, wanted at least one")
+    b.confirm(lambda: _point_display(audio_ix, "Pan", 1.0), "25%R", "the Pan point as REAPER displays it")
 
     # --- render ------------------------------------------------------------
     g = "render"
@@ -931,6 +948,301 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
            expect=lambda p: None if len(p.get("fx_chain", [])) == 3 else f"{len(p.get('fx_chain', []))} of 3 plugins added")
     b.call("normalize_project", {"target_lufs": -14.0}, group=g,
            expect=lambda p: None if approx(p.get("target_lufs"), -14.0) else "target not echoed back")
+
+    run_edit_plan(b)
+
+
+# --------------------------------------------------------------------------
+# Envelopes, markers, time selection, routing, FX order, items, undo
+#
+# These tools record undo points, and undoing one restores the state saved at
+# the point before it. Setup made with raw API calls is therefore recorded as
+# its own point, or undoing a tool would take the setup away with it.
+# --------------------------------------------------------------------------
+
+EDIT = PREFIX + "edit_"
+
+
+def _recorded(label: str, fn) -> None:
+    from reaper_mcp.connection import undo_step  # noqa: PLC0415
+
+    with undo_step("bench " + label):
+        fn()
+
+
+def _point_display(track_index: int, name: str, time: float) -> str:
+    """REAPER's own display text for the point at a time on a track envelope."""
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    env = RPR.GetTrackEnvelopeByName(_track_id(track_index), name)
+    if _is_null(env):
+        return "no envelope"
+    for i in range(RPR.CountEnvelopePoints(env)):
+        _, _, _, t, value, _, _, _ = RPR.GetEnvelopePoint(env, i, 0, 0, 0, 0, 0)
+        if abs(t - time) < 1e-6:
+            return RPR.Envelope_FormatValue(env, value, "", 64)[2]
+    return "no point"
+
+
+def _point_times(track_index: int, name: str) -> list:
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    env = RPR.GetTrackEnvelopeByName(_track_id(track_index), name)
+    if _is_null(env):
+        return []
+    return [round(RPR.GetEnvelopePoint(env, i, 0, 0, 0, 0, 0)[3], 6)
+            for i in range(RPR.CountEnvelopePoints(env))]
+
+
+def _marker_layout() -> list:
+    """(is_region, start, end) per marker through EnumProjectMarkers3, not the tools' API."""
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    rows = []
+    for i in range(RPR.CountProjectMarkers(0, 0, 0)[0]):
+        out = RPR.EnumProjectMarkers3(0, i, 0, 0, 0, "", 0, 0)
+        rows.append((bool(out[3]), round(out[4], 6), round(out[5] if out[3] else out[4], 6)))
+    return rows
+
+
+def _send_chunk_fields(dest_index: int) -> list:
+    """The receive line in the destination track's state chunk: mode, source and destination channels."""
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    chunk = RPR.GetTrackStateChunk(_track_id(dest_index), "", 1 << 20, False)[2]
+    line = next((ln for ln in chunk.splitlines() if ln.startswith("AUXRECV ")), "")
+    fields = line.split()
+    return [int(float(fields[i])) for i in (2, 8, 9)] if len(fields) > 9 else []
+
+
+def _fx_names(track_index: int) -> list:
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    track = _track_id(track_index)
+    return [RPR.TrackFX_GetFXName(track, i, "", 256)[3].split(": ", 1)[-1].replace(" (Cockos)", "")
+            for i in range(RPR.TrackFX_GetCount(track))]
+
+
+def _item_rows(track_index: int) -> list:
+    """(position, length, fade in, muted) for each item on a track, in REAPER's order."""
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    track = _track_id(track_index)
+    rows = []
+    for i in range(RPR.CountTrackMediaItems(track)):
+        item = RPR.GetTrackMediaItem(track, i)
+        rows.append(tuple(round(RPR.GetMediaItemInfo_Value(item, k), 6)
+                          for k in ("D_POSITION", "D_LENGTH", "D_FADEINLEN", "B_MUTE")))
+    return rows
+
+
+def run_edit_plan(b: Bench) -> None:
+    """Exercise the envelope, marker, selection, routing, FX-order, item and undo tools.
+
+    Self-contained: it makes its own two tracks and removes them, its markers and
+    its time selection afterwards.
+    """
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    ts_before = RPR.GetSet_LoopTimeRange2(0, False, False, 0, 0, False)[3:5]
+    loop_before = RPR.GetSet_LoopTimeRange2(0, False, True, 0, 0, False)[3:5]
+    repeat_before = RPR.GetSetRepeatEx(0, -1)
+
+    def remove_edit_tracks():
+        for i in range(RPR.CountTracks(0) - 1, -1, -1):
+            track = RPR.GetTrack(0, i)
+            if RPR.GetSetMediaTrackInfo_String(track, "P_NAME", "", False)[3].startswith(EDIT):
+                RPR.DeleteTrack(track)
+
+    def remove_edit_markers():
+        for i in range(RPR.GetNumRegionsOrMarkers(0) - 1, -1, -1):
+            marker = RPR.GetRegionOrMarker(0, i, "")
+            if RPR.GetSetRegionOrMarkerInfo_String(0, marker, "P_NAME", "", False)[4].startswith(EDIT):
+                RPR.DeleteProjectMarkerByIndex(0, i)
+
+    def restore_selection():
+        RPR.GetSet_LoopTimeRange2(0, True, False, *ts_before, False)
+        RPR.GetSet_LoopTimeRange2(0, True, True, *loop_before, False)
+        RPR.GetSetRepeatEx(0, repeat_before)
+
+    b.defer("remove the edit tracks", remove_edit_tracks)
+    b.defer("remove the edit markers", remove_edit_markers)
+    b.defer("restore time selection, loop and repeat", restore_selection)
+
+    def make_tracks():
+        base = RPR.CountTracks(0)
+        for k, name in enumerate(("a", "b")):
+            RPR.InsertTrackInProject(0, base + k, 0)
+            RPR.GetSetMediaTrackInfo_String(RPR.GetTrack(0, base + k), "P_NAME", EDIT + name, True)
+
+    _recorded("tracks", make_tracks)
+    a = RPR.CountTracks(0) - 2
+    bb = a + 1
+
+    # --- envelopes ---------------------------------------------------------
+    g = "envelope"
+    b.call("add_envelope_points",
+           {"track_index": a, "points": [{"time": 1.0, "value": 0.5}, {"time": 2.0, "db": -12.0}]}, group=g)
+    # REAPER's display is the independent unit check: a raw 0.5 would read -inf dB.
+    b.confirm(lambda: (_point_display(a, "Volume", 1.0), _point_display(a, "Volume", 2.0)),
+              lambda pair: pair[0].startswith("-6.0") and pair[1].startswith("-12.0"),
+              "the Volume points as REAPER displays them, wanted (-6.02dB, -12.0dB)")
+    times_before = _point_times(a, "Volume")
+    b.call("add_envelope_points", {"track_index": a, "points": [{"time": 3.0, "value": -6.0}]}, group=g,
+           refuses=True, expect=lambda p: None if "dB" in str(p.get("errors") or p.get("error"))
+           else "the refusal does not mention dB")
+    b.confirm(lambda: _point_times(a, "Volume"), times_before, "the Volume point times after a refused dB value")
+    b.call("add_envelope_points", {"track_index": a, "envelope": "Pan", "points": [{"time": 1.0, "value": -0.5}]},
+           group=g)
+    b.confirm(lambda: _point_display(a, "Pan", 1.0), "50%L", "the Pan point as REAPER displays it")
+    b.call("add_envelope_points", {"track_index": a, "envelope": "Mute", "points": [{"time": 1.0, "value": 1}]},
+           group=g)
+    b.confirm(lambda: _point_display(a, "Mute", 1.0), "MUTE", "the Mute point as REAPER displays it")
+
+    added_fx = []
+    _recorded("jsfx", lambda: added_fx.append(
+        RPR.TrackFX_AddByName(_track_id(a), "JS: Volume Adjustment", False, -1)))
+    fx = added_fx[0]
+    if fx >= 0:
+        b.call("add_envelope_points",
+               {"track_index": a, "fx_index": fx, "param_index": 0, "points": [{"time": 1.0, "value": 0.48}]},
+               group=g)
+        # The JSFX range is -150 to 150 dB, so normalized 0.48 must evaluate to -6 dB.
+        b.confirm(lambda: RPR.Envelope_Evaluate(RPR.GetFXEnvelope(_track_id(a), fx, 0, False),
+                                                1.0, 48000, 0, 0, 0, 0, 0)[5],
+                  -6.0, "the FX envelope value at 1 s (native dB)", tol=0.01)
+        b.call("get_envelope_points", {"track_index": a, "fx_index": fx, "param_index": 0}, group=g,
+               expect=lambda p: None if any(approx(pt.get("value"), 0.48, 1e-4) for pt in p.get("points", []))
+               else "the 0.48 point is missing")
+    else:
+        b.skip("add_envelope_points", g, "JS: Volume Adjustment is not installed (FX parameter case)")
+
+    b.call("get_envelope_points", {"track_index": a}, group=g, times=b.repeat,
+           expect=lambda p: None if [pt.get("db") for pt in p.get("points", []) if pt["time"] in (1.0, 2.0)]
+           == [-6.02, -12.0] else f"read {p.get('points')}")
+    b.call("clear_envelope_points", {"track_index": a, "start": 1.0, "end": 2.0}, group=g)
+    b.confirm(lambda: [t for t in _point_times(a, "Volume") if 1.0 <= t <= 2.0], [],
+              "Volume points left between 1 s and 2 s, both ends included")
+
+    # --- markers -----------------------------------------------------------
+    g = "marker"
+    layout_before = _marker_layout()
+    added = b.call("add_markers", {"entries": [
+        {"position": 1001.0, "name": EDIT + "m"},
+        {"start": 1002.0, "end": 1003.0, "name": EDIT + "r", "color": [200, 90, 60]},
+    ]}, group=g)
+    b.confirm(_marker_layout,
+              lambda rows: sorted(rows) == sorted(layout_before + [(False, 1001.0, 1001.0), (True, 1002.0, 1003.0)]),
+              "the marker layout, wanted the two new entries added")
+    b.call("list_markers", group=g, times=b.repeat,
+           expect=lambda p: None if {EDIT + "m", EDIT + "r"} <= {m.get("name") for m in p.get("markers", [])}
+           else "the new markers are not listed")
+    ix = {e.get("name"): e.get("index") for e in added.get("added", [])}
+    if len(ix) == 2:
+        # Moving the region in front of the marker swaps their indices; both entries
+        # still name what they named before the call.
+        b.call("edit_markers", {"entries": [
+            {"index": ix[EDIT + "r"], "start": 1000.0, "end": 1000.5},
+            {"index": ix[EDIT + "m"], "position": 1004.0, "name": EDIT + "m2"},
+        ]}, group=g)
+        b.confirm(_marker_layout,
+                  lambda rows: sorted(rows) == sorted(layout_before + [(True, 1000.0, 1000.5), (False, 1004.0, 1004.0)]),
+                  "the marker layout after the edit")
+        listed = b.raw("list_markers").get("markers", [])
+        mine = [m["index"] for m in listed if str(m.get("name", "")).startswith(EDIT)]
+        b.call("edit_markers", {"entries": [{"index": i, "delete": True} for i in mine]}, group=g)
+        b.confirm(_marker_layout, lambda rows: sorted(rows) == sorted(layout_before), "the marker layout after deleting")
+    else:
+        b.skip("edit_markers", g, "add_markers did not report both indices")
+
+    # --- time selection ----------------------------------------------------
+    g = "selection"
+    b.call("set_time_selection", {"start": 1.5, "end": 3.25}, group=g)
+    b.confirm(lambda: tuple(RPR.GetSet_LoopTimeRange2(0, False, False, 0, 0, False)[3:5]), (1.5, 3.25),
+              "the time selection")
+    b.call("set_time_selection", {"start": 4.0, "end": 6.0, "loop": True, "repeat": True}, group=g)
+    b.confirm(lambda: (tuple(RPR.GetSet_LoopTimeRange2(0, False, True, 0, 0, False)[3:5]), RPR.GetSetRepeatEx(0, -1)),
+              ((4.0, 6.0), 1), "(loop points, repeat)")
+    b.call("get_time_selection", group=g, times=b.repeat,
+           expect=lambda p: None if (p.get("loop_start"), p.get("loop_end"), p.get("repeat")) == (4.0, 6.0, True)
+           else f"read {p}")
+
+    # --- routing -----------------------------------------------------------
+    g = "routing"
+    send = b.call("create_send", {"source_track_index": a, "dest_track_index": bb}, group=g)
+    s = send.get("send_index", 0)
+    b.call("set_send_routing", {"source_track_index": a, "send_index": s, "mode": "pre-fader",
+                                "src_channels": "1/2", "dest_channels": "3/4"}, group=g)
+    # The state chunk is a second witness: AUXRECV holds mode 3, source 0 (1/2), destination 2 (3/4).
+    b.confirm(lambda: (_send_chunk_fields(bb), int(RPR.GetMediaTrackInfo_Value(_track_id(bb), "I_NCHAN"))),
+              ([3, 0, 2], 4), "(AUXRECV mode/src/dst, destination channels)")
+    b.call("list_sends", {"track_index": a}, group=g,
+           expect=lambda p: None if (p.get("sends") or [{}])[-1].get("dest_channels") == "3/4"
+           else f"listed {p.get('sends')}")
+    b.call("set_send_routing", {"source_track_index": a, "send_index": s, "dest_channels": "1"}, group=g)
+    b.confirm(lambda: _send_chunk_fields(bb), [3, 0, 1024], "AUXRECV after mixing to mono on channel 1")
+    b.call("set_send_routing", {"source_track_index": a, "send_index": s, "src_channels": "3/4"}, group=g,
+           refuses=True, expect=lambda p: None if "channels" in str(p.get("error")) else f"refused with {p.get('error')}")
+
+    fx_b = _track_id(bb)
+    _recorded("fx chain", lambda: [RPR.TrackFX_AddByName(fx_b, n, False, -1) for n in ("ReaComp", "ReaEQ", "ReaGate")])
+    b.call("get_fx_pins", {"track_index": bb, "fx_index": 0}, group=g,
+           expect=lambda p: None if [pin.get("channels") for pin in p.get("inputs", [])[2:4]] == [[3], [4]]
+           else f"aux pins read {p.get('inputs')}")
+    b.confirm(lambda: [RPR.TrackFX_GetPinMappings(_track_id(bb), 0, 0, pin, 0)[0] for pin in range(4)],
+              [1, 2, 4, 8], "the input pin bitmasks")
+
+    # --- FX order and undo -------------------------------------------------
+    g = "undo"
+    b.call("move_fx", {"track_index": bb, "fx_index": 0, "to_index": 2}, group=g)
+    b.confirm(lambda: _fx_names(bb), ["ReaEQ", "ReaGate", "ReaComp"], "the FX chain order")
+    b.call("undo", group=g, expect=lambda p: None if p.get("undone") == ["MCP: move_fx"] else f"undid {p.get('undone')}")
+    b.confirm(lambda: _fx_names(bb), ["ReaComp", "ReaEQ", "ReaGate"], "the FX chain order after undo")
+    b.call("undo", {"redo": True}, group=g)
+    b.confirm(lambda: _fx_names(bb), ["ReaEQ", "ReaGate", "ReaComp"], "the FX chain order after redo")
+
+    def foreign_step():
+        from reaper_mcp.connection import held  # noqa: PLC0415
+
+        with held():
+            RPR.Undo_BeginBlock2(0)
+            RPR.GetSetMediaTrackInfo_String(_track_id(bb), "P_NAME", EDIT + "b renamed", True)
+            RPR.Undo_EndBlock2(0, "bench: a step the user made", -1)
+
+    foreign_step()
+    b.call("undo", group=g, refuses=True,
+           expect=lambda p: None if p.get("stopped_at") == "bench: a step the user made" else f"replied {p}")
+    b.confirm(lambda: RPR.GetSetMediaTrackInfo_String(_track_id(bb), "P_NAME", "", False)[3],
+              EDIT + "b renamed", "the renamed track after the refused undo")
+
+    # --- items -------------------------------------------------------------
+    g = "items"
+
+    def make_items():
+        for pos in (0.0, 4.0):
+            item = RPR.AddMediaItemToTrack(_track_id(a))
+            RPR.SetMediaItemInfo_Value(item, "D_POSITION", pos)
+            RPR.SetMediaItemInfo_Value(item, "D_LENGTH", 2.0)
+
+    _recorded("items", make_items)
+    # Entries 0 and 2 both name the item at 0 s, entry 1 the one at 4 s. Moving the
+    # first to 8 s re-sorts the track, so later entries must not read stale indices.
+    b.call("edit_items", {"entries": [
+        {"track_index": a, "item_index": 0, "position": 8.0},
+        {"track_index": a, "item_index": 1, "split_at": [5.0]},
+        {"track_index": a, "item_index": 0, "fade_in": 0.1, "mute": True},
+    ]}, group=g)
+    b.confirm(lambda: _item_rows(a), [(4.0, 1.0, 0.0, 0.0), (5.0, 1.0, 0.0, 0.0), (8.0, 2.0, 0.1, 1.0)],
+              "(position, length, fade in, mute) per item")
+    b.call("edit_items", {"entries": [
+        {"track_index": a, "item_index": 0, "delete": True},
+        {"track_index": a, "item_index": 2, "dest_track_index": bb},
+        {"track_index": a, "item_index": 1, "split_at": 100.0},
+    ]}, group=g, refuses=True,
+        expect=lambda p: None if [e.get("entry") for e in p.get("errors", [])] == [2] else f"errors {p.get('errors')}")
+    b.confirm(lambda: (_item_rows(a), _item_rows(bb)),
+              ([(5.0, 1.0, 0.0, 0.0)], [(8.0, 2.0, 0.1, 1.0)]),
+              "the items left on each track after the delete and the move")
 
 
 # --------------------------------------------------------------------------

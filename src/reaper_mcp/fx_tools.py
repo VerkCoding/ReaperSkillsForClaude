@@ -1,8 +1,24 @@
 import logging
 
-from reaper_mcp.connection import RPR, get_project, reapy
+from reaper_mcp.connection import RPR, get_project, held, reapy, undo_step
 
 logger = logging.getLogger("reaper_mcp.fx_tools")
+
+
+def _fx_guid(track_id, fx_index: int) -> str:
+    """Return an FX's GUID as text. TrackFX_GetFXGUID itself returns a GUID* pointer."""
+    return str(RPR.guidToString(RPR.TrackFX_GetFXGUID(track_id, fx_index), "")[1])
+
+
+def _pin_channels(track_id, fx_index: int, is_output: int, pin: int) -> list:
+    """Return the 1-based track channels wired to one pin.
+
+    TrackFX_GetPinMappings returns a bitmask of channels 1-32 and fills high32
+    with channels 33-64; bit n set means channel n + 1.
+    """
+    out = RPR.TrackFX_GetPinMappings(track_id, fx_index, is_output, pin, 0)
+    low, high = int(out[0]) & 0xFFFFFFFF, int(out[5]) & 0xFFFFFFFF
+    return [bit + 1 for bit in range(32) if low >> bit & 1] + [bit + 33 for bit in range(32) if high >> bit & 1]
 
 
 def _negative_index(**values) -> str:
@@ -223,5 +239,78 @@ def register_tools(mcp):
                 "fx_name": fx.name,
                 "preset": loaded,
             }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @mcp.tool()
+    def get_fx_pins(track_index: int, fx_index: int) -> dict:
+        """Read the track channels wired to each FX input and output pin, with pin names.
+
+        Verifies a sidechain: ReaComp's "Auxiliary Input L/R" pins should read channels [3] and [4].
+        """
+        try:
+            invalid = _negative_index(track_index=track_index, fx_index=fx_index)
+            if invalid:
+                return {"success": False, "error": invalid}
+            get_project()
+            with held():
+                n_tracks = RPR.CountTracks(0)
+                if track_index >= n_tracks:
+                    return {"success": False, "error": f"track_index {track_index} out of range, project has {n_tracks} tracks"}
+                track = RPR.GetTrack(0, track_index)
+                n_fx = RPR.TrackFX_GetCount(track)
+                if fx_index >= n_fx:
+                    return {"success": False, "error": f"fx_index {fx_index} out of range, track has {n_fx} FX"}
+                _, _, _, n_in, n_out = RPR.TrackFX_GetIOSize(track, fx_index, 0, 0)
+                pins = {}
+                for kind, count, prefix in (("inputs", n_in, "in_pin_"), ("outputs", n_out, "out_pin_")):
+                    pins[kind] = [
+                        {
+                            "pin": pin,
+                            "name": RPR.TrackFX_GetNamedConfigParm(track, fx_index, f"{prefix}{pin}", "", 256)[4],
+                            "channels": _pin_channels(track, fx_index, int(kind == "outputs"), pin),
+                        }
+                        for pin in range(max(count, 0))
+                    ]
+                return {
+                    "success": True,
+                    "track_index": track_index,
+                    "fx_index": fx_index,
+                    "fx_name": RPR.TrackFX_GetFXName(track, fx_index, "", 256)[3],
+                    "track_channels": int(RPR.GetMediaTrackInfo_Value(track, "I_NCHAN")),
+                    **pins,
+                }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @mcp.tool()
+    def move_fx(track_index: int, fx_index: int, to_index: int) -> dict:
+        """Move an FX to another slot in the same track's chain; to_index is the slot it ends up in. Returns the new chain order."""
+        try:
+            invalid = _negative_index(track_index=track_index, fx_index=fx_index, to_index=to_index)
+            if invalid:
+                return {"success": False, "error": invalid}
+            get_project()
+            with undo_step("move_fx"):
+                n_tracks = RPR.CountTracks(0)
+                if track_index >= n_tracks:
+                    return {"success": False, "error": f"track_index {track_index} out of range, project has {n_tracks} tracks"}
+                track = RPR.GetTrack(0, track_index)
+                n_fx = RPR.TrackFX_GetCount(track)
+                # An out-of-range destination moves the FX to the end without complaint.
+                if fx_index >= n_fx or to_index >= n_fx:
+                    return {"success": False, "error": f"track {track_index} has {n_fx} FX, slots 0-{n_fx - 1}"}
+                before = [_fx_guid(track, i) for i in range(n_fx)]
+                expected = before[:fx_index] + before[fx_index + 1:]
+                expected.insert(to_index, before[fx_index])
+                RPR.TrackFX_CopyToTrack(track, fx_index, track, to_index, True)
+                after = [_fx_guid(track, i) for i in range(RPR.TrackFX_GetCount(track))]
+                chain = [
+                    {"index": i, "name": RPR.TrackFX_GetFXName(track, i, "", 256)[3]}
+                    for i in range(len(after))
+                ]
+            if after != expected:
+                return {"success": False, "error": "REAPER's chain order is not the one asked for", "fx": chain}
+            return {"success": True, "track_index": track_index, "moved_to": to_index, "fx": chain}
         except Exception as e:
             return {"success": False, "error": str(e)}

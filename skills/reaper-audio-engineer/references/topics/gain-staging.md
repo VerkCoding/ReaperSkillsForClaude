@@ -471,7 +471,7 @@ Claude does not click menus or drag faders: every step above goes through an MCP
 | Fader, pan | `set_track_volume`, `set_track_pan` |
 | JS: Volume Adjustment, JS: Loudness Meter | `add_fx`, then set parameters by their displayed value ([plugin-control.md](../../../reaper-mcp/references/plugin-control.md)) |
 | Loudness-matched A/B (within 0.5 LU) | The level-matching rule in [audio-mixing.md](../audio-mixing.md), section 3 |
-| Automation | `add_volume_automation` writes the Volume envelope (post-FX; the envelope must be visible). Trim Volume and Volume (Pre-FX) need Lua |
+| Automation | `add_envelope_points` writes the Volume (post-FX), Volume (Pre-FX) or Trim Volume envelope and creates it when missing; give each point `db`, or `value` as linear gain. Read back with `get_envelope_points` |
 | Master to a LUFS target, true peak ceiling | `normalize_project`, `apply_limiter`, then recheck with `analyze_loudness` ([audio-mastering.md](../audio-mastering.md), sections 5–6) |
 
 Left to the user: preamp gain while recording, meter setup in the interface, and listening to make the final call.
