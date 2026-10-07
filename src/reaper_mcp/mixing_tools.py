@@ -1,6 +1,6 @@
 import logging
 
-from reaper_mcp.connection import RPR, get_project, reapy, undo_step
+from reaper_mcp.connection import RPR, get_project, reapy, records_undo, undo_step
 from reaper_mcp.units import (
     format_channels,
     linear_to_db,
@@ -112,6 +112,7 @@ def _envelope_or_error(track, name: str, shown_as: str):
 def register_tools(mcp):
 
     @mcp.tool()
+    @records_undo()
     def add_volume_automation(track_index: int, position: float, value_db: float) -> dict:
         """Add a volume automation point on a track.
         
@@ -153,6 +154,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def add_pan_automation(track_index: int, position: float, pan: float) -> dict:
         """Add a pan automation point on a track.
         
@@ -197,6 +199,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def create_send(
         source_track_index: int, dest_track_index: int, volume_db: float = 0.0
     ) -> dict:
@@ -258,6 +261,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def remove_send(source_track_index: int, send_index: int) -> dict:
         """Remove a send from a track by its index."""
         try:
@@ -281,6 +285,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_send_volume(source_track_index: int, send_index: int, volume_db: float) -> dict:
         """Set the volume of a send in dB."""
         try:
@@ -315,6 +320,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def set_send_routing(
         source_track_index: int,
         send_index: int,
@@ -455,6 +461,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def create_bus(name: str, track_indices: list) -> dict:
         """Create a new bus track and route the specified tracks to it via sends.
         

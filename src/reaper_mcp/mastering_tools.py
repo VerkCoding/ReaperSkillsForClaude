@@ -1,7 +1,7 @@
 import os
 import logging
 
-from reaper_mcp.connection import RPR, get_project, reapy
+from reaper_mcp.connection import RPR, get_project, reapy, records_undo, undo_step
 from reaper_mcp.units import get_volume_db, set_volume_db
 
 logger = logging.getLogger("reaper_mcp.mastering_tools")
@@ -148,6 +148,7 @@ def _add_fx(track, fx_name: str):
 def register_tools(mcp):
 
     @mcp.tool()
+    @records_undo()
     def add_master_fx(fx_name: str) -> dict:
         """Add an FX plugin to the master track."""
         try:
@@ -175,6 +176,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_master_fx_parameter(fx_index: int, param_index: int, value: float) -> dict:
         """Set a normalized parameter (0.0-1.0) on a master track FX plugin."""
         try:
@@ -216,6 +218,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_master_volume(volume_db: float) -> dict:
         """Set the master track output volume in dB."""
         try:
@@ -226,6 +229,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def apply_mastering_chain(preset: str = "default") -> dict:
         """Add a predefined FX chain to the master track."""
         try:
@@ -260,6 +264,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def apply_limiter(threshold_db: float = -0.5, release_ms: float = 50.0) -> dict:
         """Add ReaLimit to the master track."""
         try:
@@ -332,6 +337,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def normalize_project(target_lufs: float = -14.0) -> dict:
         """Measure the project integrated loudness and adjust the master volume to achieve the target LUFS."""
         try:
@@ -359,7 +365,9 @@ def register_tools(mcp):
             gain_db = target_lufs - current_lufs
             project = get_project()
             master = project.master_track
-            new_vol_db = set_volume_db(master, get_volume_db(master) + gain_db)
+            # Only the fader change is one undo step; the render above must not hold REAPER.
+            with undo_step("normalize_project"):
+                new_vol_db = set_volume_db(master, get_volume_db(master) + gain_db)
 
             # The same gain moves the peak. A target that pushes it past full scale is
             # reported rather than left for the next render to reveal.

@@ -1,15 +1,14 @@
 """Undo and redo through REAPER's own undo history.
 
-Only some changes leave a step there. The tools that change the project through
-undo_step record one named "MCP: <tool>", and each Lua bridge command records
-"Claude bridge command". The older single-value tools, such as set_track_volume,
-record none. Undoing a step restores the whole state saved at the step before
-it, so it also reverts what those tools changed in between.
+Every tool that changes the project records one step named "MCP: <tool>"
+(records_undo in connection.py), and each Lua bridge command records
+"Claude bridge command". Transport, cursor, render and project-file tools
+record none, as REAPER does not keep those in undo history.
 """
 
 import logging
 
-from reaper_mcp.connection import RPR, UNDO_PREFIX, get_project, held
+from reaper_mcp.connection import RPR, UNDO_PREFIX, _step_name, get_project, held, records_undo
 
 logger = logging.getLogger("reaper_mcp.undo_tools")
 
@@ -17,30 +16,15 @@ _MAX_STEPS = 100
 _OWN_STEPS = (UNDO_PREFIX, "Claude bridge command")
 
 
-def _step_name(redo: bool) -> str:
-    """Return the name of the next redo (or undo) step, or "" when there is none.
-
-    Python ReaScript's Undo_CanUndo2 and Undo_CanRedo2 decode the returned string
-    without checking it, so an empty history raises inside REAPER instead of
-    returning nothing.
-    """
-    try:
-        return (RPR.Undo_CanRedo2(0) if redo else RPR.Undo_CanUndo2(0)) or ""
-    except Exception as e:
-        if "decode" in str(e):
-            return ""
-        raise
-
-
 def register_tools(mcp):
 
     @mcp.tool()
+    @records_undo(own_step=True, verify=False)
     def undo(steps: int = 1, redo: bool = False, any_step: bool = False) -> dict:
         """Undo (or redo=true) the last steps of REAPER's undo history and name each one.
 
+        Every tool that changes the project is one step, "MCP: <tool>"; transport, render and file tools are none.
         Stops at a step neither these tools nor the bridge made, i.e. the user's own edit, unless any_step=true.
-        Only the envelope, marker, selection, routing, item and FX-order tools record steps; older tools such as
-        set_track_volume do not, and undoing also reverts their changes since the previous step.
         """
         try:
             if not 1 <= steps <= _MAX_STEPS:

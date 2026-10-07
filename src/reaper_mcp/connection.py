@@ -8,12 +8,16 @@ the socket state and limits reconnection attempts.
 """
 
 import contextlib
+import functools
+import glob
 import importlib.abc
 import importlib.machinery
 import logging
+import os
 import sys
 import threading
 import time
+from pathlib import Path
 
 logger = logging.getLogger("reaper_mcp.connection")
 
@@ -244,6 +248,122 @@ def undo_step(tool: str):
             yield
         finally:
             RPR.Undo_EndBlock2(0, UNDO_PREFIX + tool, -1)
+
+
+def undo_top() -> str:
+    """Return the name of the step Undo would revert next, or "" when there is none.
+
+    Python ReaScript's Undo_CanUndo2 and Undo_CanRedo2 decode the returned string
+    without checking it, so an empty history raises inside REAPER instead of
+    returning nothing.
+    """
+    return _step_name(redo=False)
+
+
+def _step_name(redo: bool) -> str:
+    try:
+        return (RPR.Undo_CanRedo2(0) if redo else RPR.Undo_CanUndo2(0)) or ""
+    except Exception as e:
+        if "decode" in str(e):
+            return ""
+        raise
+
+
+# Copies kept per project by backup_before_first_change.
+BACKUP_KEEP = 5
+_backed_up: set = set()
+
+
+def backup_before_first_change():
+    """Save a copy of the open project before this server first changes it.
+
+    Once per project file per server process, the project as it is in memory,
+    unsaved changes included, is written next to its file as
+    <name>.mcp-backup-<time>.rpp; only the newest BACKUP_KEEP are kept.
+    Main_SaveProjectEx writes the copy without rebinding the project or touching
+    its dirty flag or undo history. A project never saved has no folder to write
+    to and is skipped. REAPER_MCP_BACKUP=0 turns this off. Never raises: a failed
+    backup must not stop the change the user asked for.
+    """
+    if os.environ.get("REAPER_MCP_BACKUP", "1").strip().lower() in ("0", "off", "false", "no"):
+        return None
+    try:
+        path = RPR.EnumProjects(-1, "", 4096)[2]
+        if not path or path in _backed_up:
+            return None
+        if RPR.CountTracks(0) == 0 and RPR.CountMediaItems(0) == 0:
+            return None
+        project = Path(path)
+        backup = project.with_name(f"{project.stem}.mcp-backup-{time.strftime('%Y%m%d-%H%M%S')}.rpp")
+        RPR.Main_SaveProjectEx(0, str(backup), 0)
+        if not backup.is_file() or backup.stat().st_size == 0:
+            logger.warning("Backup of %s was not written", path)
+            return None
+        _backed_up.add(path)
+        # The timestamp sorts by name, oldest first.
+        copies = sorted(project.parent.glob(f"{glob.escape(project.stem)}.mcp-backup-*.rpp"))
+        for stale in copies[:-BACKUP_KEEP]:
+            stale.unlink(missing_ok=True)
+        return str(backup)
+    except Exception as e:
+        logger.warning("Backup before the first change failed, continuing without one: %s", e)
+        return None
+
+
+def records_undo(items: bool = False, own_step: bool = False, verify: bool = True):
+    """Make a tool that changes the project undoable, backed up and checked. Apply beneath @mcp.tool().
+
+    The tool runs as one undo point named "MCP: <tool>":
+    * by default inside undo_step, an undo block, which records track, FX, send,
+      envelope, marker, tempo, note and item edits;
+    * with items=True through Undo_OnStateChange2 after a successful call, for tools
+      that create MIDI items: CreateNewMIDIItemInProj inside a block records nothing,
+      so undoing reverted the step before it and left the item in place;
+    * with own_step=True the tool records its own step (undo_step inside), for a tool
+      that must not hold REAPER while it renders.
+
+    Before the first change to a project, the project is backed up. A call reported
+    as successful that left no "MCP: <tool>" step at the top of the undo history
+    reached nothing in REAPER, the way a reapy attribute assignment does: the reply
+    then carries "unconfirmed". verify=False skips that check, for tools whose change
+    REAPER does not keep in undo history.
+    """
+    def decorate(fn):
+        step = UNDO_PREFIX + fn.__name__
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                get_project()
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+            backup = backup_before_first_change()
+            if own_step:
+                result = fn(*args, **kwargs)
+            elif items:
+                with held():
+                    result = fn(*args, **kwargs)
+                    if isinstance(result, dict) and result.get("success"):
+                        RPR.Undo_OnStateChange2(0, step)
+            else:
+                with undo_step(fn.__name__):
+                    result = fn(*args, **kwargs)
+            if not isinstance(result, dict):
+                return result
+            if backup:
+                result["backup"] = backup
+            if verify and result.get("success"):
+                top = undo_top()
+                if top != step:
+                    result["unconfirmed"] = (
+                        f"REAPER recorded no change for this call (latest undo step: {top!r}), "
+                        "so the write may not have taken effect. Read the value back."
+                    )
+            return result
+
+        return wrapper
+
+    return decorate
 
 
 def _server_state(timeout_sec: float = 0.5) -> str:

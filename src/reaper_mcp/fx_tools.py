@@ -1,6 +1,6 @@
 import logging
 
-from reaper_mcp.connection import RPR, get_project, held, reapy, undo_step
+from reaper_mcp.connection import RPR, get_project, held, reapy, records_undo, undo_step
 
 logger = logging.getLogger("reaper_mcp.fx_tools")
 
@@ -38,6 +38,7 @@ def _negative_index(**values) -> str:
 def register_tools(mcp):
 
     @mcp.tool()
+    @records_undo()
     def add_fx(track_index: int, fx_name: str) -> dict:
         """
         Add an FX plugin to a track.
@@ -69,6 +70,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def remove_fx(track_index: int, fx_index: int) -> dict:
         """Remove an FX plugin from a track by its index."""
         try:
@@ -91,6 +93,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_fx_parameter(
         track_index: int, fx_index: int, param_index: int, value: float
     ) -> dict:
@@ -190,6 +193,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def bypass_fx(track_index: int, fx_index: int, bypassed: bool) -> dict:
         """Enable or disable an FX plugin on a track."""
         try:
@@ -211,6 +215,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def load_fx_preset(track_index: int, fx_index: int, preset_name: str) -> dict:
         """Load a saved preset by name for an FX plugin."""
         try:
@@ -284,6 +289,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def move_fx(track_index: int, fx_index: int, to_index: int) -> dict:
         """Move an FX to another slot in the same track's chain; to_index is the slot it ends up in. Returns the new chain order."""
         try:

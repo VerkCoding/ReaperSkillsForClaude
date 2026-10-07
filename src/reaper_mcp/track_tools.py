@@ -1,6 +1,6 @@
 import logging
 
-from reaper_mcp.connection import RPR, get_project, reapy
+from reaper_mcp.connection import RPR, get_project, reapy, records_undo
 from reaper_mcp.units import set_solo, set_volume_db, track_state
 
 logger = logging.getLogger("reaper_mcp.track_tools")
@@ -9,6 +9,7 @@ logger = logging.getLogger("reaper_mcp.track_tools")
 def register_tools(mcp):
 
     @mcp.tool()
+    @records_undo()
     def create_track(name: str, track_type: str = "audio") -> dict:
         """
         Create a track at the end of the project.
@@ -38,6 +39,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def delete_track(track_index: int) -> dict:
         """Delete track by index."""
         try:
@@ -49,6 +51,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def rename_track(track_index: int, name: str) -> dict:
         """Rename track."""
         try:
@@ -60,6 +63,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_track_volume(track_index: int, volume_db: float) -> dict:
         """Set track volume in dB."""
         try:
@@ -74,6 +78,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_track_pan(track_index: int, pan: float) -> dict:
         """Set track pan."""
         try:
@@ -89,6 +94,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_track_mute(track_index: int, muted: bool) -> dict:
         """Set track mute state."""
         try:
@@ -104,6 +110,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_track_solo(track_index: int, soloed: bool) -> dict:
         """Set track solo state."""
         try:
@@ -177,6 +184,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_track_color(track_index: int, r: int, g: int, b: int) -> dict:
         """Set track color."""
         try:

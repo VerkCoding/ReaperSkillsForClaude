@@ -11,7 +11,7 @@ resolve every index to the marker's GUID before changing anything.
 
 import logging
 
-from reaper_mcp.connection import RPR, get_project, held, is_null, undo_step
+from reaper_mcp.connection import RPR, get_project, held, is_null, records_undo, undo_step
 from reaper_mcp.units import native_color, rgb_color
 
 logger = logging.getLogger("reaper_mcp.marker_tools")
@@ -97,6 +97,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def add_markers(entries: list[dict]) -> dict:
         """Add markers and regions in one call.
 
@@ -166,6 +167,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def edit_markers(entries: list[dict]) -> dict:
         """Edit or delete markers and regions in one call.
 
@@ -311,6 +313,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def set_time_selection(start: float, end: float, loop: bool = False, repeat: bool | None = None) -> dict:
         """Set the time selection, or the loop points with loop=true; start == end clears it. repeat turns loop playback on or off.
 

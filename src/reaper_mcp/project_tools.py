@@ -3,7 +3,7 @@ import time
 import logging
 from pathlib import Path
 
-from reaper_mcp.connection import RPR, get_project, reapy
+from reaper_mcp.connection import RPR, get_project, reapy, records_undo
 from reaper_mcp.units import project_tempo
 
 logger = logging.getLogger("reaper_mcp.project_tools")
@@ -257,6 +257,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_tempo(bpm: float) -> dict:
         """Set the project tempo in BPM."""
         try:
@@ -268,6 +269,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def set_time_signature(numerator: int, denominator: int) -> dict:
         """Set the project time signature."""
         try:

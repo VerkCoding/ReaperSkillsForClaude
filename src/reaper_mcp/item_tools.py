@@ -8,7 +8,7 @@ anything changes, and the indices reported back are read after the last change.
 
 import logging
 
-from reaper_mcp.connection import RPR, get_project, is_null, undo_step
+from reaper_mcp.connection import RPR, get_project, is_null, records_undo, undo_step
 from reaper_mcp.units import db_to_linear, linear_to_db
 
 logger = logging.getLogger("reaper_mcp.item_tools")
@@ -100,6 +100,7 @@ def _plan(entry: dict, n_tracks: int):
 def register_tools(mcp):
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def edit_items(entries: list[dict]) -> dict:
         """Move, resize, fade, mute, set gain on, split or delete media items in one call.
 

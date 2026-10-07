@@ -1,6 +1,6 @@
 import logging
 
-from reaper_mcp.connection import RPR, get_project, reapy
+from reaper_mcp.connection import RPR, get_project, reapy, records_undo
 from reaper_mcp.units import project_tempo
 
 logger = logging.getLogger("reaper_mcp.midi_tools")
@@ -93,6 +93,7 @@ def _out_of_range(**values) -> str:
 def register_tools(mcp):
 
     @mcp.tool()
+    @records_undo(items=True)
     def create_midi_item(track_index: int, start_position: float, length: float) -> dict:
         """Creates an empty MIDI item to provide a container for MIDI note insertion."""
         try:
@@ -114,6 +115,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def add_midi_note(
         track_index: int,
         item_index: int,
@@ -158,6 +160,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(items=True)
     def create_chord_progression(
         track_index: int,
         chords: str,
@@ -228,6 +231,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(items=True)
     def create_drum_pattern(
         track_index: int,
         pattern: str,

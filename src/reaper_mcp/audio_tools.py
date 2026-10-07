@@ -1,7 +1,7 @@
 import os
 import logging
 
-from reaper_mcp.connection import RPR, get_project, reapy
+from reaper_mcp.connection import RPR, get_project, reapy, records_undo
 
 logger = logging.getLogger("reaper_mcp.audio_tools")
 
@@ -21,6 +21,7 @@ def _negative_index(**values) -> str:
 def register_tools(mcp):
 
     @mcp.tool()
+    @records_undo()
     def import_audio_file(file_path: str, track_index: int, position: float = 0.0) -> dict:
         """
         Import an audio file onto a track at the given position (seconds).
@@ -149,6 +150,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def edit_audio_item(
         track_index: int,
         item_index: int,
@@ -223,6 +225,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def adjust_pitch(track_index: int, item_index: int, semitones: float) -> dict:
         """Adjust the pitch of an audio item by semitones."""
         try:
@@ -251,6 +254,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo()
     def adjust_playback_rate(track_index: int, item_index: int, rate: float) -> dict:
         """Adjust playback rate of an audio item."""
         try:

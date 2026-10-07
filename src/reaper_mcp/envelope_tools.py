@@ -16,7 +16,7 @@ and reading Envelope_FormatValue, REAPER's own display of it:
 import logging
 import math
 
-from reaper_mcp.connection import RPR, get_project, held, is_null, undo_step
+from reaper_mcp.connection import RPR, get_project, held, is_null, records_undo, undo_step
 from reaper_mcp.units import db_to_linear, linear_to_db
 
 logger = logging.getLogger("reaper_mcp.envelope_tools")
@@ -252,6 +252,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def add_envelope_points(
         track_index: int,
         points: list[dict],
@@ -343,6 +344,7 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
+    @records_undo(own_step=True)
     def clear_envelope_points(
         track_index: int,
         start: float,
