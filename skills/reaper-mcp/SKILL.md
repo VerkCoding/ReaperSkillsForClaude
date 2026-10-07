@@ -34,6 +34,7 @@ If REAPER tools are unavailable, call `reaper_setup_status` to identify the diag
 | Structured project work | **MCP tool** | Projects, tempo, time signature, tracks, naming, volume, pan, solo, mute, colour, FX, MIDI items, chords, drum patterns, sends, buses, rendering, stems. |
 | Rendering to a file | **MCP tool** | `render_project`, `render_time_selection` and `render_stems` save and restore the `RENDER_*` project settings. Hand-written Lua leaves the user's render settings changed. |
 | An operation that must be refused when wrong | **MCP tool** | The tools reject negative indices, out-of-range values and trims that would consume an item. Raw Lua applies whatever it is given. |
+| No tool covers the task | **Bridge** | The tools stop short of: automating FX parameters (only volume and pan have tools), markers and regions, setting the time selection, send channels and modes (sidechain on 3/4, pre/post-fader), folder structure, splitting or moving items, takes, FX order, polarity, actions by command ID, undo. Check `src/reaper_mcp/*_tools.py` before calling a tool missing: `edit_audio_item` trims and fades, `render_time_selection` takes its own start and end. |
 | More than about three operations in one step | **Bridge** | A tool call costs 150-600 ms; one bridge call costs roughly 300 ms however many API calls it contains. Ten reads is one bridge call, not ten tool calls. |
 | Confirming what a tool reported | **Bridge** | The bridge reads REAPER directly, so it is the independent witness. A tool's response is a claim about its work, not evidence of it. |
 | Reading state no tool returns | **Bridge** | Selection, play position, envelope scaling mode, take offsets, source lengths, render settings, item and marker layout. |
@@ -45,6 +46,14 @@ Two habits follow:
 
 - **Batch through the bridge, act through the tools.** Gather what you need to know in one Lua call, decide, then make the change with the tool built for it.
 - **Verify across routes.** After a tool reports success on something that matters, read the value back through the bridge. When both agree, the change is real. This is how the tool defects in [Driving REAPER from Python](./references/python-reaper-tools.md) were found: three tools reported success on every call while changing nothing.
+
+### Using both routes in one task
+
+- **Say when a change goes through the bridge.** Before changing the project with Lua, tell the user in one line and name what the tools lack, for example "No tool sets send channels, so the sidechain goes through the bridge." Reads and read-backs need no announcement. When the same gap sends you to the bridge repeatedly, say so: it is a candidate for a new tool.
+- **One route at a time.** Do not issue tool calls and bridge calls in parallel. Both act on the same project, and a read on one route can land before a write on the other. Verifying across routes is sequential: the tool returns, then the bridge reads.
+- **Re-read indices after the bridge changes structure.** The tools address tracks, FX, sends and items by index. After a bridge chunk adds, deletes or moves any of them, call `list_tracks` (or `list_track_fx`, `list_sends`) before the next tool call that takes an index.
+- **One change per bridge write.** Each bridge command already runs inside its own undo block, so a chunk that does one job is one Ctrl+Z for the user. Batch reads freely; keep writes separate.
+- **Check the listener before the first bridge call.** Run `return reaper.GetAppVersion()` with `--timeout 5`. A timeout means `claude_bridge.lua` is not running: tell the user, carry on with the tools where they cover the task, and see Troubleshooting below.
 
 ## Running Lua through the bridge
 

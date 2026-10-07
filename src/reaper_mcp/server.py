@@ -3,7 +3,18 @@ from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger("reaper_mcp.server")
 
-mcp = FastMCP("reaper-mcp")
+# Sent to the client on connect, so the route rule holds even when the
+# reaper-mcp skill is not loaded. The full rule lives in that skill.
+INSTRUCTIONS = (
+    "Use these tools first. Use the Lua file bridge (reaper-mcp skill) only when no tool "
+    "covers the task, to batch more than about three reads, or to read back a value a tool "
+    "reported. Before changing the project through the bridge, tell the user and name what "
+    "the tools lack. Never run tool calls and bridge calls in parallel. After the bridge adds, "
+    "deletes or moves tracks, FX or sends, call list_tracks before the next tool that takes an "
+    "index. success: true is a claim, not proof: read values that matter back."
+)
+
+mcp = FastMCP("reaper-mcp", instructions=INSTRUCTIONS)
 
 # Delayed imports prevent circular dependencies during mcp instantiation.
 from reaper_mcp.project_tools import register_tools as _reg_project
