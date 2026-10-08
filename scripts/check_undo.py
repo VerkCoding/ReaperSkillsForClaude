@@ -80,6 +80,7 @@ def plan(wav: str) -> list:
         ("rename_track", {"track_index": 0, "name": "Renamed"}),
         ("set_track_volume", {"track_index": 0, "volume_db": -7.0}),
         ("set_track_pan", {"track_index": 0, "pan": 0.3}),
+        ("set_track_pan", {"track_index": 0, "pan_mode": "stereo", "width": 0.5, "pan": -0.4}),
         ("set_track_mute", {"track_index": 0, "muted": True}),
         ("set_track_solo", {"track_index": 0, "soloed": True}),
         ("set_track_color", {"track_index": 0, "r": 200, "g": 30, "b": 30}),

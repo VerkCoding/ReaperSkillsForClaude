@@ -2,11 +2,12 @@
 name: reaper-audio-engineer
 description: >-
   Audio engineering rules for work inside REAPER: mixing, mastering, gain
-  staging, EQ decisions, compression and dynamics, panning and stereo width, 
-  automation, reverb sends, loudness and LUFS targets, and evaluating measurements.
+  staging, EQ decisions, compression and dynamics, automation, reverb sends,
+  loudness and LUFS targets, and evaluating measurements.
   Includes target numbers per source and plugin-specific workflows such as
-  sonible smart:chain. Use for audio decisions. Use reaper-mcp for calling tools,
-  running Lua, or debugging.
+  sonible smart:chain. Use for audio decisions. Use reaper-panning for pan
+  positions and stereo width, and reaper-mcp for calling tools, running Lua,
+  or debugging.
 ---
 
 # REAPER Audio Engineer
@@ -55,7 +56,7 @@ Report warnings and discrepancies. Confirm that track counts remain unchanged, n
 The following resources form a sequence. Reference the document corresponding to the current project stage.
 
 - **[Recording and intake](./references/audio-recording.md)**: Instructions for intake of sessions or raw files, checking for clipping, noise floor, phase offsets, timing offsets, and sample rate discrepancies.
-- **[Mixing](./references/audio-mixing.md)**: Instructions for levels, EQ, compression, gating, panning, sends, automation, buses, phase repair, timing repair, and frequency masking based on measurements.
+- **[Mixing](./references/audio-mixing.md)**: Instructions for levels, EQ, compression, gating, panning, sends, automation, buses, phase repair, timing repair, and frequency masking based on measurements. Where each part sits and how wide it is belongs to the [reaper-panning](../reaper-panning/SKILL.md) skill.
 - **[Mastering](./references/audio-mastering.md)**: Instructions for mix bus and master bus processing, spectral matching, limiting, LUFS targets, true peak targets, mid/side processing, bit depth, dither, stems, and deliverables.
 
 For instructions on retrieving measurements from REAPER, refer to **reaper-mcp**. The documents [Rendering Secrets](../reaper-mcp/references/rendering.md) and [Plugin Control](../reaper-mcp/references/plugin-control.md) describe potential errors in data collection.
@@ -75,7 +76,7 @@ Rules for topic documents:
 
 - They are written for hands-on work in the REAPER interface. Each ends with "Applying in this plugin", which maps its steps to MCP tools and the bridge. Act through that section; take numbers and reasoning from the body.
 - Their numbers are starting points (Tier 3, as defined in [Recording and intake](./references/audio-recording.md)) unless the document cites a standard. Measure before and after, as the process documents require.
-- Each number has one owner: levels, meters and loudness belong to gain staging; compressor settings to compression; reverb and its ducking to reverb. A plugin document takes its targets from those. When documents disagree, the owner wins; report the disagreement.
+- Each number has one owner: levels, meters and loudness belong to gain staging; compressor settings to compression; reverb and its ducking to reverb; pan positions, width, the mono low end and REAPER's pan law and pan modes to the [reaper-panning](../reaper-panning/SKILL.md) skill. A plugin document takes its targets from those. When documents disagree, the owner wins; report the disagreement.
 - Steps inside a plugin's own interface, such as smart:chain's learn button, are the user's to perform. Name the step, wait for confirmation, then measure.
 
 ## Troubleshooting

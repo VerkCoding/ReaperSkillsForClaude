@@ -724,6 +724,18 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
            expect=lambda p: None if approx(p.get("volume_db"), -6.0, 0.1) else f"read back {p.get('volume_db')}")
     b.call("set_track_pan", {"track_index": audio_ix, "pan": -0.5}, group=g,
            expect=lambda p: None if approx(p.get("pan"), -0.5, 0.01) else f"read back {p.get('pan')}")
+    # A stereo placement in one call: mode, then width, then pan.
+    b.call("set_track_pan", {"track_index": midi_ix, "pan_mode": "stereo", "width": 0.5, "pan": 0.25}, group=g,
+           expect=lambda p: None if (p.get("pan_mode"), p.get("width"), p.get("pan")) == ("stereo", 0.5, 0.25)
+           else f"read back {p.get('pan_mode')}, width {p.get('width')}, pan {p.get('pan')}")
+    b.confirm(lambda: tuple(RPR.GetMediaTrackInfo_Value(_track_id(midi_ix), key)
+                            for key in ("I_PANMODE", "D_WIDTH", "D_PAN")),
+              (5.0, 0.5, 0.25), "(I_PANMODE, D_WIDTH, D_PAN)")
+    # REAPER ignores pan and width in dual pan mode, so the tool refuses before writing anything.
+    b.call("set_track_pan", {"track_index": midi_ix, "pan_mode": "dual", "pan": 0.3}, group=g, refuses=True,
+           expect=lambda p: None if "dual" in str(p.get("error")) else f"refused for another reason: {p.get('error')}")
+    b.confirm(lambda: RPR.GetMediaTrackInfo_Value(_track_id(midi_ix), "I_PANMODE"), 5.0,
+              "I_PANMODE after the refused call")
     b.call("set_track_mute", {"track_index": audio_ix, "muted": True}, group=g,
            expect=lambda p: None if p.get("muted") is True else "mute did not stick")
     b.call("set_track_mute", {"track_index": audio_ix, "muted": False}, group=g)
@@ -737,9 +749,14 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
               lambda pair: pair[0] == pair[1],
               "I_CUSTOMCOLOR (stored, wanted)")
     b.call("get_track_info", {"track_index": audio_ix}, group=g, times=b.repeat,
-           expect=lambda p: None if approx(p.get("volume_db"), -6.0, 0.1) else "volume_db disagrees with what was set")
+           expect=lambda p: None if approx(p.get("volume_db"), -6.0, 0.1) and approx(p.get("pan"), -0.5, 0.01)
+           and p.get("pan_mode") in ("balance", "stereo", "dual", "classic") and p.get("pan_law_db") is not None
+           else "volume, pan, pan mode or pan law disagrees with the track")
     b.call("list_tracks", group=g, times=b.repeat,
-           expect=lambda p: None if p.get("count", 0) >= 2 else "bench tracks missing from the list")
+           expect=lambda p: None if p.get("count", 0) >= 2
+           and all({"pan_mode", "width", "pan_law_db"} <= set(t) for t in p.get("tracks", []))
+           and [(t["pan_mode"], t["width"]) for t in p["tracks"] if t["index"] == midi_ix] == [("stereo", 0.5)]
+           else "bench tracks or their pan mode and width missing from the list")
 
     # Append temporary track to verify delete functionality.
     throwaway = b.call("create_track", {"name": PREFIX + "throwaway"}, group=g)
@@ -959,7 +976,11 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     b.call("analyze_frequency_spectrum", group=g,
            expect=lambda p: None if len(p.get("frequency_bands", {})) == 7 else "expected seven bands")
     b.call("analyze_stereo_field", group=g,
-           expect=lambda p: None if -1.0 <= p.get("lr_correlation", 9) <= 1.0 else f"correlation {p.get('lr_correlation')}")
+           expect=lambda p: None if -1.0 <= p.get("lr_correlation", 9) <= 1.0
+           and None not in (p.get("left_rms_db"), p.get("right_rms_db"))
+           and approx(p.get("lr_balance_db"), p["left_rms_db"] - p["right_rms_db"], 0.11)
+           else f"correlation {p.get('lr_correlation')}, L {p.get('left_rms_db')}, R {p.get('right_rms_db')}, "
+                f"balance {p.get('lr_balance_db')}")
     b.call("analyze_transients", group=g,
            expect=lambda p: None if p.get("onset_count", 0) > 0 else "found no onsets in material with five bursts")
 

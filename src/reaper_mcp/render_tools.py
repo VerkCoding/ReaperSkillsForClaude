@@ -152,9 +152,15 @@ def _render_now() -> None:
     render then came out silent at the right length while every tool reported
     success. Action 40101 brings the media back online first; it records no undo
     point and leaves the dirty flag alone. The preference is the user's to keep.
+
+    Action 42230 closes the render window when the render ends. Action 41824 closes
+    it only when the user's "Automatically close when finished" preference
+    (renderclosewhendone bit 1) is on; with it off, a modal "Finished in ..." window
+    stayed open and this call never returned: analyze_loudness hung for 1,800 s on
+    REAPER 7.82. Both rendered a 260 s project in the same 66-68 s.
     """
     RPR.Main_OnCommand(40101, 0)  # Item: Set all media online
-    RPR.Main_OnCommand(41824, 0)  # Command 41824: File: Render project to disk (no dialog)
+    RPR.Main_OnCommand(42230, 0)  # File: Render project, using the most recent render settings, auto-close render dialog
 
 
 # A render whose peak stays below this is treated as silent. Plugins with no input
@@ -208,7 +214,7 @@ def _silence_warning(path: Path) -> str:
 def _nothing_rendered(target: Path) -> str:
     """Generate error description when render output is missing.
 
-    Command 41824 suppresses the start dialog but not the error dialog. Modal dialogs halt script execution.
+    Command 42230 closes the render window when the render ends, but not the error dialog. Modal dialogs halt script execution.
     """
     if target.parent.is_dir() and not any(target.parent.iterdir()):
         where = "output directory empty"

@@ -615,14 +615,14 @@ Execution timings per MCP tool call (measured on a Windows VM with an empty proj
 | No round trip (`play_project`, `stop_transport`) | ~30 ms |
 | Mutating calls (`set_track_volume`, `add_fx`) | ~150-190 ms |
 | Project info read | ~310 ms |
-| Track info read | ~375 ms |
-| List tracks (3 tracks) | ~595 ms |
+| Track info read (`get_track_info`, held since 1.6.0) | ~270 ms (benchmark, 2026-10-09) |
+| List tracks (`list_tracks`, held since 1.6.0, 2 tracks) | ~270 ms (benchmark, 2026-10-09) |
 | Render (3-second project) | ~1.9 s |
 | Analysis tool (render and measure) | ~1.9-3.5 s |
 | Parameter solve by display bisection | ~1-3 s per parameter |
 | A tool built on `inside_reaper` (`edit_items`, `get_envelope_points`, `list_markers`) | ~25-60 ms |
 
-Tool calls execute `get_project()` and `n_tracks`. `list_tracks` performs four ReaScript reads per track. Batch reads using the Lua bridge to minimize round trips.
+Tool calls execute `get_project()` and `n_tracks`. `list_tracks` makes about a dozen ReaScript reads per track, inside `inside_reaper`: on 21 tracks it took 178 ms called directly, against 5,414 ms before 1.6.0 held it. Batch other reads using the Lua bridge to minimize round trips.
 
 ## Benchmark Script
 

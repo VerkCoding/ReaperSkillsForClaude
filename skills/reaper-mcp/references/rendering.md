@@ -13,6 +13,7 @@ For an ordinary render to a file, use the `render_project`, `render_time_selecti
 - [Polling instead of sleeping](#polling-instead-of-sleeping)
 - [Measuring the result](#measuring-the-result)
 - [Rendering one bus in isolation](#rendering-one-bus-in-isolation)
+- [Measuring every gain stage in one render](#measuring-every-gain-stage-in-one-render)
 - [Timing](#timing)
 - [Diagnosing a silent render](#diagnosing-a-silent-render)
 
@@ -43,7 +44,7 @@ reaper.GetSetProjectInfo(0, "RENDER_TAILFLAG",   0, true)
 reaper.GetSetProjectInfo_String(0, "RENDER_FILE", DIR, true)
 reaper.GetSetProjectInfo_String(0, "RENDER_PATTERN", "chunk", true)
 
-reaper.Main_OnCommand(41824, 0)
+reaper.Main_OnCommand(42230, 0)   -- not 41824: see "The render window" below
 
 reaper.GetSet_LoopTimeRange(true, false, ts, te, false)
 for k, v in pairs(sv) do reaper.GetSetProjectInfo(0, k, v, true) end
@@ -55,6 +56,21 @@ wr("DONE")
 `RENDER_FILE` takes a directory. Providing a file path creates a folder with that name containing the render.
 
 The recipe above saves the fields it changes. Add any other field you touch to that list, and note which ones are strings: `RENDER_FORMAT`, `RENDER_FILE` and `RENDER_PATTERN` are read and written with `GetSetProjectInfo_String`, the rest with `GetSetProjectInfo`.
+
+### The render window: 42230, not 41824
+
+Both actions render with the most recent settings, but only `42230` ("..., auto-close render dialog") closes REAPER's render window when the render ends. `41824` closes it only when the user's preference says so: Preferences > the render window's "Automatically close when finished", stored as bit 1 of `renderclosewhendone` (`reaper.get_config_var_string("renderclosewhendone")`). With that bit off, the window stays open as a modal "Finished in ..." dialog, and everything waiting on REAPER stops:
+
+- the bridge command returns (the render itself finished), but every **later** bridge command times out until someone clicks Close;
+- an MCP tool that renders never returns, because its `Main_OnCommand(41824)` call is still inside the dialog. On REAPER 7.82 with `renderclosewhendone = 2097156` (bit 1 off), `analyze_loudness` from plugin 1.4.0 hung until the client gave up after 1,800 s. From 1.4.1, `_render_now` in `src/reaper_mcp/render_tools.py` calls `42230`, so every render and `analyze_*` tool closes the window.
+
+Measured 2026-10-08 on a 260 s project: a full render took 66-68 s with either action; `42230` returned with the window closed, `41824` left it open. Use `42230` in every bridge render, and do not change the user's preference.
+
+### Stems: `RENDER_SETTINGS` 3, and check `RENDER_TARGETS` first
+
+On REAPER 7.82, `RENDER_SETTINGS = 2` (documented as "stems only") with every track selected rendered **the master mix**, one file, and the render window said "Master mix". `RENDER_SETTINGS = 3` rendered one file per selected track. The difference is visible before rendering, at no cost: `GetSetProjectInfo_String(0, "RENDER_TARGETS", "", false)` lists the files the current settings would write, separated by `;`. With 48 tracks selected it listed 1 empty target for `2` and 48 files for `3`. Count the targets after setting up and before the render action, and abort when the count is wrong.
+
+A selected-tracks stem is the track's own post-fader output: folder tracks include their children, and nothing passes through the parent folders or the master chain. That differs from `render_stems`, which solos each track and renders the master, so its stems go through every parent bus and the master FX.
 
 ## Choosing the output format
 
@@ -118,7 +134,7 @@ Call `40101` before every render made through the bridge, as the recipe above do
 
 Use value 2 for section checks and 1 for final measurement. Save and restore the user's time selection.
 
-`RENDER_SETTINGS = 0` specifies the master mix. Other values render stems and produce multiple numbered files.
+`RENDER_SETTINGS = 0` specifies the master mix; `3` renders the selected tracks as stems ([above](#stems-render_settings-3-and-check-render_targets-first)). `2` rendered the master mix on REAPER 7.82.
 
 ## Polling instead of sleeping
 
@@ -167,6 +183,16 @@ reaper.SetMediaTrackInfo_Value(reaper.GetMasterTrack(0), "I_FXEN", 0)
 ```
 
 Return tracks can be muted similarly. Restore states within the same command.
+
+## Measuring every gain stage in one render
+
+Gain staging needs the level at every point of the chain: each track's output, each bus input and output, the premaster. One stem render of every track gives all of them: select all tracks, `RENDER_SETTINGS = 3`, pattern `$tracknumber`, 32-bit float WAV (`RENDER_FORMAT` `ZXZhdyAAAQ==`, so a stage above 0 dBFS is measured instead of clipped), then:
+
+- a track's or bus's **output** is its own stem;
+- a folder's **input** is the sample sum of its children's stems. Check the routing once: the premaster's input sum matched its own stem (only meters on it) to 0.1 dB, which also showed that a 4-channel group's sidechain channels 3/4 do not reach a 2-channel parent;
+- a stage whose gain is linear (a channel strip's output fader, a send) can be simulated by scaling stems and summing them, so a balance or headroom change can be computed before any write.
+
+Price, measured on 48 tracks, 260 s, about 90 plugins, 48 kHz: 60-68 s to render, 4.5 GB of float stems, about 3 minutes to measure in Python (peak, 4× true peak, LUFS-I, LUFS-S max, 300 ms RMS, sums). Delete the stems when done. Four such renders carried a whole gain-staging pass, where measuring stage by stage would have taken dozens.
 
 ## Timing
 

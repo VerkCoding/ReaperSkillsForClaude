@@ -48,11 +48,12 @@ One row per plugin, measured on REAPER 7.82, Windows, 2026-10-08. "Writes" is ho
 | `VST3: Nectar 4 Delay (iZotope)` | 27 | none | round (3) | callback | 0.05 s | display path drops units |
 | `CLAP: reVUe (Blenheim Sound)` | 4 | none | — | callback | <0.01 s | one control (Calibration) |
 | `VST3: soothe2 (oeksound)` | 60 | none | round (10) | at once | 0.17 s | display path drops units; kilo notation "1k", "2k5"; [indices](#known-index-traps) |
-| `VST3: SSLGChannel Stereo (Waves)` | 167 | 130 MIDI CC, empty display | — | at once | 0.02 s | |
-| `VST3: Scheps Omni Channel 2 Stereo (Waves)` | 1950 | 130 MIDI CC, empty display | round (27) | at once | 0.28 s | 1,629 `Insert` entries that format only their current value |
+| `VST3: SSLGChannel Stereo (Waves)` | 167 | 130 MIDI CC, empty display | — | at once | 0.02 s | CompThresh runs backwards; [indices](#known-index-traps) |
+| `VST3: Scheps Omni Channel 2 Stereo (Waves)` | 1950 | 130 MIDI CC, empty display | round (27) | at once | 0.28 s | 1,629 `Insert` entries that format only their current value; **L and R are separate parameters**; [indices](#known-index-traps) |
 | `VST3: GTR Amp Stereo (Waves)` | 155 | 130 MIDI CC, empty display | round (5) | at once | 0.53 s | |
 | `VST3: Acon Digital DeNoise 2 (Acon Digital)` | 27 | none | round (2) | at once | 0.01 s | display doubles units ("5.0 dB dB") |
-| `VST3: smartChain (sonible)` | 120 | none | **floor** (16) | at once | 0.62 s | Profile label off by one; [topic](../../reaper-audio-engineer/references/topics/plugin-sonible-smartchain.md) |
+| `VST3: smartChain (sonible)` | 120 | none | **floor** (16) | at once | 0.62 s | Profile label off by one; `110` Output Trim linear ±24 dB, `norm = (dB + 24) / 48`, one per instance; [topic](../../reaper-audio-engineer/references/topics/plugin-sonible-smartchain.md) |
+| `VST3: Pro-L 2 (FabFilter)` | 172 | MIDI entries 36-167 | round (5) | at once | — | `0` Gain linear 0 to +30 dB, `norm = dB / 30`; `18` Output Level −30 to 0 dBTP, −1.00 = 0.966517; `10` True Peak Limiting (on by default); `9` Oversampling, 4x = 0.4; `2` Lookahead linear 0-5 ms |
 | `VST3: Rev SPRING-636 (Arturia)` | 2196 | 2,080 "MIDI CC helper", plus MPE and program-change entries | **SDK** (17) | at once | 0.05 s | |
 | `VST3: kHs Reverb (Kilohearts)` | 2090 | 2,080 "MIDI", empty display | — | at once | 0.01 s | 7 real controls; U+202F before units; Decay runs "500 ms" to "30.0 s" |
 | `VST3: UADx Pure Plate Reverb (Universal Audio (UADx))` | 2093 | 2,080 "MIDI CC #\|#" | round (1) | at once | 0.13 s | 10 real controls |
@@ -61,6 +62,7 @@ One row per plugin, measured on REAPER 7.82, Windows, 2026-10-08. "Writes" is ho
 | `VST3: Youlean Loudness Meter 2 (Youlean)` | 5 | none | — | **ignored** (Preset) | 0.11 s | switches do not format |
 | `JS: Loudness Meter Peak/RMS/LUFS (Cockos)` | 26 | none | floor, in native units (3) | snaps | 0.03 s | steps reported in native units |
 | `VST: ReaEQ (Cockos)` | 19 | none | not measured | at once | — | [stock layouts](#stock-cockos-plugins) |
+| `JS: RBJ Stereo Image Filter` | 11 | none | — | at once | — | `1` S - HP (Scale), 0-100 in 0.05 steps, normalized = scale / 100; the corner frequency is not linear in the scale: table in [reaper-panning](../../reaper-panning/SKILL.md#mono-low-end-with-stock-fx) |
 
 ## Normalised versus native values
 
@@ -300,6 +302,10 @@ Vintage Compressor: `539` Bypass · `540` Threshold · `541` Ratio · `546` Auto
 
 **bx_subsynth**: `7` 24-36 Hz, `8` 36-56 Hz, `9` 56-80 Hz, `10` Subharmonics, `11` Low End,
 `14` Squeeze, `16` Drive. Generates a fundamental frequency.
+
+**Scheps Omni Channel 2 Stereo**: `2` Input Gain, `5` Output Gain (both −144 to +12 dB, 0 dB = 0.764, not linear: use `find_norm`), `10` Limit:Threshold (−30 to 0 dB, linear), `11` Limit:On, `49` Gate:Threshold, `84` Comp:Threshold (−50 to 0 dB, linear), `114`/`124` DeEsser thresholds (−48 to 0 dB, linear). **Every per-channel control has a separate `... R` parameter** (`4` Input Gain R, `6` Output Gain R, `50`, `85`, `115`, `125`, ...), and the plugin's own Link and ST switches do not tie them together for host writes: writing `5` alone moved only the left channel, so a −6.6 dB write measured −2.2 dB on a stereo stem ((10^−0.66 + 1)/2) and pulled the image right. Write both, then compare every `X` with `X R` in one bridge read. **The limiter sits before Output Gain**: a −6.8 → −14.3 dB threshold change with Output Gain −7.5 left the output peak at −21.8 = −14.3 − 7.5. Move the limit threshold with the level inside the plugin, not with the output.
+
+**SSLGChannel Stereo**: `33` InputLevel (−18 to +18 dB, linear), `30` Gain, the output fader (−24 to +12 dB, 0 dB = 0.6667, not linear), `2` CompThresh runs **backwards**, +10 dB at 0 to −20 dB at 1, `norm = (10 − dB) / 30`; `8` ExpThresh (−30 to +10 dB, not linear); `9` ExpRange (0 = expander does nothing); `13` DynamicBypass; `4` CompFast. Its compressor's make-up follows the threshold: lowering input and threshold together by 10.1 dB, which keeps the gain reduction, raised the output about 3 dB above the linear prediction. Measure the output after moving a threshold instead of computing it.
 
 **soothe2**: `3` mode, `4` depth, `5` sharpness, `9`-`13` low cut group. Four bands of six parameters from `14` (on / freq / sens / q / balance / mode), `38`-`42` high cut group, `50` mix, `51` trim, `53` bypass, `54` sidechain, `55` input trim. The per-band `sens` biases detection to specific resonances. An earlier version of this note put sidechain at `51`; the current VST3 (read on REAPER 7.82) has it at `54`, so confirm the name before writing.
 

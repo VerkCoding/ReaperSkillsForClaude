@@ -13,15 +13,16 @@ description: >-
 
 # REAPER for Claude: core setup
 
-This plugin contains three skills. This skill establishes the connection and determines which of the other two skills handles a request.
+This plugin contains four working skills. This skill establishes the connection and determines which of the other three handles a request.
 
-## The three skills
+## The four skills
 
 | Skill | Owns | Reach for it when |
 | --- | --- | --- |
 | **reaper-core-setup** (this one) | Installation, the health check, repair, and which surface you are on | Nothing works yet, or you cannot tell which layer is at fault |
 | **reaper-mcp** | The channel: MCP tools, the Lua bridge, handling silent failures and hangs | REAPER connection is required, or a call failed, hung, or returned abnormal data |
 | **reaper-audio-engineer** | The craft: measurement, interpretation, and subsequent actions | A working route exists and the task is to determine the next action |
+| **reaper-panning** | Stereo placement: pan positions, width, what stays centred and mono, REAPER's pan law and pan modes, panning by genre | A pan or width decision, or a question about how a genre is panned |
 
 **reaper-mcp determines if the command executed successfully. reaper-audio-engineer determines if the command was correct.** A silent render falls under reaper-mcp. A render that executes but is too quiet falls under reaper-audio-engineer.
 
@@ -29,7 +30,7 @@ Transitions between skills follow this order:
 
 1. **Here**, until the health check is clean.
 2. **reaper-mcp**, until you have a route and a value you trust.
-3. **reaper-audio-engineer**, to decide and to interpret.
+3. **reaper-audio-engineer**, to decide and to interpret; **reaper-panning** for pan and width decisions.
 4. Back to **reaper-mcp** to apply the change and read it back.
 
 If a measurement is anomalous (e.g., a bus reads silence, all sources report identical levels, a parameter does not change), treat it as a transport failure rather than an engineering result. Return to step 2. reaper-mcp lists specific transport failures.

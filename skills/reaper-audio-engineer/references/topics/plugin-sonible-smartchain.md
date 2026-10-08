@@ -28,6 +28,8 @@ flowchart TD
 
 Any level change above the smart:chain box throws the learn result off; any change below it only changes the loudness.
 
+**Measured: the Output Trim feeds the Soft Clipper, not the other way round.** On the VST3, REAPER 7.82, 2026-10-08, lowering parameter `110` Output Trim on a piano from +19.9 to +13.4 dB (−6.5) moved the track's 300 ms RMS by −5.8 dB and LUFS-I by −6.1, but its peak only by −2.1 dB (−1.7 → −3.8 dBFS); two electric guitars at −4.5 dB moved −2.4 dB in peak. A trim after the clipper would move every reading by the same amount. So the clipper (`108`, limit `109` at −1.5 dB, soft knee reaching several dB below the limit) shapes peaks after the trim, and a large positive Output Trim, such as Auto Level's +17 to +20 dB in that project, keeps the clipper working all the time: the "input too hot" sign of Step 7. Lower such a trim and move its gain to the next stage. Each instance holds its own `110`: writing one instance of a smart:chain group left its group-mates unchanged.
+
 ### Who does what
 
 | Gain staging task | Who | Tool | Reference target |

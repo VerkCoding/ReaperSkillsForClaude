@@ -462,6 +462,9 @@ Claude does not click menus or drag faders: every step above goes through an MCP
 | Step in this document | How to do it in the plugin |
 | --- | --- |
 | Measure one track (peak, RMS, LUFS-S max, true peak) | `render_stems` for the tracks to measure, then measure each file with `CalculateNormalization` through the bridge ([audio-measurement.md](../audio-measurement.md), "Loudness of a file") |
+| Measure every stage of the project at once (track outputs, bus inputs and outputs, premaster) | One selected-tracks stem render of all tracks through the bridge, 32-bit float; a bus input is the sum of its children's stems ([rendering.md](../../../reaper-mcp/references/rendering.md#measuring-every-gain-stage-in-one-render)). On a 48-track project it took 60-68 s per pass, and four passes carried a whole gain-staging job |
+| Move a gain that sits before a compressor, gate, de-esser or limiter | Shift that processor's threshold by the same dB in the same pass (section 6.3), then measure: the gain reduction holds, only drive-dependent colour changes. Check which side of a plugin's output gain its limiter sits on before moving either ([plugin-control.md](../../../reaper-mcp/references/plugin-control.md#known-index-traps), Scheps Omni Channel) |
+| Faders locked at 0 dB | Put the balance in the last linear gain before each fader (a channel strip's output), and move that group's reverb sends by the same dB so the dry/wet ratio holds. Simulate the move first by scaling the group stems and summing them |
 | Measure the level going into a plugin, before FX | A stem includes the track's FX by default. Bypass them with `bypass_fx` before `render_stems`, then turn them back on |
 | Master: LUFS-I, sample peak, true peak | `analyze_loudness`. Clipping: `detect_clipping` |
 | Master LUFS-S max, LRA | No tool: render with `render_project` and measure the file (LUFS-S max is mode 5 of `CalculateNormalization`) |

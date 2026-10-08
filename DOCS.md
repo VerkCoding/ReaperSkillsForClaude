@@ -134,7 +134,8 @@ ReaperSkillsForClaude/
 ├── skills/                         
 │   ├── reaper-core-setup/          
 │   ├── reaper-mcp/                 
-│   └── reaper-audio-engineer/      
+│   ├── reaper-audio-engineer/      
+│   └── reaper-panning/             
 ├── scripts/                        
 │   ├── launch_server.py            
 │   ├── bootstrap.py                

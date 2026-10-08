@@ -11,6 +11,7 @@ The plugin grows by adding documents, not skills. Audio knowledge goes into topi
 | Parameter indices, value mappings or traps for driving a plugin from code | A row in the registry, and a section if needed, in `skills/reaper-mcp/references/plugin-control.md` | FabFilter Pro-C 3 |
 | A rule that holds for every plugin exchange | `skills/reaper-mcp/references/plugin-protocol.md`, with the measurement behind it | Step 3, translate the intent |
 | A new step in measuring and verifying | The process documents: `audio-recording.md`, `audio-mixing.md`, `audio-mastering.md` | G-stages in `audio-mixing.md` |
+| Pan positions, width, the mono low end, REAPER's pan law and pan modes, panning by genre | `skills/reaper-panning/`: rules and measured REAPER behaviour in its `SKILL.md`, genres in `references/genres.md` | Stereo tracks in balance mode |
 | A different job with its own triggers, not audio decisions in REAPER | A new skill (section 6) | — |
 
 Default to a topic document. A topic costs nothing until Claude opens it, while every skill's description sits in context all the time and competes with the others to trigger. Twenty topics under one skill trigger more reliably than twenty skills with overlapping descriptions.
@@ -39,6 +40,7 @@ When two documents give different values, the owner wins. Fix the other document
 | Input levels per source and stage, meters, headroom, loudness and true peak targets | `topics/gain-staging.md` |
 | Compressor type, ratio, attack, release, knee, gain reduction, sidechain, parallel | `topics/compression.md` |
 | Reverb type, decay, pre-delay, the reverb bus set, reverb ducking | `topics/reverb.md` |
+| Pan positions and width, what stays centred and mono, pan law and pan mode behaviour, genre panning | `skills/reaper-panning/` |
 | Measurement method, evidence tiers, verification | The process documents |
 | A plugin's own workflow | Its `plugin-*.md`, taking targets from the owners above |
 

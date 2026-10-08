@@ -39,11 +39,71 @@ def set_solo(track, soloed: bool) -> bool:
     return bool(RPR.GetMediaTrackInfo_Value(track.id, "I_SOLO"))
 
 
-def track_state(track) -> dict:
-    """Read track volume, pan, mute, and solo states."""
+# I_PANMODE values. -1 follows the project; 0 is the deprecated 3.x balance mode.
+PAN_MODE_NAMES = {0: "classic", 3: "balance", 5: "stereo", 6: "dual"}
+PAN_MODE_VALUES = {"project": -1, "balance": 3, "stereo": 5, "dual": 6}
+
+
+def _config_number(name: str):
+    ok, _, text, _ = RPR.get_config_var_string(name, "", 64)
+    try:
+        return float(text) if ok else None
+    except ValueError:
+        return None
+
+
+def project_pan_defaults() -> tuple:
+    """Read the active project's pan mode (I_PANMODE value) and pan law (gain).
+
+    No API returns them, but REAPER keeps the active project's settings in the
+    config variables "panmode" and "panlaw": loading a project saved with
+    PANMODE 5 and PANLAW 0.708 changed both. Either is None when unreadable.
+    """
+    mode = _config_number("panmode")
+    return (int(mode) if mode is not None else None), _config_number("panlaw")
+
+
+def pan_mode_name(value) -> str:
+    return PAN_MODE_NAMES.get(value, f"mode {value}") if value is not None else "project"
+
+
+def pan_state(track, project_pan: tuple) -> dict:
+    """Read a track's pan, pan mode, width and pan law, resolving "follow the project".
+
+    pan_law_db is 20*log10 of the law's gain: 0.0 for the 0 dB law, -3.0 for -3 dB.
+    REAPER stores its "with gain compensation" laws above 1, so they read positive.
+    In dual pan mode REAPER ignores D_PAN and D_WIDTH (measured), so the two dual
+    pans are added.
+    """
+    mode = int(RPR.GetMediaTrackInfo_Value(track.id, "I_PANMODE"))
+    law = RPR.GetMediaTrackInfo_Value(track.id, "D_PANLAW")
+    mode_from_project, law_from_project = mode < 0, law < 0
+    if mode_from_project:
+        mode = project_pan[0]
+    if law_from_project:
+        law = project_pan[1]
+    state = {
+        "pan": RPR.GetMediaTrackInfo_Value(track.id, "D_PAN"),
+        "pan_mode": pan_mode_name(mode),
+        "pan_mode_from_project": mode_from_project,
+        "width": RPR.GetMediaTrackInfo_Value(track.id, "D_WIDTH"),
+        "pan_law_db": round(linear_to_db(law), 2) if law is not None else None,
+        "pan_law_from_project": law_from_project,
+    }
+    if mode == 6:
+        state["dual_pan"] = [RPR.GetMediaTrackInfo_Value(track.id, "D_DUALPANL"),
+                             RPR.GetMediaTrackInfo_Value(track.id, "D_DUALPANR")]
+    return state
+
+
+def track_state(track, project_pan: tuple | None = None) -> dict:
+    """Read track volume, pan, pan mode, width, pan law, mute, and solo states.
+
+    Pass project_pan_defaults() when reading many tracks, to read it once.
+    """
     return {
         "volume_db": get_volume_db(track),
-        "pan": RPR.GetMediaTrackInfo_Value(track.id, "D_PAN"),
+        **pan_state(track, project_pan or project_pan_defaults()),
         "muted": bool(RPR.GetMediaTrackInfo_Value(track.id, "B_MUTE")),
         "soloed": bool(RPR.GetMediaTrackInfo_Value(track.id, "I_SOLO")),
     }

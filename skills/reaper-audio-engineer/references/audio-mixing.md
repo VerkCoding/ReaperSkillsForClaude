@@ -113,7 +113,7 @@ If correlation is negative after delay compensation, invert polarity and remeasu
 
 **Intent verification.** Compare relative levels to the brief's specifications or a level-matched reference file. State the reference used. (Tier 3 references vary by genre).
 
-**Pan.** Apply with `set_track_pan`. Verify mono compatibility by measuring correlation and mono fold level versus stereo level.
+**Pan.** Where each part sits, how wide it is and how the genre is usually panned: [reaper-panning](../../reaper-panning/SKILL.md). Apply with `set_track_pan`; a stereo track takes `pan_mode` "stereo" and `width` in the same call, as described there. Verify with the checks in [Checking a pan decision](../../reaper-panning/SKILL.md#checking-a-pan-decision): mono fold level, correlation, and the balance between left and right.
 
 **Exit condition for G2:** Relative level table aligns with stated intent and tolerance.
 

@@ -216,7 +216,7 @@ def register_tools(mcp):
     @mcp.tool()
     def analyze_stereo_field() -> dict:
         """
-        Renders the project and measures stereo width and mono compatibility.
+        Renders the project and measures stereo width, mono compatibility and L/R balance.
         """
         try:
             import soundfile as sf
@@ -263,6 +263,14 @@ def register_tools(mcp):
             else:
                 correlation = round(float(np.corrcoef(L, R)[0, 1]), 3)
 
+            # A silent channel has no level in dB, and the guard constant would make
+            # the balance read as a 100 dB difference. It is reported as silent instead.
+            left_rms = float(np.sqrt(np.mean(L ** 2)))
+            right_rms = float(np.sqrt(np.mean(R ** 2)))
+            silent = [name for name, rms in (("left", left_rms), ("right", right_rms)) if rms < 1e-6]
+            left_db = None if "left" in silent else round(float(20 * np.log10(left_rms)), 1)
+            right_db = None if "right" in silent else round(float(20 * np.log10(right_rms)), 1)
+
             return {
                 "success": True,
                 "stereo_width_ratio": width_ratio,
@@ -270,8 +278,13 @@ def register_tools(mcp):
                 "lr_correlation": correlation,
                 "mid_rms_db": round(float(20 * np.log10(mid_rms + 1e-10)), 1),
                 "side_rms_db": round(float(20 * np.log10(side_rms + 1e-10)), 1),
+                "left_rms_db": left_db,
+                "right_rms_db": right_db,
+                "lr_balance_db": round(left_db - right_db, 1) if not silent else None,
+                "balance_note": f"{silent[0]} channel is silent" if len(silent) == 1 else None,
                 "mono_compatible": correlation > 0.0 if correlation is not None else None,
-                "notes": "width_ratio: 0.0 = mono, >0.5 = stereo. lr_correlation: 1.0 = mono, 0.0 = stereo, <0.0 = phase issues.",
+                "notes": "width_ratio: 0.0 = mono, >0.5 = stereo. lr_correlation: 1.0 = mono, 0.0 = stereo, <0.0 = phase issues. "
+                         "lr_balance_db: left minus right RMS, positive = left louder.",
             }
         except Exception as e:
             return {"success": False, "error": str(e)}

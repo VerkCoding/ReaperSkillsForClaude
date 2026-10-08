@@ -179,6 +179,8 @@ Use reaper-core-setup for installation, health checks, and repairs.
 | Symptom | Cause |
 | --- | --- |
 | Routes hang with no errors | A modal dialog is open in REAPER. |
+| A render or `analyze_*` tool never returns; after a bridge render every later bridge command times out | REAPER's "Finished in ..." render window stayed open: action `41824` closes it only when the user's preference does (`renderclosewhendone` bit 1), and the 1.4.0 tools and older bridge recipes use `41824`. Ask the user to click Close, update the plugin to 1.4.1 or later (its tools use `42230`), and render through the bridge with `42230`: [The render window](./references/rendering.md#the-render-window-42230-not-41824). |
+| A stem render through the bridge writes one master file | `RENDER_SETTINGS = 2` rendered the master mix on REAPER 7.82; use `3` and count `RENDER_TARGETS` first: [Stems](./references/rendering.md#stems-render_settings-3-and-check-render_targets-first). |
 | Tool reports success but nothing changed | A reapy attribute assignment did not reach REAPER. Read the value back. |
 | No REAPER tools available | The MCP server did not start. Call `reaper_setup_status` or run the health check. No local server is available on claude.ai. |
 | MCP tools fail with socket error | REAPER is not running, or the API is not configured. Persistent failures indicate configuration issues. |

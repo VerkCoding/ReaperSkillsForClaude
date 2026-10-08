@@ -47,7 +47,7 @@ Tool constraints:
 | `analyze_loudness` | LUFS-I and dBTP per ITU-R BS.1770 | Integrated value for the full programme. Does not identify specific high-amplitude sections. |
 | `analyze_frequency_spectrum` | RMS across 7 fixed bands | Resolution is insufficient for identifying narrow resonances. Use for broad spectral balance assessment. |
 | `analyze_dynamics` | RMS, peak, crest factor, dynamic range | Crest factor is dependent on the measurement window. Comparisons require identical window lengths. |
-| `analyze_stereo_field` | mid/side balance, width, L/R correlation | Averaged over the programme duration. Brief out-of-phase segments may not affect the average significantly. |
+| `analyze_stereo_field` | mid/side balance, width, L/R correlation, L/R level balance | Averaged over the programme duration. Brief out-of-phase segments may not affect the average significantly. |
 | `analyze_transients` | Up to 100 onsets | Maximum limit of 100 onsets. For extended audio, measure using a specific time selection. |
 | `detect_clipping` | Samples at or exceeding 0 dBFS | Detects sample peaks, not true peaks. Does not detect inter-sample peaks. |
 
