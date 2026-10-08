@@ -3,7 +3,8 @@ import time
 import logging
 from pathlib import Path
 
-from reaper_mcp.connection import RPR, get_project, reapy, records_undo, undo_step
+from reaper_mcp.connection import RPR, get_project, held, reapy, records_undo, undo_step
+from reaper_mcp.marker_tools import _read as _read_marker
 from reaper_mcp.units import project_tempo
 
 logger = logging.getLogger("reaper_mcp.project_tools")
@@ -233,21 +234,17 @@ def register_tools(mcp):
         """Get information about the current project: name, path, tempo, tracks, length."""
         try:
             project = get_project()
-            markers = []
-            try:
-                for i in range(project.n_markers):
-                    m = project.markers[i]
-                    markers.append({"index": i, "name": m.name, "position": m.position})
-            except Exception:
-                pass
-
-            regions = []
-            try:
-                for i in range(project.n_regions):
-                    r = project.regions[i]
-                    regions.append({"index": i, "name": r.name, "start": r.start, "end": r.end})
-            except Exception:
-                pass
+            # Read through the same ProjectMarker API as list_markers. The reapy marker
+            # lists raised here and the error was swallowed, so a project with markers
+            # reported none. index is the place in time order that edit_markers takes.
+            markers, regions = [], []
+            with held():
+                for i in range(RPR.GetNumRegionsOrMarkers(0)):
+                    entry = _read_marker(RPR.GetRegionOrMarker(0, i, ""))
+                    if entry.pop("region", False):
+                        regions.append(entry)
+                    else:
+                        markers.append(entry)
 
             num, denom = _read_time_signature()
             return {

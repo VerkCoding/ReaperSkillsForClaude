@@ -329,7 +329,11 @@ def register_tools(mcp):
                     "envelope": env.name,
                     "unit": env.unit,
                     "created": created,
+                    # activated is True only when an existing envelope had to be switched
+                    # on; a fresh one is created active, so it read False for a working
+                    # envelope. active is the state REAPER holds now.
                     "activated": activated,
+                    "active": env.active,
                     "added": added,
                     "errors": errors,
                     "point_count": len(stored_points),

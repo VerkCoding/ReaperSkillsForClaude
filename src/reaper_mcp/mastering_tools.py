@@ -2,6 +2,7 @@ import os
 import logging
 
 from reaper_mcp.connection import RPR, get_project, reapy, records_undo, undo_step
+from reaper_mcp.fx_tools import _param_reply, write_param
 from reaper_mcp.units import get_volume_db, set_volume_db
 
 logger = logging.getLogger("reaper_mcp.mastering_tools")
@@ -176,9 +177,13 @@ def register_tools(mcp):
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
-    @records_undo()
+    @records_undo(own_step=True)
     def set_master_fx_parameter(fx_index: int, param_index: int, value: float) -> dict:
-        """Set a normalized parameter (0.0-1.0) on a master track FX plugin."""
+        """Set a normalized parameter (0.0-1.0) on a master track FX plugin.
+
+        Confirmed like set_fx_parameter: plugins that take writes in their audio callback are
+        followed across cycles, with the audio engine opened for the write when REAPER has closed it.
+        """
         try:
             if not 0.0 <= value <= 1.0:
                 return {"success": False, "error": f"Value must be 0.0-1.0, got {value}"}
@@ -191,13 +196,12 @@ def register_tools(mcp):
             param_name = fx.params[param_index].name
 
             # Direct attribute assignment targets a throwaway float subclass.
-            # RPR.TrackFX_SetParamNormalized ensures the assignment is passed to the REAPER API.
-            RPR.TrackFX_SetParamNormalized(master.id, fx_index, param_index, value)
-            applied = RPR.TrackFX_GetParamNormalized(master.id, fx_index, param_index)
+            # write_param goes through RPR.TrackFX_SetParamNormalized and reads back across cycles.
+            written = write_param(master.id, fx_index, param_index, value, "set_master_fx_parameter")
 
             # REAPER returns -1 from the readback when it refused the write, which was
             # reported as though it were the value now in effect.
-            if applied < 0.0:
+            if "error" in written:
                 return {
                     "success": False,
                     "error": (
@@ -206,14 +210,11 @@ def register_tools(mcp):
                     ),
                 }
 
-            return {
-                "success": True,
+            return _param_reply({
                 "fx_index": fx_index,
                 "param_index": param_index,
                 "param_name": param_name,
-                "value": applied,
-                "requested": value,
-            }
+            }, written, value)
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -306,7 +307,7 @@ def register_tools(mcp):
             import soundfile as sf
             import pyloudnorm as pyln
             import numpy as np
-            from reaper_mcp.render_tools import render_to_temp_file
+            from reaper_mcp.render_tools import render_to_temp_file, silent_render_error
 
             empty = _nothing_to_measure()
             if empty:
@@ -315,6 +316,9 @@ def register_tools(mcp):
             tmp = render_to_temp_file()
             try:
                 data, rate = sf.read(tmp)
+                silent = silent_render_error(data)
+                if silent:
+                    return silent
                 meter = pyln.Meter(rate)
                 integrated = float(meter.integrated_loudness(data))
                 peak_linear = float(np.max(np.abs(data)))
@@ -343,7 +347,7 @@ def register_tools(mcp):
         try:
             import soundfile as sf
             import pyloudnorm as pyln
-            from reaper_mcp.render_tools import render_to_temp_file
+            from reaper_mcp.render_tools import render_to_temp_file, silent_render_error
 
             empty = _nothing_to_measure()
             if empty:
@@ -352,6 +356,9 @@ def register_tools(mcp):
             tmp = render_to_temp_file()
             try:
                 data, rate = sf.read(tmp)
+                silent = silent_render_error(data)
+                if silent:
+                    return silent
                 meter = pyln.Meter(rate)
                 current_lufs = float(meter.integrated_loudness(data))
                 current_peak_db = _true_peak_db(data, rate)

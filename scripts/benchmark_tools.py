@@ -820,10 +820,16 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
                expect=lambda p: None if p.get("fx") else "no FX listed after add_fx")
         b.call("get_fx_parameters", {"track_index": audio_ix, "fx_index": fx_ix}, group=g,
                expect=lambda p: None if p.get("parameters") else "no parameters returned")
+        b.call("get_fx_parameters",
+               {"track_index": audio_ix, "fx_index": fx_ix, "name_contains": "freq", "max_params": 2}, group=g,
+               expect=lambda p: None if len(p.get("parameters", [])) == 2 and p.get("truncated")
+               and all("freq" in x["name"].lower() for x in p["parameters"])
+               else f"filter and page gave {[x.get('name') for x in p.get('parameters', [])]}, "
+                    f"truncated={p.get('truncated')!r}")
         b.call("set_fx_parameter",
                {"track_index": audio_ix, "fx_index": fx_ix, "param_index": 0, "value": 0.6}, group=g,
-               expect=lambda p: None if approx(p.get("value"), 0.6, 0.02)
-               else f"asked for 0.6, REAPER kept {p.get('value')}")
+               expect=lambda p: None if approx(p.get("value"), 0.6, 0.02) and "unconfirmed" not in p
+               else f"asked for 0.6, REAPER kept {p.get('value')} ({p.get('unconfirmed', '')})")
         # Verify parameter setting via secondary read to ensure REAPER state update.
         stored = (b.raw("get_fx_parameters",
                         {"track_index": audio_ix, "fx_index": fx_ix})
@@ -847,6 +853,22 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
         fx_before = _fx_count(audio_ix)
         b.call("remove_fx", {"track_index": audio_ix, "fx_index": fx_ix}, group=g)
         b.confirm(lambda: _fx_count(audio_ix), fx_before - 1, "the track FX count")
+
+        # A plugin that takes host writes in its audio callback. 1.3.0 read the value
+        # back in the same cycle, reported the old one and could leave no undo step,
+        # and with REAPER's audio engine closed in the background the write never landed.
+        late = RPR.TrackFX_AddByName(_track_id(audio_ix), "VST3: Ozone 12 (iZotope)", False, -1)
+        if late >= 0:
+            time.sleep(4.0)  # verified with this wait after loading; sooner was not tested
+            b.call("set_fx_parameter",
+                   {"track_index": audio_ix, "fx_index": late, "param_index": 120, "value": 0.62}, group=g,
+                   expect=lambda p: None if approx(p.get("value"), 0.62, 0.001) and "unconfirmed" not in p
+                   else f"Ozone 12: asked for 0.62, got {p.get('value')} ({p.get('unconfirmed', '')})")
+            b.confirm(lambda: RPR.TrackFX_GetParamNormalized(_track_id(audio_ix), late, 120), 0.62,
+                      "Ozone 12's Maximizer Input Gain", tol=0.001)
+            RPR.TrackFX_Delete(_track_id(audio_ix), late)
+        else:
+            b.skip("set_fx_parameter", g, "Ozone 12 is not installed (late-applying plugin case)")
     else:
         # Skip FX operations if creation failed.
         for tool in ("list_track_fx", "get_fx_parameters", "set_fx_parameter",
@@ -903,14 +925,33 @@ def run_plan(b: Bench, workdir: Path, destructive: bool) -> None:
     b.call("render_time_selection",
            {"output_path": str(workdir / "slice.wav"), "start": 0.0, "end": 1.0}, group=g,
            expect=rendered_bytes)
+    # The user's solo states survive render_stems: 1.3.0 cleared every solo afterwards.
+    # Solo-in-place (2) on the silent MIDI track checks that the exact value comes back.
+    RPR.SetMediaTrackInfo_Value(_track_id(midi_ix), "I_SOLO", 2)
     b.call("render_stems",
            {"output_directory": str(workdir / "stems"), "track_indices": [audio_ix]}, group=g,
            expect=lambda p: None if all(s.get("exists") for s in p.get("stems", [{}])) else "a stem file is missing")
+    b.confirm(lambda: (RPR.GetMediaTrackInfo_Value(_track_id(midi_ix), "I_SOLO"),
+                       RPR.GetMediaTrackInfo_Value(_track_id(audio_ix), "I_SOLO")),
+              (2.0, 0.0), "the solo states (MIDI track, audio track) after render_stems")
+    RPR.SetMediaTrackInfo_Value(_track_id(midi_ix), "I_SOLO", 0)
 
     # --- analysis ----------------------------------------------------------
     g = "analysis"
+    # With "Set media items offline when application is not active" on, REAPER takes
+    # media offline whenever it loses focus, and 1.3.0 rendered silence while reporting
+    # success. Taking the media offline first checks that the render brings it back.
+    RPR.Main_OnCommand(40100, 0)  # Item: Set all media offline
     b.call("analyze_loudness", group=g,
            expect=lambda p: None if -70 < p.get("integrated_lufs", 0) < 0 else f"implausible LUFS {p.get('integrated_lufs')}")
+    if original_track_count == 0:
+        # Only the bench tracks make sound here, so muting the audio one silences the mix.
+        RPR.SetMediaTrackInfo_Value(_track_id(audio_ix), "B_MUTE", 1)
+        b.call("detect_clipping", group=g, refuses=True,
+               expect=lambda p: None if p.get("silent") else f"refused, but not as silent: {p.get('error')}")
+        RPR.SetMediaTrackInfo_Value(_track_id(audio_ix), "B_MUTE", 0)
+    else:
+        b.skip("detect_clipping", g, "silent-render refusal needs a project holding only bench tracks (--scratch)")
     b.call("detect_clipping", group=g,
            expect=lambda p: None if p.get("clipping_detected") is False else "reported clipping on -1.9 dBFS material")
     b.call("analyze_dynamics", group=g,
@@ -1081,8 +1122,10 @@ def run_edit_plan(b: Bench) -> None:
 
     # --- envelopes ---------------------------------------------------------
     g = "envelope"
+    # A fresh envelope is created active, which 1.3.0 reported only as activated: false.
     b.call("add_envelope_points",
-           {"track_index": a, "points": [{"time": 1.0, "value": 0.5}, {"time": 2.0, "db": -12.0}]}, group=g)
+           {"track_index": a, "points": [{"time": 1.0, "value": 0.5}, {"time": 2.0, "db": -12.0}]}, group=g,
+           expect=lambda p: None if p.get("active") is True else f"active is {p.get('active')!r}")
     # REAPER's display is the independent unit check: a raw 0.5 would read -inf dB.
     b.confirm(lambda: (_point_display(a, "Volume", 1.0), _point_display(a, "Volume", 2.0)),
               lambda pair: pair[0].startswith("-6.0") and pair[1].startswith("-12.0"),
@@ -1137,6 +1180,11 @@ def run_edit_plan(b: Bench) -> None:
     b.call("list_markers", group=g, times=b.repeat,
            expect=lambda p: None if {EDIT + "m", EDIT + "r"} <= {m.get("name") for m in p.get("markers", [])}
            else "the new markers are not listed")
+    # 1.3.0 read markers through reapy, swallowed the error and reported none.
+    b.call("get_project_info", group=g,
+           expect=lambda p: None if EDIT + "m" in {m.get("name") for m in p.get("markers", [])}
+           and EDIT + "r" in {r.get("name") for r in p.get("regions", [])}
+           else f"get_project_info lists markers {p.get('markers')} and regions {p.get('regions')}")
     ix = {e.get("name"): e.get("index") for e in added.get("added", [])}
     if len(ix) == 2:
         # Moving the region in front of the marker swaps their indices; both entries

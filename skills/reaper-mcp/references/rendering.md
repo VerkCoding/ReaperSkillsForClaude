@@ -104,7 +104,7 @@ Actions to manage media online status:
 | `40100` | set all media offline |
 | `40101` | set all media online |
 
-Ensure `40101` is called before rendering. The user can disable `offlineinact` in Preferences, but `40101` should be called to ensure functionality on unmodified installations.
+Call `40101` before every render made through the bridge, as the recipe above does. The MCP render and analysis tools call it themselves since 1.3.1; 1.3.0 did not, and needed it as a separate bridge command right before the tool call. The procedure and its check are in [Renders through the bridge](../SKILL.md#renders-through-the-bridge). Leave `offlineinact` as the user set it; some users keep it on deliberately.
 
 ## Bounds flags
 
@@ -180,6 +180,22 @@ Example timings on a 62-track project with approximately 90 plugins at 44.1 kHz:
 | 195 s | ~100 s |
 
 Performance is approximately 2× real time. Use partial renders for iteration and full renders for final verification.
+
+### The audio device around a render: normal, not a fault
+
+REAPER stops the audio device before an offline render and starts it again afterwards. How long that takes is up to the audio driver, and it adds to every render while the engine is running, however short the render is. Measured on REAPER 7.82 with a Focusrite USB ASIO driver (64 samples, 48 kHz), rendering 3 s of audio:
+
+| Audio engine just before the render | Wall time | Where it goes |
+|---|---|---|
+| Closed and settled | 1.1-1.4 s | the render itself |
+| Closed moments ago | ~9.6 s | waiting for the driver to finish closing |
+| Running | 18.5-18.8 s | ~8 s stopping the driver, 0.3 s rendering, ~8.7 s starting it again |
+
+Where the output goes (Temp or another drive) and whether the project holds media made no difference. REAPER counts the wait as render time: its window reported "Finished in 0:08 (0.4x realtime)" for 3 s of audio written in 0.3 s.
+
+The engine is running while REAPER has focus, while the transport plays or records, and after anything opened it while REAPER was in the background (playback, `Audio_Init`): with "Close audio device when stopped and application is inactive" on, REAPER closes it only at the moment it loses focus. `reaper.Audio_IsRunning()` tells which case a render will meet. The same driver timing is why opening the engine with `Audio_Init` took 0.6 s once and about 9 s another time.
+
+This is how REAPER and the driver behave; there is nothing for the tools to fix. Closing the engine before a render would not help, since a render straight after closing still waits about 10 s, and it would change the user's audio state. Treat the wait as a fixed price per render while the engine runs, and make each render count: one render for several measurements, not one render per measurement. Measure the overhead on a new machine or driver once before planning many renders.
 
 ## Diagnosing a silent render
 

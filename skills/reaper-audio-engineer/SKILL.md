@@ -19,7 +19,7 @@ This profile handles the analysis of measurements and the required changes. Refe
 
 Measure audio data prior to making changes. Verify audio data after making changes.
 
-- **Confirm parameters prior to modification.** Locate an FX instance by index instead of name. Read a parameter's formatted value before modifying it to ensure the correct index is targeted. 
+- **Confirm parameters prior to modification.** Locate an FX instance by index instead of name. Read a parameter's formatted value before modifying it to ensure the correct index is targeted. Every plugin read and write follows the [Plugin protocol](../reaper-mcp/references/plugin-protocol.md). 
 - **Verify parameters after modification.** Read the formatted value again after setting it. A reported success from a tool does not guarantee the value was applied: three tools were found reporting the requested value back while leaving REAPER untouched, and others accepted out-of-range input that REAPER silently truncated. Refer to [reaper-mcp](../reaper-mcp/SKILL.md) for details.
 - **Measure in the right units.** A sample peak is not a true peak, an FFT magnitude is not a band level, and a mono sum is not a stereo measurement. Each of these has produced a confident wrong number. Refer to [Measurement Toolkit](./references/audio-measurement.md#traps-that-produce-confident-wrong-numbers).
 - **Perform single modifications.** Band levels are relative. Applying a cut to multiple bands simultaneously alters the overall balance. Execute one change and measure again to isolate the effect.
@@ -30,6 +30,7 @@ Measure audio data prior to making changes. Verify audio data after making chang
 
 Measurements must follow specific constraints to be valid:
 
+- **Media must be online when you render.** With REAPER's `offlineinact` preference on, a render made while REAPER is unfocused comes out silent. Since 1.3.1 the render and `analyze_*` tools bring media online themselves and refuse a silent render (`silent: true`); for a render through the bridge, run action 40101 first. Leave the preference as the user set it: [REAPER in the background](../reaper-mcp/SKILL.md#reaper-in-the-background).
 - **Render buses for measurement.** Audio accessors only operate on items located on their specific track. An FX-only bus will return silence. Render the bus output to measure it.
 - **Apply gates prior to averaging.** Silent periods between audio signals will lower the average measurement.
 - **Use short sections for testing.** Render short segments (e.g., 20 seconds) to evaluate individual changes. Use full-song renders for final output verification.

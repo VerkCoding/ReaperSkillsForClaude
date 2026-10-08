@@ -44,7 +44,10 @@ Every `analyze_*` executes a full project render and measures the master output.
 **Multiple element measurement:** Execute `render_stems` once across the required tracks, then measure each file. 
 
 Stem characteristics:
-- A stem includes track FX but excludes bus or master processing.
+- `render_stems` solos one track at a time and renders the master mix. A stem therefore passes through the track's FX, **every parent folder bus, any premaster folder and the master FX**. A compressor on the parent bus processes the soloed child on its own, which is not how it behaves with the siblings playing: a +3.0 dB ride on a lead vocal came through a vocal-group SSL G Channel at 8:1 as +1.5 dB. Measure the balance between groups with group stems, not child stems.
+- **Bypass a limiter or maximizer on the master or premaster before rendering stems**, and turn it back on afterwards, or every stem is limited.
+- Processing keyed from another track does not react when the solo silences the key. An instrument-group stem rendered while the vocal that keys its soothe2 or ducking compressor is muted reads the un-ducked level, so the stem balance understates the vocal by the amount of ducking.
+- `render_stems` puts every track's solo state back when it finishes, solo-in-place modes included, since 1.3.1. Version 1.3.0 cleared every solo instead; with it, record the user's solos first and restore them.
 - To measure unprocessed audio, bypass track FX before rendering and restore afterwards.
 - A stem is a snapshot. It is invalidated after subsequent processing changes.
 

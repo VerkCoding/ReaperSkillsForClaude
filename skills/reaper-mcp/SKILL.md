@@ -24,6 +24,49 @@ On claude.ai in the browser, neither route is available. State this limitation a
 
 If REAPER tools are unavailable, call `reaper_setup_status` to identify the diagnostic status. Otherwise, use reaper-core-setup.
 
+## REAPER in the background
+
+Claude drives REAPER from another window, so REAPER is almost never the focused application. Two of REAPER's preferences act on exactly that. Some users keep both on deliberately: leave them as they are, and do not ask the user to change them.
+
+| Preference | In the background it | Which breaks | Handled since 1.3.1 by | By hand |
+|---|---|---|---|---|
+| `offlineinact`, "Set media items offline when application is not active" | takes every media item offline | renders: silent at the right length | every tool that renders | [Renders through the bridge](#renders-through-the-bridge) |
+| `audiocloseinactive`, "Close audio device when stopped and application is inactive" | closes the audio engine while stopped | writes to plugins that take them in their audio callback, such as Ozone 12: the write waits | `set_fx_parameter`, `set_master_fx_parameter` | [Plugin Control](./references/plugin-control.md#plugins-that-take-writes-in-their-audio-callback) |
+
+`reaper.get_config_var_string("offlineinact")` and `("audiocloseinactive")` read the two preferences; `reaper.Audio_IsRunning()` says whether the engine is open now.
+
+The engine state also sets the price of every render, normally: REAPER stops and restarts the audio device around a render, which took about 1 s in all with the engine closed and about 18 s with it running on a Focusrite ASIO driver. Not a fault; plan renders around it ([Rendering](./references/rendering.md#the-audio-device-around-a-render-normal-not-a-fault)).
+
+### Renders through the bridge
+
+Since 1.3.1, `render_project`, `render_time_selection`, `render_stems`, `normalize_project`, `detect_clipping` and the `analyze_*` tools run action 40101 (Item: Set all media online) just before rendering. The analysis tools and `normalize_project` refuse a silent render with `success: false` and `silent: true`, and the render tools add a `warning` to a silent file. Version 1.3.0 did none of this and reported a silent render as `integrated_lufs: -Infinity` with `success: true`.
+
+With 1.3.0 or earlier, and for any render made through the bridge, bring the media online yourself immediately before the render:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/reaper-bridge" --timeout 30 --code 'reaper.Main_OnCommand(40101, 0) local on, off = 0, 0 for i = 0, reaper.CountMediaItems(0) - 1 do local take = reaper.GetActiveTake(reaper.GetMediaItem(0, i)) if take then if reaper.GetMediaSourceLength(reaper.GetMediaItemTake_Source(take)) > 0 then on = on + 1 else off = off + 1 end end end return "online=" .. on .. " offline=" .. off'
+```
+
+- Render only when it returns `offline=0`.
+- Repeat it before **each** render, not once per session. Media goes offline again every time the user clicks into REAPER and back out; in one session all 25 sources were offline again after the user selected an item.
+- Action 40101 (Item: Set all media online) changes no project state: it adds no undo point and leaves the dirty flag alone. Tell the user once per session that renders go through this step; it needs no announcement after that.
+- A reading of `-Infinity` LUFS, a true peak below about −80 dBTP, or a tool reply with `silent: true` means a silent render. Stop and follow [Diagnosing a silent render](./references/rendering.md#diagnosing-a-silent-render).
+- In one session the first render after media came online read a sample peak 0.74 dB lower than every later render, with the same LUFS-I; a repeat test did not reproduce it. When a peak decides something, such as a ceiling check, confirm it with a second render.
+
+## Talking to a plugin: the protocol
+
+> **Every read or write of a plugin parameter follows the [Plugin protocol](./references/plugin-protocol.md)**, whatever the plugin. It is built on 17 measured plugins, so an unfamiliar plugin starts from what most plugins do, and the checks say when to leave that default.
+
+| Step | Do | Price | Payoff / Stability |
+|---|---|---|---|
+| 0 Address | Track and FX index from `list_track_fx`; check the FX name right before writing | ~0.2 s | the right instance, even after the user reorders |
+| 1 Find | `get_fx_parameters` with `name_contains`; skip the last three (REAPER's Bypass, Wet, Delta) and MIDI padding | 0.2-1.4 s | the index of this plugin version |
+| 2 Classify | toggle / list (`steps`, `step_index`, `step_label`) / continuous, from the same reply | free | the true setting; `step_label` corrects a label that is off by one |
+| 3 Translate | toggle 0/1; list `index/steps` + nudge; registry formula; else `find_norm` (read-only); else a scratch instance | 0 / ~0.2 s / ~1.3 s | one value, with nothing written to the user's instance while searching |
+| 4 Write | `set_fx_parameter` once; never a bridge write when the tool can | ~0.35 s, up to +1 s late, ~+1 s to open the engine | REAPER holds it; one undo step; engine put back |
+| 5 Verify | the reply always, the display by default, a render only for sound decisions | free / ~0.2 s / ~1-18 s + audio, by audio-engine state | the plugin shows the intended value |
+| 6 Record | a registry row in [Plugin Control](./references/plugin-control.md#registry-of-measured-plugins) when the plugin left the base | once | the next session knows the plugin |
+
 ## Choosing a route
 
 **Default to the MCP tools.** They validate their inputs, refuse impossible values, restore the settings they borrow, and return a structured result. Reach for the bridge when one of the conditions below holds, not as a matter of taste.
@@ -38,7 +81,7 @@ If REAPER tools are unavailable, call `reaper_setup_status` to identify the diag
 | More than about three operations in one step | **Bridge** | A tool call costs 150-600 ms; one bridge call costs roughly 300 ms however many API calls it contains. Ten reads is one bridge call, not ten tool calls. Writes of one kind go in one call of a batch tool instead: `add_envelope_points`, `add_markers`, `edit_markers`, `edit_items`. Their indices refer to the project before the call, and they report each entry's indices after it. |
 | Confirming what a tool reported | **Bridge** | The bridge reads REAPER directly, so it is the independent witness. A tool's response is a claim about its work, not evidence of it. |
 | Reading state no tool returns | **Bridge** | Track and item selection, play position, take offsets, source lengths, render settings, item fades and gain before an edit (`get_track_info` lists only position and length). |
-| Setting a parameter in display units | **Bridge** | Binary-searching a plugin's formatted value when no tool maps that parameter. See [Plugin Control](./references/plugin-control.md). |
+| Setting a parameter in display units | **Bridge, then tool** | Find the normalized value with the read-only `find_norm` in one bridge command (protocol step 3d), then write it once with `set_fx_parameter`. See [Plugin protocol](./references/plugin-protocol.md). |
 | Offline DSP measurement | **Bridge** | Reading samples, band analysis, arrangement maps. |
 | Anything reapy gets wrong | **Bridge** | The bridge runs native ReaScript inside REAPER and skips the reapy wrapper layer entirely, along with its silent no-ops. |
 
@@ -98,6 +141,8 @@ The `reapy` library can accept attribute assignments that do not affect REAPER. 
 
 A `success: true` response does not guarantee execution. An `unconfirmed` field in the reply means REAPER recorded no change; without it, some change was recorded, not necessarily the one asked for. Read the value back through `reascript_api` to confirm. Refer to [Driving REAPER from Python](./references/python-reaper-tools.md#verified-reapy-traps).
 
+**Some plugins take a parameter write only in their audio callback**, iZotope Ozone 12 among them, so the value moves on the next audio block and never while REAPER's audio engine is closed ([REAPER in the background](#reaper-in-the-background)). Since 1.3.1 `set_fx_parameter` and `set_master_fx_parameter` follow such a write across cycles, open the engine for it when they must, and report the value REAPER holds; 1.3.0 read back at once and reported the old value, sometimes with `unconfirmed` and no undo step. Through the bridge, read back in a separate command and check `reaper.Audio_IsRunning()` before concluding that a write failed: a session that skipped this concluded that Ozone rejects host writes, and it does not. Labels mislead too: a list parameter's formatted value can name the entry next to the real one, which `get_fx_parameters` flags with `step_label`. Both traps and the read-only way around them are in [Plugin Control](./references/plugin-control.md#plugins-that-take-writes-in-their-audio-callback).
+
 ## System hangs
 
 If MCP calls stop returning and the bridge times out without errors, a modal dialog is likely open in REAPER. This halts deferred scripts, including the reapy server and the Lua bridge.
@@ -108,7 +153,8 @@ Check the REAPER window. Refer to [Driving REAPER from Python](./references/pyth
 
 - **[Driving REAPER from Python](./references/python-reaper-tools.md)**: reapy no-ops, modal dialogs, loop traps, latency, and benchmarks.
 - **[Rendering Secrets](./references/rendering.md)**: The silent-render state (`offlineinact`), bounds flags, and measurement.
-- **[Plugin Control](./references/plugin-control.md)**: Binary-searching parameters by formatted value, known index traps.
+- **[Plugin protocol](./references/plugin-protocol.md)**: The procedure for every exchange with a plugin, its measured base, and the price of each step.
+- **[Plugin Control](./references/plugin-control.md)**: The registry of measured plugins, read-only and scratch-instance searches, list parameters, known index traps.
 
 ## Verifying tools
 
@@ -138,6 +184,7 @@ Use reaper-core-setup for installation, health checks, and repairs.
 | MCP tools fail with socket error | REAPER is not running, or the API is not configured. Persistent failures indicate configuration issues. |
 | Bridge times out | REAPER is not running `claude_bridge.lua`. Check `status.txt` for heartbeat status. |
 | `PARSE_ERROR` on byte one | Lua code contained a UTF-8 BOM. Use `--code` or `--lua-file`. |
-| Renders are silent | The `offlineinact` preference is enabled. |
+| Renders are silent, an `analyze_*` tool replies `silent: true`, or (1.3.0) `-Infinity` LUFS with `success: true` | Media went offline (`offlineinact`), or tracks are muted or soloed away. Bridge renders need action 40101 first: [Renders through the bridge](#renders-through-the-bridge). |
+| A plugin parameter write does not show, or shows only after the user clicks into REAPER | The plugin takes writes in its audio callback and the audio engine is closed (`audiocloseinactive`): [REAPER in the background](#reaper-in-the-background). |
 | Render produces 0 bytes | `RENDER_FILE` received a full path while `RENDER_PATTERN` held a filename. Check `is_file()`. |
 | `import reapy` fails | The interpreter cannot load reapy. Run the bootstrap via reaper-core-setup. |

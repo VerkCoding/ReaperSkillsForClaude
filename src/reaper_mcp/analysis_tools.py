@@ -53,7 +53,7 @@ def register_tools(mcp):
         try:
             import librosa
             import soundfile as sf
-            from reaper_mcp.render_tools import render_to_temp_file
+            from reaper_mcp.render_tools import render_to_temp_file, silent_render_error
 
             empty = _nothing_to_measure()
             if empty:
@@ -65,6 +65,10 @@ def register_tools(mcp):
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
+
+            silent = silent_render_error(y)
+            if silent:
+                return silent
 
             # Magnitudes are scaled to component amplitude so the reported levels are
             # in dBFS rather than raw STFT units.
@@ -107,7 +111,7 @@ def register_tools(mcp):
         """
         try:
             import soundfile as sf
-            from reaper_mcp.render_tools import render_to_temp_file
+            from reaper_mcp.render_tools import render_to_temp_file, silent_render_error
 
             empty = _nothing_to_measure()
             if empty:
@@ -119,6 +123,10 @@ def register_tools(mcp):
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
+
+            silent = silent_render_error(data)
+            if silent:
+                return silent
 
             if data.ndim > 1:
                 mono = np.max(np.abs(data), axis=1)
@@ -147,7 +155,7 @@ def register_tools(mcp):
         """
         try:
             import soundfile as sf
-            from reaper_mcp.render_tools import render_to_temp_file
+            from reaper_mcp.render_tools import render_to_temp_file, silent_render_error
 
             empty = _nothing_to_measure()
             if empty:
@@ -159,6 +167,10 @@ def register_tools(mcp):
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
+
+            silent = silent_render_error(data)
+            if silent:
+                return silent
 
             # Measured across the channels rather than on their sum. Summing to mono
             # cancels out-of-phase material, which reported a -6 dBFS anti-phase mix as
@@ -208,7 +220,7 @@ def register_tools(mcp):
         """
         try:
             import soundfile as sf
-            from reaper_mcp.render_tools import render_to_temp_file
+            from reaper_mcp.render_tools import render_to_temp_file, silent_render_error
 
             empty = _nothing_to_measure()
             if empty:
@@ -220,6 +232,10 @@ def register_tools(mcp):
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
+
+            silent = silent_render_error(data)
+            if silent:
+                return silent
 
             if data.ndim < 2 or data.shape[1] < 2:
                 return {"success": False, "error": "Project rendered as mono. Stereo field analysis is unavailable."}
@@ -267,7 +283,7 @@ def register_tools(mcp):
         """
         try:
             import librosa
-            from reaper_mcp.render_tools import render_to_temp_file
+            from reaper_mcp.render_tools import render_to_temp_file, silent_render_error
 
             empty = _nothing_to_measure()
             if empty:
@@ -279,6 +295,10 @@ def register_tools(mcp):
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
+
+            silent = silent_render_error(y)
+            if silent:
+                return silent
 
             onset_frames = librosa.onset.onset_detect(y=y, sr=sr, units="frames")
             onset_times = librosa.frames_to_time(onset_frames, sr=sr).tolist()

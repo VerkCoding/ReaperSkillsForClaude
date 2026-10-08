@@ -80,6 +80,14 @@ def read_lua(args) -> str:
 
 
 def main() -> int:
+    # Plugins return text outside the console's code page, such as U+202F in a
+    # formatted value. Printing it under Windows' cp1252 raised UnicodeEncodeError
+    # after REAPER had already run the command, so the result was lost.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="Execute Lua inside REAPER.")
     ap.add_argument("--code", help="Lua source to run.")
     ap.add_argument("--lua-file", help="File containing the Lua source.")

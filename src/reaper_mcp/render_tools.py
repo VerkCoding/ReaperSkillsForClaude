@@ -5,7 +5,7 @@ import struct
 from contextlib import contextmanager
 from pathlib import Path
 
-from reaper_mcp.connection import RPR, get_project, reapy
+from reaper_mcp.connection import RPR, get_project, held, reapy
 from reaper_mcp.units import set_solo
 
 logger = logging.getLogger("reaper_mcp.render_tools")
@@ -144,7 +144,65 @@ def _render_settings(
 
 
 def _render_now() -> None:
+    """Render with the project's current settings.
+
+    REAPER's preference "Set media items offline when application is not active"
+    (offlineinact) takes every media item offline whenever REAPER loses focus, and a
+    client drives REAPER from another window, so REAPER is almost never focused. The
+    render then came out silent at the right length while every tool reported
+    success. Action 40101 brings the media back online first; it records no undo
+    point and leaves the dirty flag alone. The preference is the user's to keep.
+    """
+    RPR.Main_OnCommand(40101, 0)  # Item: Set all media online
     RPR.Main_OnCommand(41824, 0)  # Command 41824: File: Render project to disk (no dialog)
+
+
+# A render whose peak stays below this is treated as silent. Plugins with no input
+# still leave a noise floor near -90 dBFS, so a pure zero test missed it.
+SILENCE_FLOOR_DB = -80.0
+
+
+def silent_render_error(data) -> dict:
+    """Return an error dict when rendered samples are silent, otherwise None.
+
+    A silent render measured -inf LUFS and a -90 dBTP true peak and was reported as a
+    successful measurement, so a caller could act on a number that described nothing.
+    """
+    import numpy as np
+
+    peak = float(np.max(np.abs(data))) if np.size(data) else 0.0
+    peak_db = 20 * np.log10(peak) if peak > 0 else float("-inf")
+    if peak_db >= SILENCE_FLOOR_DB:
+        return None
+    shown = "-inf" if peak_db == float("-inf") else f"{peak_db:.1f}"
+    return {
+        "success": False,
+        "error": (
+            f"The render is silent (peak {shown} dBFS), so there is nothing to measure. "
+            "Check for offline media, muted or soloed tracks, and routing to the master."
+        ),
+        "silent": True,
+        "peak_dbfs": None if peak_db == float("-inf") else round(peak_db, 1),
+    }
+
+
+def _silence_warning(path: Path) -> str:
+    """Return a warning when a rendered file is silent, or "" when it is not or cannot be read."""
+    try:
+        import numpy as np
+        import soundfile as sf
+
+        peak = 0.0
+        for block in sf.blocks(str(path), blocksize=1 << 16, always_2d=True):
+            peak = max(peak, float(np.max(np.abs(block))) if block.size else 0.0)
+        peak_db = 20 * np.log10(peak) if peak > 0 else float("-inf")
+        if peak_db < SILENCE_FLOOR_DB:
+            shown = "-inf" if peak_db == float("-inf") else f"{peak_db:.1f}"
+            return (f"The rendered file is silent (peak {shown} dBFS). Check for offline media, "
+                    "muted or soloed tracks, and routing to the master.")
+    except Exception as e:
+        logger.debug(f"silence check skipped for {path}: {e}")
+    return ""
 
 
 def _nothing_rendered(target: Path) -> str:
@@ -215,7 +273,7 @@ def register_tools(mcp):
                 _render_now()
             if not target.is_file():
                 return {"success": False, "error": _nothing_rendered(target)}
-            return {
+            result = {
                 "success": True,
                 "output_path": str(target),
                 "format": format,
@@ -224,6 +282,10 @@ def register_tools(mcp):
                 "channels": channels,
                 "file_size_bytes": target.stat().st_size,
             }
+            warning = _silence_warning(target)
+            if warning:
+                result["warning"] = warning
+            return result
         except Exception as e:
             logger.error(f"render_project failed: {e}")
             return {"success": False, "error": str(e)}
@@ -252,7 +314,7 @@ def register_tools(mcp):
                 _render_now()
             if not target.is_file():
                 return {"success": False, "error": _nothing_rendered(target)}
-            return {
+            result = {
                 "success": True,
                 "output_path": str(target),
                 "start": start,
@@ -260,6 +322,10 @@ def register_tools(mcp):
                 "format": format,
                 "file_size_bytes": target.stat().st_size,
             }
+            warning = _silence_warning(target)
+            if warning:
+                result["warning"] = warning
+            return result
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -287,31 +353,43 @@ def register_tools(mcp):
             os.makedirs(output_directory, exist_ok=True)
             project = get_project()
             indices = track_indices if track_indices is not None else list(range(project.n_tracks))
+            bad = [i for i in indices if not isinstance(i, int) or not 0 <= i < project.n_tracks]
+            if bad:
+                return {"success": False, "error": f"track index out of range: {bad}"}
             rendered = []
 
-            for idx in indices:
-                track = project.tracks[idx]
-                track_name = track.name or f"Track_{idx}"
-                # Exclusive solo ensures isolation of track audio.
-                for j in range(project.n_tracks):
-                    set_solo(project.tracks[j], j == idx)
-                # Characters are restricted to prevent filesystem errors.
-                safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in track_name)
-                stem_path = os.path.join(output_directory, f"{safe_name}.{format}")
-                with _render_settings(stem_path, format, sample_rate, bit_depth, 2,
-                                      bounds=BOUNDS_ENTIRE_PROJECT) as target:
-                    _render_now()
-                rendered.append({
-                    "track_index": idx,
-                    "track_name": track_name,
-                    "output_path": str(target),
-                    "exists": target.is_file(),
-                    "file_size_bytes": target.stat().st_size if target.is_file() else 0,
-                })
-
-            # Restore project state.
-            for j in range(project.n_tracks):
-                set_solo(project.tracks[j], False)
+            # Each stem is rendered under an exclusive solo. The user's own solo
+            # states, solo-in-place modes included, are put back afterwards: clearing
+            # every solo instead threw away whatever the user had soloed.
+            with held():
+                solos = [RPR.GetMediaTrackInfo_Value(t.id, "I_SOLO") for t in project.tracks]
+            try:
+                for idx in indices:
+                    track = project.tracks[idx]
+                    track_name = track.name or f"Track_{idx}"
+                    for j in range(project.n_tracks):
+                        set_solo(project.tracks[j], j == idx)
+                    # Characters are restricted to prevent filesystem errors.
+                    safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in track_name)
+                    stem_path = os.path.join(output_directory, f"{safe_name}.{format}")
+                    with _render_settings(stem_path, format, sample_rate, bit_depth, 2,
+                                          bounds=BOUNDS_ENTIRE_PROJECT) as target:
+                        _render_now()
+                    stem = {
+                        "track_index": idx,
+                        "track_name": track_name,
+                        "output_path": str(target),
+                        "exists": target.is_file(),
+                        "file_size_bytes": target.stat().st_size if target.is_file() else 0,
+                    }
+                    warning = _silence_warning(target) if target.is_file() else ""
+                    if warning:
+                        stem["warning"] = warning
+                    rendered.append(stem)
+            finally:
+                with held():
+                    for track, value in zip(project.tracks, solos):
+                        RPR.SetMediaTrackInfo_Value(track.id, "I_SOLO", value)
 
             return {
                 "success": True,
@@ -319,12 +397,5 @@ def register_tools(mcp):
                 "stems": rendered,
             }
         except Exception as e:
-            # State must be restored even if an error occurs.
-            try:
-                proj = get_project()
-                for j in range(proj.n_tracks):
-                    set_solo(proj.tracks[j], False)
-            except Exception:
-                pass
             logger.error(f"render_stems failed: {e}")
             return {"success": False, "error": str(e)}

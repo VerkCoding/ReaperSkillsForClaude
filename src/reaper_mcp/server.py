@@ -13,7 +13,10 @@ INSTRUCTIONS = (
     "deletes or moves tracks, FX or sends, call list_tracks before the next tool that takes an "
     "index. success: true is a claim, not proof: read values that matter back; a reply "
     "with unconfirmed changed nothing in REAPER. Each change is one undo step, and the "
-    "first change to a saved project writes a backup copy beside it."
+    "first change to a saved project writes a backup copy beside it. Plugin parameters follow "
+    "the plugin protocol in the reaper-mcp skill: find the parameter by name with "
+    "get_fx_parameters(name_contains), work out one normalized value without writing to the "
+    "user's instance, write it once with set_fx_parameter, and read the display back."
 )
 
 mcp = FastMCP("reaper-mcp", instructions=INSTRUCTIONS)

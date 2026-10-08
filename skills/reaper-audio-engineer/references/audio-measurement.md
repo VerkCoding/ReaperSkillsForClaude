@@ -161,7 +161,12 @@ Write the ride with one `add_envelope_points` call, one `{"time": t, "db": d}` p
 
 Volume envelopes store scaled values rather than linear amplitude. When reading envelope points through the bridge, apply `ScaleFromEnvelopeMode` before interpreting the data as decibels to avoid incorrect scaling assumptions.
 
-Automation placement: Apply the automation on the source track, preceding the channel compressor: that is the `Volume (Pre-FX)` envelope, since `Volume` acts after the FX chain. This feeds a normalized signal into the dynamics processor. If the routing is post-fader, the volume envelope applies to the send.
+Automation placement depends on what the ride is for:
+
+- **A levelling ride** evens out a source before its dynamics. Put it on the source track, preceding the channel compressor: that is the `Volume (Pre-FX)` envelope, since `Volume` acts after the FX chain. This feeds a normalized signal into the dynamics processor. If the routing is post-fader, the volume envelope applies to the send.
+- **A balance ride** sets one element against the rest of the mix, for example lifting a buried vocal line. Any compressor downstream undoes part of it, including one on a parent bus. Measured: a +3.0 dB `Trim Volume` ride on a lead-vocal sub-bus, feeding a vocal-group SSL G Channel at 8:1, raised the lead by +1.5 dB. Put a balance ride after the last compressor in the element's path, which is usually `Trim Volume` on the group bus. `Trim Volume` adds to the fader instead of replacing it.
+
+Whichever you write, measure the result where it is heard: render the group stem, not the child, and compare phrase by phrase with the prediction. If it fell short, find the compressor that ate it before writing a larger ride.
 
 Output the gate threshold, target level, and resulting range. If the automation remains clamped at maximum or minimum values for extended periods, the gate threshold is too low and includes non-target audio. Adjust the threshold and reprocess.
 

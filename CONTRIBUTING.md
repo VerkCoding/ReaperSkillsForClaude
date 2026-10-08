@@ -8,7 +8,8 @@ The plugin grows by adding documents, not skills. Audio knowledge goes into topi
 | --- | --- | --- |
 | Target numbers and methods for one audio subject (EQ, delay, saturation, de-essing…) | `skills/reaper-audio-engineer/references/topics/<subject>.md` | `compression.md` |
 | A workflow for one third-party plugin | `skills/reaper-audio-engineer/references/topics/plugin-<vendor>-<product>.md` | `plugin-sonible-smartchain.md` |
-| Parameter indices, value mappings or traps for driving a plugin from code | A section in `skills/reaper-mcp/references/plugin-control.md` | FabFilter Pro-C 3 |
+| Parameter indices, value mappings or traps for driving a plugin from code | A row in the registry, and a section if needed, in `skills/reaper-mcp/references/plugin-control.md` | FabFilter Pro-C 3 |
+| A rule that holds for every plugin exchange | `skills/reaper-mcp/references/plugin-protocol.md`, with the measurement behind it | Step 3, translate the intent |
 | A new step in measuring and verifying | The process documents: `audio-recording.md`, `audio-mixing.md`, `audio-mastering.md` | G-stages in `audio-mixing.md` |
 | A different job with its own triggers, not audio decisions in REAPER | A new skill (section 6) | — |
 
