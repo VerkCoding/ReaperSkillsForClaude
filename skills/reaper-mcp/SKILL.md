@@ -30,7 +30,7 @@ Claude drives REAPER from another window, so REAPER is almost never the focused 
 
 | Preference | In the background it | Which breaks | Handled since 1.3.1 by | By hand |
 |---|---|---|---|---|
-| `offlineinact`, "Set media items offline when application is not active" | takes every media item offline | renders: silent at the right length | every tool that renders | [Renders through the bridge](#renders-through-the-bridge) |
+| `offlineinact`, "Set media items offline when application is not active" | takes every media item offline | renders: silent at the right length; source reads through the bridge: channel count 1, sample rate 0, length 0 | every tool that renders | [Renders through the bridge](#renders-through-the-bridge) |
 | `audiocloseinactive`, "Close audio device when stopped and application is inactive" | closes the audio engine while stopped | writes to plugins that take them in their audio callback, such as Ozone 12: the write waits | `set_fx_parameter`, `set_master_fx_parameter` | [Plugin Control](./references/plugin-control.md#plugins-that-take-writes-in-their-audio-callback) |
 
 `reaper.get_config_var_string("offlineinact")` and `("audiocloseinactive")` read the two preferences; `reaper.Audio_IsRunning()` says whether the engine is open now.
@@ -180,6 +180,7 @@ Use reaper-core-setup for installation, health checks, and repairs.
 | --- | --- |
 | Routes hang with no errors | A modal dialog is open in REAPER. |
 | A render or `analyze_*` tool never returns; after a bridge render every later bridge command times out | REAPER's "Finished in ..." render window stayed open: action `41824` closes it only when the user's preference does (`renderclosewhendone` bit 1), and the 1.4.0 tools and older bridge recipes use `41824`. Ask the user to click Close, update the plugin to 1.4.1 or later (its tools use `42230`), and render through the bridge with `42230`: [The render window](./references/rendering.md#the-render-window-42230-not-41824). |
+| An `analyze_*` tool runs for minutes with the bridge heartbeat fresh and no render in REAPER, and renders only when the call is cancelled | Windows, plugin 1.6.0 or earlier: the first scipy import (pyloudnorm, librosa) waits on the server's stdin pipe until the next message arrives. Fixed in 1.7.0; until then render and measure through the bridge: [A tool that waits before REAPER sees it](./references/python-reaper-tools.md#a-tool-that-waits-before-reaper-sees-it-the-stdin-pipe-on-windows). |
 | A stem render through the bridge writes one master file | `RENDER_SETTINGS = 2` rendered the master mix on REAPER 7.82; use `3` and count `RENDER_TARGETS` first: [Stems](./references/rendering.md#stems-render_settings-3-and-check-render_targets-first). |
 | Tool reports success but nothing changed | A reapy attribute assignment did not reach REAPER. Read the value back. |
 | No REAPER tools available | The MCP server did not start. Call `reaper_setup_status` or run the health check. No local server is available on claude.ai. |

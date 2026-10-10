@@ -378,7 +378,16 @@ A bright plate amplifies "s", "x" and "ch" into long hissy tails. Put a de-esser
 
 - A vocal in a dense mix: reduce the reverb width to 60–80% so the reverb hugs the vocal.
 - Always check mono: a reverb that is too wide can disappear, or sound odd on phone speakers.
-- A spatial balancing tip: with a guitar panned 60% left, turn its send's Pan knob 30–40% to the right. The reverb fills the empty space on the other side.
+- A spatial balancing tip: with a guitar panned 60% left, turn its send's Pan knob 30–40% to the right, so that the reverb fills the empty space on the other side. In REAPER this works only on a send that carries a centred signal. The send's pan is a balance control: it turns one side down and moves nothing across. The default post-fader send already carries the guitar's pan, so measured on REAPER 7.82, +0.4 only turned the left side of the reverb input down 4.4 dB: L −24.4, R −28.0 instead of L −20.0, R −28.0, still leaning left. From a hard-panned guitar nothing reached the right at all. Two sends make the tip work; both put the input 4.4 dB to the right at +0.4 ([measured table](../../../reaper-panning/SKILL.md#the-sends-own-pan)):
+
+| Send | How in the plugin | Price | Payoff | Stability |
+| --- | --- | --- | --- | --- |
+| Pre-fader (post-FX) | `set_send_routing` with `mode` "pre-fader" and `pan` 0.3–0.4, one call | 0.21–0.23 s per call in the benchmark; one undo step, and the reply reads both back | Full level: L −24.4, R −20.0 | The reverb stops following the fader: with the fader at −6 dB the send's input did not change, so fader rides and volume automation shift the wet/dry balance |
+| Post-fader with the send's mono flag | `set_send_routing` with `mono` true and `pan` 0.3–0.4, one call | 0.21 s per call in the benchmark; one undo step, and the reply reads the flag and the pan back | Follows the fader: −6.0 dB with it | The send carries (L+R)/2 of the panned track: 3.1 dB below the pre-fader send at pan −0.6 and 6.0 dB below it hard-panned (0 dB law), so raise the send, and again after re-panning. `list_sends` shows `mono` |
+
+- A send of one channel (`src_channels` "1") is not a third way. REAPER ignores the pan of a one-channel send: from −0.4 to +1 it played the channel at full level on both sides of the bus, and `set_send_routing` adds a `note` saying so ([A send of one channel](../../../reaper-panning/SKILL.md#a-send-of-one-channel)).
+
+- Check the return, not only the send. Stock ReaVerbate kept the lean of its input within 0.3 dB. A reverb that sums its input to mono turns the send's pan into a level change.
 
 **11.6 Setting the right level and checking it**
 
@@ -490,7 +499,7 @@ Claude builds the buses and sends and sets parameters through a tool or the Lua 
 | Wet 100%, Dry off, HPF/LPF on the return | Dump the parameter names, then set them by their displayed value ([plugin-control.md](../../../reaper-mcp/references/plugin-control.md)); the ReaEQ bands are under "Stock Cockos plugins" in the same document |
 | Create a send, set the send level | `create_send` (sets `volume_db` as well), `set_send_volume`, check with `list_sends` |
 | Send type (Post-Fader, Pre-Fader, Pre-FX) | `set_send_routing` `mode`: post-fader, pre-fader (post-FX) or pre-fx. `create_send` uses the default from REAPER's Preferences |
-| Send pan | `set_send_routing` `pan` |
+| Send pan | `set_send_routing` `pan`. It moves a reverb across only on a pre-fader send or a post-fader send with `mono` true, set in the same call; a one-channel send ignores it: section 11.5 |
 | Ducking by the vocal or the kick | Sidechain routing as in "Applying in this plugin" in [compression.md](compression.md) |
 | Pre-delay and decay from the BPM | The tempo from `get_project_info`; onset spacing from `analyze_transients` ([audio-mixing.md](../audio-mixing.md), section 12) |
 | Checking mono and width | `analyze_stereo_field` for the whole mix |

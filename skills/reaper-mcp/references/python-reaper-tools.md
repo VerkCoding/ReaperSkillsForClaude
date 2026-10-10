@@ -252,6 +252,29 @@ Two stalls were investigated by enumerating REAPER's top-level windows through t
 
 Leftover non-modal windows are normal: a "Finished in 0:00" render progress window stays open and blocks nothing.
 
+### A tool that waits before REAPER sees it: the stdin pipe on Windows
+
+On 2026-10-10 `analyze_loudness` (plugin 1.6.0, REAPER 7.82, Windows 11) ran for 10 minutes without rendering. The bridge heartbeat stayed fresh (it goes stale during any render, measured below), so REAPER was idle and the render command had not reached it. The render started the moment the user cancelled the call, finished 75 s later, and the reply came back for a request the client had already dropped. The user had seen the same 1-2 times before. Every call over 2 minutes in the client's MCP logs since 2026-10-07 was a tool that renders; some of the older ones were the 1.4.0 render window ([rendering.md](rendering.md#the-render-window-42230-not-41824)).
+
+**Cause.** The MCP SDK's stdio transport keeps a read pending on stdin in a worker thread, and Windows serialises synchronous I/O on one pipe, so any other call that touches that pipe waits until the next line arrives. The first `import scipy.linalg` in a process loads scipy's bundled OpenBLAS (`scipy.libs\libscipy_openblas-*.dll`, scipy 1.18.0), which probes the standard handles as it loads. `analyze_loudness` imports pyloudnorm, which imports `scipy.signal`, before its first ReaScript call; `analyze_frequency_spectrum` and `analyze_transients` reach scipy through librosa's `stft` and `onset_detect`. The tool then waits for the next message on stdin. Nothing arrives while the client waits for the reply, until the user cancels the call and the cancel notification moves the pipe. numpy's own OpenBLAS is not affected because numpy loads at server start, before the transport reads stdin.
+
+Measured in a child process whose stdin was a silent pipe with a thread blocked in `readline()`, as in the server:
+
+| First use in the process | No fix | fd 0 and STD_INPUT_HANDLE on NUL |
+| --- | --- | --- |
+| `import soundfile` | 0.01 s | — |
+| `import scipy.linalg._fblas` (the step that waits) | waited until a line was written to stdin, then 0.2 s | — |
+| `import pyloudnorm` | waited 38 s, until a line was written | 0.88 s |
+| `librosa.load` + `stft` + `onset.onset_detect` | waited 39 s, until a line was written | 1.75 s |
+| A probe tool importing `scipy.linalg`, called through `mcp.client.stdio` | waited 20 s; a ping on stdin released it 0.31 s later | 0.20 s |
+| The same render path called from a plain process (no pending stdin read) | 18.5 s, no wait | — |
+
+**Fix, 1.7.0.** `__main__._detach_stdin_from_std_handle` moves the transport's pipe to a duplicate file descriptor before `mcp.run`, points fd 0 and `STD_INPUT_HANDLE` at NUL, and hands the transport the duplicate as `sys.stdin`. Nothing else touches the pipe, so a library that probes the standard handles finds NUL. The server started in 0.90 s with all 71 tools.
+
+**Telling it apart from a modal dialog.** A dialog or a render stops every defer script, so the bridge heartbeat in `status.txt` (written every 5 s) goes stale. This stall leaves it fresh. Read the client's log for the call: Claude Code writes one JSON line per event to `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project folder>\mcp-logs-plugin-reaper-for-claude-reaper\<start time>.jsonl`, including "still running (N s elapsed)" every 30 s and the time the reply arrived.
+
+**What a cancelled call leaves behind.** A sync tool runs on the server's event loop, so a cancel cannot stop it: the tool finishes, the reply arrives for an unknown request id, and the client drops the stdio connection ("STDIO connection dropped"). The next tool call starts a new server, while the old process tree (`launch_server.py`, the venv redirector and the server) stays alive and keeps its reapy connections: the server dropped at 15:23 on 2026-10-10 was still running at 15:57 with two connections to port 2306. With 1.6.0 and earlier, render and measure through the bridge instead ([rendering.md](rendering.md)).
+
 ### Dialog Prevention
 
 Check conditions prior to operations that may trigger dialogs.
@@ -489,7 +512,8 @@ Setting `D_POSITION` re-sorts the track's item list at once, before `UpdateArran
 | Field | Encoding |
 | --- | --- |
 | `I_SRCCHAN` | -1 no audio. Low 10 bits: first channel, 0-based. Bits above: 0 stereo pair, 1 mono, n for 2n channels |
-| `I_DSTCHAN` | Low 10 bits: first channel, 0-based. Bit 1024 mixes the source to one channel |
+| `I_DSTCHAN` | Low 10 bits: first channel, 0-based. Bit 1024 puts the send on that one channel, mixing a wider source down. Without it a mono source lands on the pair starting there, full level on both: 0 is 1/2, 1 is 2/3, 1024 is 1 alone (measured, REAPER 7.82) |
+| `B_MONO` | 1 sums the send to (L+R)/2 before the send's pan. A mono source ignores it, its pan and its pan law |
 | `I_SENDMODE` | 0 post-fader, 1 pre-FX, 3 pre-fader post-FX. 2 is a legacy value still accepted |
 
 A send into channels 3/4 does not raise the destination track's channel count: `I_DSTCHAN` = 2 left `I_NCHAN` at 2, so the sidechain carried nothing. Raise `I_NCHAN` as well. The destination track's state chunk shows the same fields, `AUXRECV <source> <mode> <volume> <pan> <mute> <mono> <phase> <srcchan> <dstchan>`, which makes it an independent witness for a send write.

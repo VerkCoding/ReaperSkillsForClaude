@@ -164,11 +164,16 @@ def send_source_value(first: int, count: int) -> int:
 def send_dest_channels(value: float, source_count: int) -> tuple:
     """Decode a send's I_DSTCHAN into (first, count) at the destination.
 
-    The low 10 bits hold the first channel; bit 1024 mixes the source down to
-    one channel.
+    The low 10 bits hold the first channel; bit 1024 puts the send on that one
+    channel, mixing a wider source down. Without the bit a one-channel source
+    lands on the pair starting there, at full level on both (measured on REAPER
+    7.82: I_DSTCHAN 0 played channel 1 on bus channels 1 and 2, 1024 on 1 only).
     """
     value = int(value)
-    count = 1 if value & 1024 or source_count == 1 else source_count
+    if value & 1024:
+        count = 1
+    else:
+        count = 2 if source_count == 1 else source_count
     return (value & 1023) + 1, count
 
 

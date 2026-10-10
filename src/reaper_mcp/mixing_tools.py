@@ -18,7 +18,7 @@ _MODE_NAMES = {0: "post-fader", 1: "pre-fx", 2: "pre-fader", 3: "pre-fader"}
 
 
 def _send_routing(track_id, send_index: int) -> dict:
-    """Read a send's mode and channels in the form set_send_routing takes."""
+    """Read a send's mode, channels and mono flag in the form set_send_routing takes."""
     value = lambda key: RPR.GetTrackSendInfo_Value(track_id, 0, send_index, key)  # noqa: E731
     first, count = send_source_channels(value("I_SRCCHAN"))
     routing = {
@@ -27,6 +27,7 @@ def _send_routing(track_id, send_index: int) -> dict:
     }
     if count:
         routing["dest_channels"] = format_channels(*send_dest_channels(value("I_DSTCHAN"), count))
+    routing["mono"] = bool(value("B_MONO"))
     return routing
 
 
@@ -329,12 +330,17 @@ def register_tools(mcp):
         dest_channels: str | None = None,
         mute: bool | None = None,
         pan: float | None = None,
+        mono: bool | None = None,
     ) -> dict:
-        """Set a send's mode, channels, mute or pan; omitted settings stay as they are.
+        """Set a send's mode, channels, mute, pan or mono flag; omitted settings stay as they are.
 
         mode: post-fader, pre-fader (post-FX) or pre-fx.
         src_channels: "1/2" pair, "3" mono, "1-4" multichannel, or "none" for no audio.
         dest_channels: "3/4", or one channel such as "3" (a stereo source is mixed to mono).
+        A one-channel source goes to one channel, or to a pair such as "1/2" at full level on both.
+        pan: -1.0 to 1.0, a balance control. mono: true sums the send to (L+R)/2 before its pan,
+        so a post-fader send's pan can move a panned part's reverb across.
+        A one-channel send ignores both pan and mono.
         The destination track gets more channels when needed, e.g. a sidechain into 3/4. Check the FX side with get_fx_pins.
         """
         try:
@@ -391,14 +397,15 @@ def register_tools(mcp):
                     if source_count == 0:
                         return {"success": False, "error": "this send carries no audio; set src_channels as well"}
                     if dest[1] == 1:
-                        # One destination channel: a mono source lands on it; a wider source is mixed down.
-                        dest_value = (dest[0] - 1) | (1024 if source_count > 1 else 0)
-                    elif dest[1] == source_count:
+                        # One destination channel needs bit 1024: without it a mono source
+                        # lands on the pair starting there, and a wider source keeps its width.
+                        dest_value = (dest[0] - 1) | 1024
+                    elif dest[1] == max(source_count, 2):
                         dest_value = dest[0] - 1
                     else:
                         return {
                             "success": False,
-                            "error": f"the source carries {source_count} channels, so dest_channels must be {source_count} channels or one",
+                            "error": f"the source carries {source_count} channel(s), so dest_channels must be {max(source_count, 2)} channels or one",
                         }
 
                 raised_from = None
@@ -420,6 +427,7 @@ def register_tools(mcp):
                     ("I_SRCCHAN", source_value),
                     ("I_DSTCHAN", dest_value),
                     ("B_MUTE", None if mute is None else int(mute)),
+                    ("B_MONO", None if mono is None else int(mono)),
                     ("D_PAN", pan),
                 ):
                     if value is not None and not RPR.SetTrackSendInfo_Value(track, 0, send_index, key, value):
@@ -428,6 +436,7 @@ def register_tools(mcp):
                 got = _send_routing(track, send_index)
                 got["mute"] = bool(RPR.GetTrackSendInfo_Value(track, 0, send_index, "B_MUTE"))
                 got["pan"] = RPR.GetTrackSendInfo_Value(track, 0, send_index, "D_PAN")
+                one_channel = send_source_channels(RPR.GetTrackSendInfo_Value(track, 0, send_index, "I_SRCCHAN"))[1] == 1
                 dest_channels_after = int(RPR.GetMediaTrackInfo_Value(dest_id, "I_NCHAN"))
 
             wrong = []
@@ -441,6 +450,8 @@ def register_tools(mcp):
                 wrong.append("mute")
             if pan is not None and abs(got["pan"] - pan) > 1e-6:
                 wrong.append("pan")
+            if mono is not None and got["mono"] != mono:
+                wrong.append("mono")
             if last_dest and dest_channels_after < last_dest:
                 wrong.append("destination track channels")
             result = {
@@ -453,6 +464,13 @@ def register_tools(mcp):
             }
             if raised_from is not None:
                 result["dest_track_channels_raised_from"] = raised_from
+            if one_channel and (pan is not None or mono is not None or abs(got["pan"]) > 1e-6 or got["mono"]):
+                # Measured on REAPER 7.82: pan -0.4, +0.4 and +1, a -3 dB pan law and the mono
+                # flag all left a one-channel send at full level on each destination channel.
+                result["note"] = (
+                    f"a one-channel send ignores its pan and mono flag: REAPER plays the channel "
+                    f"at full level on {got['dest_channels']}"
+                )
             if wrong:
                 result["error"] = f"REAPER kept different {', '.join(wrong)}"
             return result

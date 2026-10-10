@@ -103,7 +103,7 @@ def plan(wav: str) -> list:
         ("create_send", {"source_track_index": 1, "dest_track_index": 0}),
         ("remove_send", {"source_track_index": 0, "send_index": 0}),
         ("set_send_volume", {"source_track_index": 0, "send_index": 0, "volume_db": -9}),
-        ("set_send_routing", {"source_track_index": 0, "send_index": 0, "dest_channels": "3/4", "mode": "pre-fader"}),
+        ("set_send_routing", {"source_track_index": 0, "send_index": 0, "dest_channels": "3/4", "mode": "pre-fader", "mono": True}),
         ("create_bus", {"name": "Bus", "track_indices": [0, 1]}),
         ("add_master_fx", {"fx_name": "ReaComp"}),
         ("set_master_fx_parameter", {"fx_index": 0, "param_index": 1, "value": 0.6}),

@@ -1067,14 +1067,15 @@ def _marker_layout() -> list:
     return rows
 
 
-def _send_chunk_fields(dest_index: int) -> list:
-    """The receive line in the destination track's state chunk: mode, source and destination channels."""
+def _send_chunk_fields(dest_index: int, fields: tuple = (2, 8, 9)) -> list:
+    """The receive line in the destination track's state chunk: by default mode, source and
+    destination channels; field 6 is the mono flag."""
     from reapy import reascript_api as RPR  # noqa: PLC0415
 
     chunk = RPR.GetTrackStateChunk(_track_id(dest_index), "", 1 << 20, False)[2]
     line = next((ln for ln in chunk.splitlines() if ln.startswith("AUXRECV ")), "")
-    fields = line.split()
-    return [int(float(fields[i])) for i in (2, 8, 9)] if len(fields) > 9 else []
+    values = line.split()
+    return [int(float(values[i])) for i in fields] if len(values) > 9 else []
 
 
 def _fx_names(track_index: int) -> list:
@@ -1250,6 +1251,20 @@ def run_edit_plan(b: Bench) -> None:
            else f"listed {p.get('sends')}")
     b.call("set_send_routing", {"source_track_index": a, "send_index": s, "dest_channels": "1"}, group=g)
     b.confirm(lambda: _send_chunk_fields(bb), [3, 0, 1024], "AUXRECV after mixing to mono on channel 1")
+    b.call("set_send_routing", {"source_track_index": a, "send_index": s, "dest_channels": "1/2", "mono": True,
+                                "pan": 0.4}, group=g,
+           expect=lambda p: None if (p.get("dest_channels"), p.get("mono"), "note" in p) == ("1/2", True, False)
+           else f"replied {p}")
+    b.confirm(lambda: _send_chunk_fields(bb, (2, 6, 8, 9)), [3, 1, 0, 0], "AUXRECV mode/mono/src/dst")
+    b.call("list_sends", {"track_index": a}, group=g,
+           expect=lambda p: None if (p.get("sends") or [{}])[-1].get("mono") is True else f"listed {p.get('sends')}")
+    # One channel sent with the destination left at 0: REAPER plays it on both 1 and 2 and ignores the pan.
+    b.call("set_send_routing", {"source_track_index": a, "send_index": s, "src_channels": "1"}, group=g,
+           expect=lambda p: None if p.get("dest_channels") == "1/2" and "note" in p else f"replied {p}")
+    b.confirm(lambda: _send_chunk_fields(bb), [3, 1024, 0], "AUXRECV for channel 1 on 1/2")
+    b.call("set_send_routing", {"source_track_index": a, "send_index": s, "dest_channels": "2"}, group=g,
+           expect=lambda p: None if p.get("dest_channels") == "2" else f"replied {p}")
+    b.confirm(lambda: _send_chunk_fields(bb), [3, 1024, 1025], "AUXRECV for channel 1 on channel 2 alone")
     b.call("set_send_routing", {"source_track_index": a, "send_index": s, "src_channels": "3/4"}, group=g,
            refuses=True, expect=lambda p: None if "channels" in str(p.get("error")) else f"refused with {p.get('error')}")
 
