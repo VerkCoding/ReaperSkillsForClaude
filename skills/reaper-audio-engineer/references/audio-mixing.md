@@ -251,7 +251,7 @@ Do not apply adjustments without measurement verification.
 | Stem mismatch | Stems exclude bus/master processing |
 | Measurement discrepancy | Inconsistent window, solo state, or stale stem |
 | Render distortion | Integer format clipping (check dBTP) |
-| Latency persists | Bypassed plugin requires offline state |
+| Latency persists after a bypass | PDC elsewhere on the path (parent folder, master); a bypassed plugin itself adds none on REAPER 7.82 |
 
 ## 18. Handoff to mastering
 

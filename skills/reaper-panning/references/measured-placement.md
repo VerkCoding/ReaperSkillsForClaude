@@ -89,7 +89,7 @@ One stem render of every track ([Measuring every gain stage in one render](../..
 
 1. For each stem, each song section and five bands (20-120, 120-500, 500-2k, 2-6k, 6-20k Hz): the mean power of the left and right channels and the mean of L×R.
 2. For each folder: its own stem's power divided by the power of the sample sum of its children's stems. The product along a track's parents is the track's gain to the premaster output, which carries the bus compressors and the limiter as a gain.
-3. Apply each layout to the children's numbers. Balance mode: the side opposite the pan times (1 − |pan|) with the 0 dB law. Stereo pan mode: first the width crossfeed, (1 + w)/2 to the own side and (1 − w)/2 to the other, then the same balance ([Stereo tracks](../SKILL.md#stereo-tracks-the-default-mode-drops-a-channel)). Returns stay as rendered.
+3. Apply each layout to the children's numbers. Balance mode: the side opposite the pan times (1 − |pan|) with the 0 dB law. Stereo pan mode: first the width crossfeed, (1 + w)/2 to the own side and (1 − w)/2 to the other, then a stereo pan, not a balance. At +p the left channel goes (1 − p) left and p/2 right, and the right channel (1 − p/2) right; at −p the mirror image ([Stereo tracks](../SKILL.md#stereo-tracks-the-default-mode-drops-a-channel)). For channels that are nearly the same this lands where a balance would. Returns stay as rendered.
 4. Sum and compare the two sides per section and band.
 
 | Check | Predicted | Measured after the change |

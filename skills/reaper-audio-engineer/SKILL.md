@@ -70,6 +70,7 @@ A topic document holds the target numbers and working methods for one subject. T
 | [Gain staging](./references/topics/gain-staging.md) | Levels per source and per stage, meters, headroom, loudness targets per platform | Setting input or bus levels, checking headroom, level-matched A/B, choosing a delivery loudness |
 | [Compression](./references/topics/compression.md) | Compressor types, settings per source and bus, sidechain, parallel, de-ess, multiband, genre chains | Adding or adjusting a compressor, limiter or ducking |
 | [Reverb](./references/topics/reverb.md) | Reverb parameters and types, send/return set-up, depth, settings per source, tempo-matched pre-delay and decay | Adding space, building reverb buses, fixing a muddy or distant mix |
+| [Tracking latency](./references/topics/tracking-latency.md) | What a performer hears while recording: interface latency plus the PDC on every monitored path, measured PDC and CPU of common plugins, a zero-latency tracking layout, cue mixes | Building or checking a recording project, a singer hears a delay, choosing FX for monitored tracks or cue buses |
 | [sonible smart:chain](./references/topics/plugin-sonible-smartchain.md) | Gain staging and balance with smart:chain: learn, groups and layers, Auto Level | Only when a track carries `VST3: smartChain (sonible)` |
 
 Rules for topic documents:

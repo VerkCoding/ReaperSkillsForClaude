@@ -74,6 +74,7 @@ One mono 1 kHz tone on one track:
 - In mono the same move costs **6.0 dB** with the 0 dB law and **3.0 dB** with the −3 dB law. Hard-panned parts sink against centred ones whenever the mix is heard in mono: check them after panning.
 - The law changes every centred part: −3.0 dB at the centre with the −3 dB law. That is why gain-staging.md settles the law at the start of a project and never changes it.
 - `D_PANLAW` on a track overrides the project: −1 follows the project, 0.708 is −3 dB.
+- The shape of the law, measured 2026-10-11 in balance mode on a track's own law. The −3 dB law is a constant-power sine/cosine law with the centre at −3.0 dB: at pan +0.5, the far side −8.3 dB and the near side −0.7 dB. The −6 dB law is linear, (1 ∓ pan)/2, with the centre at −6.0 dB: at +0.5, −12.0 and −2.5 dB. Both reach 0 dB on the near side at full pan.
 
 ### Stereo tracks: the default mode drops a channel
 
@@ -92,10 +93,14 @@ A stereo item with 440 Hz only in the left channel and 660 Hz only in the right,
 
 - In the default mode, the pan knob of a stereo track is a balance control. It turns the opposite channel down, and at full pan removes it; nothing moves across. A stereo piano or a stereo room recording panned hard left loses everything that was only in its right channel.
 - To place a stereo source, set `I_PANMODE` to 5, narrow it with `D_WIDTH`, then pan. Width w sends (1+w)/2 of each channel to its own side and (1−w)/2 to the other (0.75 and 0.25 at w = 0.5, matching the table). Width 0 is (L+R)/2: content present in one channel only drops 6.0 dB, content common to both keeps its level.
-- Pan and width together, measured 2026-10-10 on real stereo stems: the width crossfeed comes first, then the side opposite the pan is turned down by (1 − |pan|) with the 0 dB law, as in balance mode. A stereo piano (channels correlated 0.26) at pan −0.3 and width 0.6 was predicted at L −28.7, R −30.0 dBFS RMS and measured L −28.9, R −30.0; a guitar whose channels were nearly identical, at pan −0.75 and width 0.3, measured a balance of +11.91 dB against about +12 predicted.
+- Pan and width together, measured 2026-10-11 as a 2×2 gain matrix. A tone went into the left channel only, then the right only, at width 1, 0.5 and 0 and pan −0.5, 0, +0.3 and +1. The width crossfeed comes first, then a **stereo pan, not a balance**:
+  - At pan +p, the left channel goes (1 − p) to the left and p/2 to the right; the right channel stays right at (1 − p/2).
+  - At −p it is the mirror image. At ±1 both channels arrive on that side at half gain.
+  - All 12 settings matched this to 0.002 in gain (0.02 dB).
+- Content common to both channels lands where a balance would put it. That is why an earlier check on real stems agreed with width-then-balance: a piano with channels correlated 0.26, at pan −0.3 and width 0.6, was predicted at L −28.7, R −30.0 dBFS RMS and measured L −28.9, R −30.0. A near-mono guitar at pan −0.75 and width 0.3 measured +11.91 dB against +12 predicted. Content in one channel only does not land there: a left-only tone through width 0.5 and pan +0.3 lands at −7.7° perceived azimuth, where width-then-balance predicts −11.6°.
 - A source that should be entirely mono, such as a stereo 808 or sub sample, is collapsed by stereo pan mode with width 0.
 - `D_WIDTH` also acts in the default mode: width 0 at pan 0 put both tones in both channels at −26.0. Other widths were not measured in this mode.
-- Dual pan (mode 6) ignores `D_PAN` and `D_WIDTH`: each channel follows its own pan, `D_DUALPANL` and `D_DUALPANR`.
+- Dual pan (mode 6) ignores `D_PAN` and `D_WIDTH`: each channel follows its own pan, `D_DUALPANL` and `D_DUALPANR`. Each channel's pan follows the 0 dB law, so a channel left at 0 plays at full level on both sides. With `D_DUALPANL` 0 and `D_DUALPANR` +0.5, the left channel came out at 0 dB on both sides, and the right channel at 0 dB right and −6.0 dB left (measured 2026-10-11).
 - `set_track_pan` writes the mode, then the width, then the pan, in one call and one undo step. It refuses pan and width for a track that would be in dual pan mode.
 
 ### Sends: only post-fader sends follow the track's pan

@@ -26,6 +26,8 @@ Environment: REAPER 7.79/x64, reapy 0.10.0, Python 3.12.10, numpy 2.5.2, soundfi
 - [Render Settings State](#render-settings-state)
 - [Measuring Rendered Audio](#measuring-rendered-audio)
 - [Bridge Protocol](#bridge-protocol)
+- [ExtState, the Web Interface and Script Instances](#extstate-the-web-interface-and-script-instances)
+- [Installing Scripts: ReaPack and a Clean REAPER](#installing-scripts-reapack-and-a-clean-reaper)
 - [What a Call Costs](#what-a-call-costs)
 - [Benchmark Script](#benchmark-script)
 
@@ -316,6 +318,16 @@ else:
 
 The `noprompt:` prefix suppresses the save-changes modal, which is otherwise the deadlock in the table above. It is the only scriptable way found to discard changes or rebind without user input, and it is equally useful for restoring a known project state between tests. The cost is that reopening resets the undo history, so prefer the in-place branch when the project is already bound to the target.
 
+### What stays the same across saves
+
+Measured on REAPER 7.82, 2026-10-11, for a tool that keeps its own file beside a project (ReaperForVisual's `<project>.rfv.json`):
+
+- **A track's GUID** stays the same through rename, reorder, save and reload, delete followed by undo, and cut followed by paste. A duplicated track, or a copy pasted, gets a new GUID. The master track has its own GUID, kept across save and reload.
+- **A project opened as a template keeps the template's track GUIDs**, so two songs made from one template share them. Shared track GUIDs do not prove that two files are the same project: compare the items' GUIDs as well.
+- **"Save new version of project"** (action 41895) is a Save As: `Song.rpp` became `Song_001.rpp` (the test used a name with diacritics), and the open project followed the new file.
+- **Selecting tracks**, through the API or through an action, changes neither the dirty flag nor the undo history.
+- **"Clean current project directory"** (action 40098) scans only the project's media path (`RECORD_PATH`). With "Media" it never looked beside the `.rpp`; with the project folder itself as the media path, it counted the five files there (`.rpp`, `.rfv.json`, two WAVs, a `.reapeaks`) and offered only the unused WAV. A file a tool keeps beside the project is not offered for deletion.
+
 ## Loop Bounding
 
 Loops based on string pointers require null checks and limit bounds.
@@ -458,7 +470,11 @@ Inside a block, `CreateNewMIDIItemInProj` leaves no step at all, so the next Und
 
 ### The state change count is not a change detector
 
-`GetProjectStateChangeCount` does not move when reapy writes outside a block, and moves by one at every `Undo_EndBlock2`, including an empty block. It cannot tell a write that landed from one that did not. Whether a step was added can: after a successful call, `records_undo` checks that `MCP: <tool>` is the top of the undo history and otherwise adds `unconfirmed` to the reply. A value that was already set is flagged as well, which is accurate: REAPER recorded no change. The check works one way only. REAPER compares the whole project with the last step, so a change left unrecorded since then, such as a selection or a raw call, gives even an empty call a step: `unconfirmed` proves nothing changed, while its absence does not prove the call's own change landed.
+`GetProjectStateChangeCount` does not move when reapy writes outside a block, and moves by one at every `Undo_EndBlock2`, including an empty block. Inside one Lua bridge command it did not move either, through arm, monitoring, mute, take, FX offline, bypass, send and fader changes; a script that watches for changes must look at the values themselves. It cannot tell a write that landed from one that did not. Whether a step was added can: after a successful call, `records_undo` checks that `MCP: <tool>` is the top of the undo history and otherwise adds `unconfirmed` to the reply. A value that was already set is flagged as well, which is accurate: REAPER recorded no change. The check works one way only. REAPER compares the whole project with the last step, so a change left unrecorded since then, such as a selection or a raw call, gives even an empty call a step: `unconfirmed` proves nothing changed, while its absence does not prove the call's own change landed.
+
+What does move it without any change by the user: media going offline and online. With `offlineinact` on, REAPER losing and getting back the focus moved the counter once while nothing else changed (2026-10-16), so a script that reloads its caches when the counter moves does so each time the user switches windows.
+
+A cache keyed on a media source needs a key that survives that. `tostring(source)`, the pointer, changed when the project was reopened and when REAPER restarted, and `GetMediaSourceLength` read 0 while the media was offline. `GetMediaSourceType` and `GetMediaSourceFileName` stayed the same through both: key a source by type and file name (measured 2026-10-16, after a cache keyed on the pointer, then on the length, lost what a script had learned).
 
 ### Backups before the first change
 
@@ -490,6 +506,31 @@ For an FX parameter, convert a normalised value with `low + value * (high - low)
 - `GetSetEnvelopeInfo_String(env, "ACTIVE", "0", True)` bypasses an envelope; its points then do nothing.
 - `DeleteEnvelopePointRange(env, 1.0, 2.0)` deleted the point at 1.0 and kept the one at 2.0: the end is excluded. Widen the range by a small margin to include it.
 - `InsertEnvelopePoint` at a time that already holds a point adds a second point, and accepts negative times.
+- Showing a volume envelope moves the fader's value into it: a track at -6 dB read `D_VOL` 1.0 afterwards, its envelope holding the -6 dB. Set the fader after creating the envelope when both matter.
+- A send's envelopes are created by `GetTrackSendInfo_Value(track, 0, send, "P_ENV:<VOLENV")` (also `<PANENV`, `<MUTEENV`), inactive: set `ACTIVE` to 1 before they do anything. On a send without one, the call returns an empty, inactive envelope and changes nothing (chunk, state counter and dirty flag unchanged). To find a send's envelopes by reading only, list the track's envelopes: "Send Volume", "Send Pan" and "Send Mute", with `GetEnvelopeInfo_Value(env, "I_SEND_IDX")` = the send's index + 1 and `P_DESTTRACK` its destination.
+- Listing a track's envelopes (`CountTrackEnvelopes`, `GetTrackEnvelope`) also lists the envelopes of its sends. `GetEnvelopeInfo_Value(env, "I_SEND_IDX")` tells them apart: the send's index + 1 for a send's envelope, 0 for the track's own (ReaperForVisual, checked by its send automation tests, 2026-10-12).
+
+### The track's values do not follow its automation
+
+During 18.8 s of playback over a mute envelope toggling every second and a volume ramp from -inf, `GetMediaTrackInfo_Value` kept returning the base values (`B_MUTE` 0, one `D_VOL`), while the meter showed the automation working. A reading of `D_VOL`, `D_PAN` or `B_MUTE` is the fader, not what plays: evaluate the envelope (`Envelope_Evaluate`) at the play position, or measure the meter. `GetTrackUIVolPan` does not help either: over a pan sweep from left to right and a volume ramp it returned 1.000 and +0.000 throughout while the meter followed the automation. `Envelope_Evaluate(env, play_position, 0, 0)` gives what plays: for Volume through `ScaleFromEnvelopeMode(GetEnvelopeScalingMode(env), value)`, for Pan negated (pan envelopes are stored inverted); a bus's heard position computed that way followed a pan sweep within 0.05 deg.
+
+### How REAPER combines an envelope with its knob
+
+Measured on meters (REAPER 7.82): an envelope and its knob combine the same way in every automation mode (trim/read, read, touch, latch, and write before anything is touched), not only in trim/read.
+
+| Envelope | Combines with | Measured |
+| --- | --- | --- |
+| Volume, Trim Volume, Volume (Pre-FX) | each multiplies the fader | fader -6 dB with any one of them at -12 dB: -18 dB below the source |
+| Pan | adds to the pan knob (the envelope stored inverted) | knob +0.5 with an envelope stored -0.3: +0.8 |
+| Pan (Pre-FX) | a balance stage of its own before the FX | pre-FX right 0.3, then pan right 0.5: left channel 0.7 × 0.5 |
+| Width | multiplies the width knob | knob 0.5 with an envelope at 0.8: width 0.4 |
+| Send Volume, Send Pan, Send Mute | like a track's: multiply, add, 0 mutes | send at 0.5 with an envelope at 0.25: -12 dB more; pan +0.2 with an envelope stored -0.5: +0.7 |
+
+A VCA lead's fader, and its volume envelope, multiply into each follower's output while the follower's own `D_VOL` stays 1.0 (`GetSetTrackGroupMembership(track, "VOLUME_VCA_LEAD" or "VOLUME_VCA_FOLLOW", mask, value)`; `...High` for groups 33 to 64).
+
+### The project's default pan mode and law
+
+A track's `I_PANMODE` or `D_PANLAW` of -1 means "the project default". `GetSetProjectInfo` has no key for it (`PROJECT_PANLAW`, `PANLAW`, `PROJECT_PANMODE` all read 0), but `get_config_var_string("panlaw")` and `("panmode")` hold the active project's defaults: a new project read 1.0 and 3; after opening a project saved with `PANLAW 0.708` and `PANMODE 6`, they read 0.708 and 6.
 
 ## Markers and Regions
 
@@ -515,8 +556,27 @@ Setting `D_POSITION` re-sorts the track's item list at once, before `UpdateArran
 | `I_DSTCHAN` | Low 10 bits: first channel, 0-based. Bit 1024 puts the send on that one channel, mixing a wider source down. Without it a mono source lands on the pair starting there, full level on both: 0 is 1/2, 1 is 2/3, 1024 is 1 alone (measured, REAPER 7.82) |
 | `B_MONO` | 1 sums the send to (L+R)/2 before the send's pan. A mono source ignores it, its pan and its pan law |
 | `I_SENDMODE` | 0 post-fader, 1 pre-FX, 3 pre-fader post-FX. 2 is a legacy value still accepted |
+| `I_MIDIFLAGS` | Low 5 bits: MIDI source channel, 0 all. 31 turns the send's MIDI off: a ReaSynth fed by an audio-off send (`I_SRCCHAN` -1) played at -8 dB with 0 and stayed silent with 31 (measured, REAPER 7.82). Choosing MIDI "None" in the routing window stores the same 31 |
+
+MIDI also travels through the master/parent send: a ReaSynth on a folder parent played the MIDI items of its child at +1 dB. A routing reader must follow MIDI along folder links as well as sends, or an instrument on a folder track looks silent.
 
 A send into channels 3/4 does not raise the destination track's channel count: `I_DSTCHAN` = 2 left `I_NCHAN` at 2, so the sidechain carried nothing. Raise `I_NCHAN` as well. The destination track's state chunk shows the same fields, `AUXRECV <source> <mode> <volume> <pan> <mute> <mono> <phase> <srcchan> <dstchan>`, which makes it an independent witness for a send write.
+
+### Routing as the .rpp stores it
+
+A project's routing can be read from its `.rpp` text without opening it, so no plugin loads and no licence dialog can appear. The fields below agreed with the API on every field for four test projects (100 tracks, 21 sends: folders, sends of every mode, mono and muted sends, sidechains, MIDI-only sends, extra instrument outputs, armed inputs, offline and bypassed instruments, multi-take items):
+
+| Line | Holds |
+| --- | --- |
+| `<TRACK {GUID}` | one track, in track order; `TRACKID` repeats the GUID |
+| `ISBUS a b` | `a` 1 opens a folder; `a` 2 closes `-b` levels (`I_FOLDERDEPTH` = `b`) |
+| `MAINSEND on offset` | master/parent send and its channel offset; a separate `MAINSEND_NCH n` line appears when the channel count is not "all" |
+| `AUXRECV src mode vol pan mute mono phase srcchan dstchan panlaw midiflags automode name` | a send, written on the receiving track; `src` is the sender's 0-based index |
+| `REC arm input monitor ...` | `I_RECARM`, `I_RECINPUT`, `I_RECMON` |
+| `BYPASS bypass offline ...` | before each FX in `<FXCHAIN>`; an instrument's name starts `VSTi:`, `VST3i:`, `CLAPi:`, `AUi:`, `LV2i:` or `DXi:` |
+| `TAKE`, `TAKE SEL`, `TAKE NULL` | inside `<ITEM>`, start the second and later takes; `SEL` marks the active one, otherwise the first is active |
+
+Files saved by REAPER 6.33 carry no `MASTER_TRACKID`. A track name holding all three quote marks (`"`, `'` and a backtick) cannot be quoted, so the `.rpp` stores the backtick as an apostrophe; the API keeps the name intact. Counting items is the slow part of a routing read through the API: 5,024 items took 17.8 ms; stopping at a track's first unmuted audio item brought it to 0.9 ms. `TrackFX_GetInstrument` never reports a JS effect: the stock JS Tone Generator put -12 dB on a track where it returned -1, and it sounds while the transport is stopped. A tool that decides "silent" from instruments alone must also watch the meter.
 
 ### FX order
 
@@ -608,8 +668,10 @@ Behaviours worth knowing before relying on it:
 | Single result | `pcall` captures one value, so `return 7, 8, 9` yields `7`. Pack multiple values into a table. |
 | Table rendering | One line per array element, then remaining keys as `k = v`, nested tables compact as `{1, 2}`, empty table as `{}`. Keys are sorted so output is stable. |
 | Globals persist | Chunks share one Lua state. `_G.x` survives to the next call; locals do not. |
-| Undo | Every command runs inside an undo block named "Claude bridge command". Read-only commands add no undo point. |
+| Undo | Every command runs inside an undo block named "Claude bridge command". Read-only commands add no undo point of their own, but the block records any change the project holds outside its undo history, the user's included ([SKILL.md](../SKILL.md#undo-backups-and-unconfirmed-writes)). |
+| State counter | Every command moves the active project's `GetProjectStateChangeCount` by one, read-only ones too, with no undo point and the dirty flag unchanged: three empty commands in a row read 280, 281 and 282 (measured 2026-10-13). A check that nothing changed the project must compare the counter within one command, or from deferred code between commands, never across commands. The other way round, a change does not always move it: made from deferred code with no undo block, `SetMediaTrackInfo_Value` on `D_VOL`, `D_PAN`, `B_MUTE` and `I_SOLO` moved it by 0, and so did `CSurf_OnVolumeChangeEx` and moving the edit cursor, while `CSurf_OnPanChangeEx` and `CSurf_OnMuteChangeEx` moved it by 1 (REAPER 7.82, 2026-10-16). Code that watches for changes must read those values themselves. |
 | Errors are contained | Parse errors, `error()`, nil indexing and unknown `reaper.*` calls return `PARSE_ERROR:`/`RUNTIME_ERROR:` with a line number and exit code 1. The listener stays alive. |
+| Deferred code is not contained | A chunk that calls `reaper.defer` leaves its callbacks in the listener's own script. An error in one raises REAPER's ReaScript error dialog, which is modal and stops every defer script, and it ends the whole script, the listener with it. Measured 2026-10-13: a deferred probe used a project tab that had been closed. Afterwards `status.txt` stops updating and keeps its last state, with no "stopped". Wrap deferred callbacks in `xpcall`, and stop a deferred loop when its project is no longer valid (`ValidatePtr2(0, proj, "ReaProject*")`). A loop that never meets its end condition also outlives the command that started it, and keeps acting: seen 2026-10-13, a sampling loop that missed its end kept reading the next run's data and called `OnStopButtonEx` with its closed tab's pointer, and the next run's playback stopped at that moment. Give every deferred loop an end that cannot be missed (a deadline, or a generation number that the caller bumps). The listener schedules itself with `reaper.defer` too, through the same global: a wrapper that drops callbacks must spare the ones defined in `claude_bridge.lua` (`debug.getinfo(fn, "S").source`). |
 | Large payloads | A 100,000 character string and a 5,000 line table both round-trip intact. |
 | Timeouts | The client stops waiting; REAPER keeps executing the chunk. A late result is not mistaken for the next command's output. |
 | Line numbers | The client appends its request id as a trailing comment, so error line numbers match the code as written. |
@@ -626,9 +688,48 @@ Running the startup action twice used to leave two listeners polling the same fi
 
 Both of these live in `claude_bridge.lua`, which REAPER loads at startup. **Editing that file has no effect on the running listener until REAPER restarts.**
 
+To bring back a listener that ended (see "Deferred code is not contained") without restarting REAPER and its unsaved projects: in Actions > Show action list, run "ReaScript: Run ReaScript (EEL2, Lua, or python)..." and open `<REAPER resource path>/Scripts/claude_bridge.lua`. It is a defer script, so running it makes no undo point. The heartbeat in `status.txt` moves again within a second.
+
 ### Interpreter selection
 
 `scripts/reaper-bridge` must run a candidate interpreter before committing to it. On Windows, `python3` resolves to the Microsoft Store App Execution Alias: it satisfies `command -v`, then refuses to run and exits 49 with "Python was not found". Selecting on presence alone made the wrapper unusable unless `REAPER_MCP_PYTHON` was set by hand, even with a working Python on PATH.
+
+## ExtState, the Web Interface and Script Instances
+
+Measured on REAPER 7.82 (ReaperForVisual, 2026-10-12 and 13):
+
+- **The web interface as a file server** (files in `reaper_www_root`, measured 2026-10-14): `.js` is sent as `application/javascript`, so a page can load ES modules, but **`.mjs` is sent as `application/octet-stream`, which browsers refuse for modules**: name module files `.js`. It serves about 1 MB a second (a 1,040,012-byte file took 1.02 s) and allows **no caching** (`Cache-Control: no-cache, must-revalidate`, an expiry in the past, and a conditional request still gets 200), so a bundled library is fetched in full at every page load. Serving did not hold REAPER's main thread: defer ticks while 2 × 1 MB were served, p95 35.3 ms against 33.1 at rest.
+- **Reaching the web interface** (measured 2026-10-10, checked again 2026-10-25 with curl):
+  - Use `127.0.0.1`, not `localhost`. A request to `localhost` tries IPv6 first: it cost 2 s in a browser and 0.2 s with curl, against 0.02 s for `127.0.0.1`. A page REAPER serves can use relative URLs instead.
+  - A folder is not mapped to its `index.html`: `/rfv/` and `/rfv` answered 404, `/rfv/index.html` 200. Link the file itself.
+  - A file put in `reaper_www_root` is served at once, without a restart, and REAPER's built-in pages keep working.
+  - `/_/GET/EXTSTATE/<section>/<key>` answers in about 20 ms: median 16 ms polled ten times a second from a page, 22 ms from curl, the slowest about 50 ms.
+  - `/_/TRACK` gives one line per track, the master first as index 0: name, flags, volume, pan and one meter reading in tenths of a dB (`-1500` when silent), not left and right apart. For the two channels, a script reads `Track_GetPeakInfo` and publishes them through ExtState.
+  - The port is in `reaper.ini` (`reaper.get_ini_file()`) as a line `csurf_<n>=HTTP 0 <port> ...`, written when the user clicks OK in Preferences. REAPER shows the address as the computer's network address (*Access URL*), so other computers on the network can open it too (not tried from another computer); the *Username:password* field limits that.
+- **The web interface cuts long requests without a word.** `/_/SET/EXTSTATE/<section>/<key>/<value>` stores percent-encoded values intact: JSON, `|`, `+`, spaces and UTF-8 (Vietnamese) all survive, in 13 to 68 ms per request. A request line over about 1 KB is cut, and HTTP still answers 200. A list of numbers stopped at 657 bytes and a list of GUIDs at 855 bytes, about 22 GUIDs. A page that writes commands this way must send their length, and the reader must check it.
+- **Non-persistent ExtState lasts the whole REAPER session.** A command key a page or action wrote is still there when its consumer starts again: a new instance of the reading script found the last command, which the instance before it had already applied, and applied it a second time. A consumer should clear a command key as it reads it (consume it) and ignore whatever is waiting when it starts.
+- **Running a script again while it runs ends it.** With `reaper.set_action_options(1)` (end on relaunch, with no dialog), running the action of a script that is still running stops that instance and starts no new one. A test or launcher that restarts such a script must first let the old instance stop, for example by clearing the owner token it checks each tick and waiting a few ticks, or the action only toggles the old instance off. The instance that ends runs its `reaper.atexit` function: the place to write a last state for a page and to turn its own light off with `set_action_options(8)` (checked 2026-10-16: state written, light off, owner token cleared).
+- **Opening a web page from a script, with or without SWS.** With SWS, `reaper.CF_ShellExecute(url)`. Without it, on Windows, `reaper.ExecProcess('cmd.exe /C start "" "' .. url .. '"', -2)` opens the default browser: `-2` returns at once and keeps the console window minimized, and the empty `""` is `start`'s window title, without which a quoted URL would be taken as the title. Seen working on Windows with no SWS installed (2026-10-11); macOS (`/usr/bin/open "<url>"`) and Linux (`xdg-open "<url>"`) were not tried.
+- **A running script follows the active project tab, temporary ones included.** A script that works on `EnumProjects(-1)` every cycle also acts on a tab that a test or another script opens for a moment. The user's own running ReaperForVisual engine wrote into a test project's files between two bridge commands, and kept measurements for test projects. A test must expect another script in its temporary tab; a script that keeps files per project should skip projects in the system's temporary folder.
+- **A file a script left open blocks its deletion and renaming on Windows.** `io.open(path):read("a")` without `close` keeps the handle until Lua collects it. `os.remove` and `os.rename` of that path fail in the meantime, so a write through `.tmp` and rename fails too. The handle lives in the script's Lua state, which for bridge commands persists between calls. Close every handle. `collectgarbage()` releases one that was leaked.
+- **An action script launched again while its last `reaper.defer` is pending raises a modal dialog.** A script that ends with `reaper.defer(function() end)` (to avoid a "ReaScript: Run" undo point) stays running until that defer fires, about one tick (~31 ms). Launched again in that time, for example by a held shortcut (key repeat ~33 ms), REAPER asks in the modal "ReaScript task control" dialog what to do with the running instance. `reaper.set_action_options(1 | 2)` at the top of the script ends the waiting instance and runs the new one with no dialog. Both runs completed when launched twice in one tick.
+- **A script's action name is fixed by its path.** Registered in the Main section, a script is named `_RS` followed by the SHA-1 of its path under the `Scripts` folder, upper-case, with forward slashes (`REAPERFORVISUAL/REAPERFORVISUAL.LUA`). So a menu, toolbar or key map that names a script works on every computer that installs it at the same place under `Scripts`. The command number from `NamedCommandLookup` changes between sessions, and the name does not. Confirmed on a script a user loaded by hand: its name was the hash computed beforehand.
+- **A script can show a popup menu without a window.** `gfx.showmenu("Item|#Greyed|!Ticked||After a separator")` called with no `gfx.init` shows the menu at the mouse on REAPER 7.82 (Windows), and returns the item picked, counting from 1 and skipping separators (0 when dismissed). The call is modal: REAPER's defer loops, the bridge listener included, wait until the menu closes, so never open one from a bridge command or a test. Where a REAPER build shows nothing that way, the call returns 0 at once, and opening a window of no size at the mouse first (`gfx.init("", 0, 0, 0, x, y)`) holds the menu.
+- **One script can set another script's toolbar light.** `reaper.SetToggleCommandState(0, cmd, state)` followed by `reaper.RefreshToolbar2(0, cmd)` sets the toggle state of any registered ReaScript, running or not. It returns false for a built-in action. A script that was never toggled reads -1. Neither call touches the project: dirty, undo and the state counter stay unchanged. A script sets its own light with `set_action_options(4)` (on) or `(8)` (off).
+- **Registering, renaming and removing a script** (measured 2026-10-16). `reaper.AddRemoveReaScript(true, 0, path, true)` registers a script at once and returns its command number; its name was the `_RS` hash computed beforehand, and its line was in `reaper-kb.ini` straight away. `AddRemoveReaScript(false, 0, path, true)` also removes the entry of a script whose file is already gone: it returned 1 and the line left `reaper-kb.ini`, but `NamedCommandLookup` still returned the old command number in the same session. Renaming a script's file breaks its action: a toolbar button kept pointing at the old name (`_RS` with the hash of the old path). Register the new path, and have the user point the button at it (its right-click menu has *Change action...*).
+- **Where a user's toolbars point.** `reaper-menu.ini` in the resource folder holds each customized toolbar as a section such as `[Floating toolbar 8]`, with `item_<k>=<command> <text>` and `icon_<k>=<file>`; a script's button reads `item_13=_RS<hash> Script: <file>`. Reading the file is safe and shows which button runs what. Change toolbars through REAPER (*Options > Customize menus/toolbars...*); editing the file by hand while REAPER runs was not tried.
+- **REAPER's own words, without opening a window.** On REAPER 7.82 for Windows, the text of its dialogs is stored in `reaper.exe` as UTF-16 and the text of its menus as UTF-8. Searching the file gives the exact words to tell a user ("Insert action...", "Change action...", "Customize this toolbar...") without opening a dialog, which could be modal and hold every script.
+
+## Installing Scripts: ReaPack and a Clean REAPER
+
+Measured on REAPER 7.82 with ReaPack 1.2.6, installing ReaperForVisual on a REAPER that had never seen it (2026-10-16):
+
+- **A second REAPER for a clean test.** `reaper.exe -newinst -cfgfile "<folder>\reaper.ini"` runs another REAPER beside the user's, with `<folder>` as its resource path: the user's settings, actions and projects are not touched. A `reaper.ini` holding only `[REAPER]`, `audioclosestop=1` and `audiocloseinactive=1` keeps it off the audio device unless it plays. A new folder scans every plugin first: 1,186 took several minutes, and *Cancel* acts only after the current file (a Waves shell holds 718 plugins). Quit it from its own *File* menu: a keyboard shortcut goes to whichever REAPER has focus.
+- **ReaPack's first start** shows *Manage repositories* with its default repositories ticked; OK synchronizes them all. Untick them in a test to download nothing else. *Extensions > ReaPack > Import repositories...* fetches only the index pasted there.
+- **ReaPack's package list names a package by its `desc` attribute**, not its `name`: give `desc` the name users will look for. Right-click offers *Install v<version>*; after OK a *Transaction report* needs one more OK.
+- **Where ReaPack puts files.** A script goes to `Scripts/<index name>/<category>/<file>`; a file of type `webinterface` to `reaper_www_root/<file>`, subfolders kept; one package may mix both. Each `main="main"` script is registered in the Main section (`SCR 4 0 RS<sha1> "Custom: <file>" "<index>/<category>/<file>"` in `reaper-kb.ini`) and shows in the Action List as *Script: <file>*. An index named like a folder already under `Scripts` installs into it. ReaPack also gives scripts `ReaPack_AddSetRepository`, `ReaPack_ProcessQueue`, `ReaPack_BrowsePackages` and `ReaPack_GetOwner` (present with 1.2.6; not tried).
+- **A release's hashes** (`hash="1220<sha256>"`) must be of the bytes the server sends. GitHub serves a file as git stores it, so hash the tag's blobs (`git show <tag>:<path>`), not a Windows working copy with CRLF line ends.
+- **The web interface, added by hand:** *Options > Preferences*, *Control/OSC/web* near the end of a list that scrolls, *Add*, mode *Web browser interface*; it offered port 8080 and on OK wrote `csurf_0=HTTP 0 8080 '' 'index.html' 0 ''` to `reaper.ini` at once. A script cannot open Preferences on that page: the `ViewPrefs(0, name)` page names are undocumented, and "csurf", "control", "controlsurf", "csurfs", "osc" and "web" all opened General. Open Preferences with action 40016 and say where to go.
 
 ## What a Call Costs
 

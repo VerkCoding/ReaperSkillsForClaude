@@ -72,6 +72,16 @@ On REAPER 7.82, `RENDER_SETTINGS = 2` (documented as "stems only") with every tr
 
 A selected-tracks stem is the track's own post-fader output: folder tracks include their children, and nothing passes through the parent folders or the master chain. That differs from `render_stems`, which solos each track and renders the master, so its stems go through every parent bus and the master FX.
 
+Measured 2026-10-11 on REAPER 7.82 (32-bit float stems, 48 kHz, REAPER's own FX):
+
+- A folder's stem is exactly the sum of its children's stems when the folder has no FX: residual −149 dB, float rounding.
+- Building a 37-track project with ReaEQ, ReaComp, ReaVerbate and ReaDelay twice and rendering it twice gave identical per-track statistics.
+- The stem carries the track's pan: a sine at pan +0.5 rendered at exactly the 0 dB-law ratio (azimuth 10.893° against 10.893° by arithmetic).
+
+### Through the master: `RENDER_SETTINGS` 128
+
+`RENDER_SETTINGS = 128` ("selected tracks via master") writes one file per selected track, rendered through its parent buses and the master, as the listener hears it. The same day it put a child at pan 0 inside a bus panned −0.5 at −10.89°, as the bus's pan law predicts; the child's own stem said 0°. Count `RENDER_TARGETS` as for stems. Soloing a track also passes its sends, so on a project with sends the file may include the reverb returns; that case was not measured.
+
 ## Choosing the output format
 
 `RENDER_FORMAT` is a **string** holding a base64 configuration blob. Writing it as a number does nothing and reads back as `0.0`, and so does `RENDER_FORMAT2` for bit depth. A render then silently comes out in whatever format the project already had: a request for FLAC produces `name.wav`, and every bit depth request produces the project's existing depth.
@@ -233,6 +243,8 @@ For a file that exists but is silent, check the following properties:
 2. Check `GetMediaSourceLength` on a take source. A value of 0.0 indicates offline media.
 3. Check `B_MUTE` and `I_FXEN` on every track.
 4. Verify routing to the master track. Inspect `D_VOL`, `B_MAINSEND`, and send parameters.
+
+Rendering selected tracks "via master" (`RENDER_SETTINGS` 128) renders each through its parent buses and the master, but its sends pass too, as they do under solo. To render a track's main path only, mute every send (`B_MUTE` on each send) for that render and put them back afterwards. And a track rendered alone through a bus compressor is not its part of the mix: the compressor sees less and works less (a room mic came out 7 dB louder alone than its share of the mixed bus).
 5. Render with all FX chains disabled. If silent, verify routing and media. If audio is present, bisect the chains.
 6. Verify individual plugins.
 

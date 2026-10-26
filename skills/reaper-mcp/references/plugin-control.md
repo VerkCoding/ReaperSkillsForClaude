@@ -311,14 +311,21 @@ Vintage Compressor: `539` Bypass · `540` Threshold · `541` Ratio · `546` Auto
 
 ## Latency
 
-Bypassing a plugin does not release its PDC. Setting it offline reduces PDC to zero.
+On REAPER 7.82, bypassing a plugin releases its PDC, and so does setting it offline. Measured on a monitored track with an impulse probe (2026-10-25): a JSFX reporting 1024 samples and Acon DeNoise 2 (VST3, 1024 samples) each delayed the live input by 1024 samples when active and by 0 when bypassed or offline; `chain_pdc_reporting` also leaves bypassed FX out (a chain of DeNoise 2, TONEX 7 and a bypassed AmpliTube 5 7 reported 1031). An earlier version of this note said bypass keeps the PDC; that is wrong for 7.82.
 
 ```lua
-local ok, lat = reaper.TrackFX_GetNamedConfigParm(tr, fx, "pdc")
-reaper.TrackFX_SetOffline(tr, fx, true)
+local _, lat = reaper.TrackFX_GetNamedConfigParm(tr, fx, "pdc")              -- this FX, in samples
+local _, rep = reaper.TrackFX_GetNamedConfigParm(tr, 0, "chain_pdc_reporting") -- the chain, as reported
+local _, act = reaper.TrackFX_GetNamedConfigParm(tr, 0, "chain_pdc_actual")    -- the chain, rounded up to the block size, valid only after playback started
 ```
 
-Sum `pdc` across a chain and report it in ms at the project rate.
+- The delay REAPER applies is each chain's latency rounded up to the buffer size: sum `chain_pdc_actual` of every chain on the path the signal takes (measured: a path reporting 184 + 31 + 731 = 946 samples delayed a live input by 192 + 64 + 768 = 1024 at a 64-sample buffer). Report it in ms at the device rate (`GetAudioDeviceInfo("SRATE")`), which is the rate plugins run at when the project rate is not forced.
+- `pdc` reads correctly with the audio engine closed; `chain_pdc_actual` reads `0` until playback has run.
+- `chain_pdc_mode` (read and write, per chain): 0 classic, 1 new default, 2 ignore PDC, 3 hardware-output compensation (master). Mode 2 stops REAPER from compensating that chain; the FX still delays its own output.
+- Inside a container, read `container_count` and `container_item.N` to reach the children. A container holding UADx Pure Plate (31) and a JSFX (0) reported `pdc` 31 for itself.
+- The preference `pdcautobypassms` (Preferences, Audio: "Auto-bypass FX on record arm-affected tracks whose PDC exceeds", REAPER 7.34 and later) bypasses such FX while armed, by REAPER's own help text; not measured here. It is global: ask before changing it. With it off, a 1024-sample FX on an armed track stayed active and delayed the input.
+
+What the PDC on each part of a session adds to what a performer hears is in [Tracking latency](../../reaper-audio-engineer/references/topics/tracking-latency.md).
 
 ## Sidechain routing
 

@@ -186,7 +186,7 @@ If executing `start_recording`, verify the following conditions:
 1. **Signal path**: Verify track input assignment and record-arm status using `get_track_info`.
 2. **Format**: Verify project sample rate and bit depth match delivery specifications to avoid unnecessary conversion.
 3. **Solo state**: Verify all tracks are unsoloed.
-4. **Monitoring latency**: Delay exceeding 10 ms (Tier 3) may impede performance. Bypass or offline plugins causing latency. Bypassing retains delay compensation; offlining removes it.
+4. **Monitoring latency**: Delay exceeding 10 ms (Tier 3) may impede performance. The performer hears the interface's input and output latency plus the PDC of every FX on the monitored path: input FX, track FX, each parent folder, the master, and the cue bus. Bypass or offline the FX that add it; on REAPER 7.82 both remove the delay (measured). See [Tracking latency](./topics/tracking-latency.md).
 5. **File nomenclature**: Assign track names prior to recording to set output file names.
 6. **Test recording**: Record a brief test segment and execute checks 4.2 through 4.5.
 
@@ -239,7 +239,7 @@ If a data point is missing, state its absence explicitly.
 | Silent render output | Media items offline |
 | Inconsistent crest factor on same source | Differing measurement time windows |
 | Positive correlation but mono bass loss | Averaged correlation value obscures section-specific negative correlation |
-| Latency remains with bypassed plugin | Bypass maintains delay compensation; plugin must be offlined |
+| Latency remains after bypassing a track's plugins | The PDC sits further down the path: a parent folder, the master (a lookahead limiter), the cue bus or input FX. See [Tracking latency](./topics/tracking-latency.md) |
 | RMS noise floor approaches zero | Measurement window overlaps digital silence |
 
 ## 11. Session exit protocol
