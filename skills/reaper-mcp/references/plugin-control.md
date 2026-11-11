@@ -20,6 +20,7 @@ Every plugin parameter has a normalised 0-1 view, and every plugin maps that ran
 - [iZotope Ozone 12](#izotope-ozone-12)
 - [Known index traps](#known-index-traps)
 - [Latency](#latency)
+- [Mixer slots](#mixer-slots)
 - [Sidechain routing](#sidechain-routing)
 
 ## Find the parameter first
@@ -45,16 +46,16 @@ One row per plugin, measured on REAPER 7.82, Windows, 2026-10-08. "Writes" is ho
 | Plugin as REAPER names it | Params | Padding | Lists | Writes | Load | Notes |
 |---|---|---|---|---|---|---|
 | `VST3: Ozone 12 (iZotope)` | 876 | none | round (111) | callback | 3.6 s | module prefixes; True Peak switch not exposed; [section](#izotope-ozone-12) |
-| `VST3: Nectar 4 Delay (iZotope)` | 27 | none | round (3) | callback | 0.05 s | display path drops units |
+| `VST3: Nectar 4 Delay (iZotope)` | 27 | none | round (3) | callback | 0.05 s | display path drops units; `0` DELAY: Wet Mix is a linear crossfade, displayed with no unit (`18.60` at 0.186): dry = 1 − value, wet ∝ value. At 0.186 an impulse passed dry at −1.79 dB and the first 1/8 echo arrived at 250 ms at −31.66 dB re the input (HPF 270 Hz, LPF 2 kHz, Mode Analog); at 1.0 the dry was gone (−114 dB, the noise floor) and the echo came at −17.05 dB, +14.6 dB = 20·log10(1/0.186). **1.0 on a return**, and the echo rises by 20·log10(1/old value): lower the return by as much to keep its level (impulse test, REAPER 7.83, 2026-11-07) |
 | `CLAP: reVUe (Blenheim Sound)` | 4 | none | — | callback | <0.01 s | one control (Calibration) |
 | `VST3: soothe2 (oeksound)` | 60 | none | round (10) | at once | 0.17 s | display path drops units; kilo notation "1k", "2k5"; [indices](#known-index-traps) |
 | `VST3: SSLGChannel Stereo (Waves)` | 167 | 130 MIDI CC, empty display | — | at once | 0.02 s | CompThresh runs backwards; [indices](#known-index-traps) |
 | `VST3: Scheps Omni Channel 2 Stereo (Waves)` | 1950 | 130 MIDI CC, empty display | round (27) | at once | 0.28 s | 1,629 `Insert` entries that format only their current value; **L and R are separate parameters**; [indices](#known-index-traps) |
 | `VST3: GTR Amp Stereo (Waves)` | 155 | 130 MIDI CC, empty display | round (5) | at once | 0.53 s | |
 | `VST3: Acon Digital DeNoise 2 (Acon Digital)` | 27 | none | round (2) | at once | 0.01 s | display doubles units ("5.0 dB dB") |
-| `VST3: smartChain (sonible)` | 120 | none | **floor** (16) | at once | 0.62 s | Profile label off by one; `110` Output Trim linear ±24 dB, `norm = (dB + 24) / 48`, one per instance; [topic](../../reaper-audio-engineer/references/topics/plugin-sonible-smartchain.md) |
+| `VST3: smartChain (sonible)` | 120 | none | **floor** (16) | at once | 0.62 s | Profile label off by one; `110` Output Trim linear ±24 dB, `norm = (dB + 24) / 48`, one per instance; `115` Learn On/Off set to 1 while the transport plays starts a learn, and it returns to 0 when done (6.5–17.4 s, REAPER 7.83, 2026-11-07); [topic](../../reaper-audio-engineer/references/topics/plugin-sonible-smartchain.md#learning-from-the-host) |
 | `VST3: Pro-L 2 (FabFilter)` | 172 | MIDI entries 36-167 | round (5) | at once | — | `0` Gain linear 0 to +30 dB, `norm = dB / 30`; `18` Output Level −30 to 0 dBTP, −1.00 = 0.966517; `10` True Peak Limiting (on by default); `9` Oversampling, 4x = 0.4; `2` Lookahead linear 0-5 ms |
-| `VST3: Rev SPRING-636 (Arturia)` | 2196 | 2,080 "MIDI CC helper", plus MPE and program-change entries | **SDK** (17) | at once | 0.05 s | |
+| `VST3: Rev SPRING-636 (Arturia)` | 2196 | 2,080 "MIDI CC helper", plus MPE and program-change entries | **SDK** (17) | at once | 0.05 s | no parameter is named Mix, Wet or Dry: `16` Blend is the dry/wet, and its display shows only the normalized value (`0.000`, `0.500`, `1.00`). It is not a crossfade: 0.0 is dry only (−6.40 dB re the input, spread over about 4 samples around the impulse with the 53-sample PDC compensated; no spring above −67 dB), 0.5 passes that dry at the same −6.40 dB and the spring at full (first arrival at about 24 ms, −35.41 dB), 1.0 is wet only (dry −118 dB, spring −35.56 dB). **1.0 on a return**, and the spring level stays the same (Preamp Mode Aux, Input Gain 14.4, Output Gain −16.7; impulse test, REAPER 7.83, 2026-11-07) |
 | `VST3: kHs Reverb (Kilohearts)` | 2090 | 2,080 "MIDI", empty display | — | at once | 0.01 s | 7 real controls; U+202F before units; Decay runs "500 ms" to "30.0 s" |
 | `VST3: UADx Pure Plate Reverb (Universal Audio (UADx))` | 2093 | 2,080 "MIDI CC #\|#" | round (1) | at once | 0.13 s | 10 real controls |
 | `VST3: ValhallaFutureVerb (Valhalla DSP, LLC)` | 36 | none | — | at once | 0.60 s | **formats only its current value**: search on a [scratch instance](#searching-on-a-scratch-instance); Mix 30 % = 0.2995-0.30 |
@@ -273,6 +274,14 @@ All 24 bands report `Used` and `Enabled` regardless of state. Unused bands reset
 
 Useful globals: `556` Output Level, `559` Bypass, `738` Wet.
 
+**"Zero Latency" covers only the EQ filters.** Read per instance on REAPER 7.83 at 48 kHz with a 64-sample buffer (2026-11-09), Processing Mode = Zero Latency, VST3 and CLAP alike:
+
+- Any band with **Spectral Enabled** makes the instance report 5120 samples at Processing Resolution Medium and 9219 at High. Writing "Band N Spectral Enabled" to 0 (Disabled) brought the instances back to 0 or 3; the band keeps its ordinary dynamics.
+- Global **Character** (`554`) at Subtle or Warm leaves 3 samples, which REAPER rounds up to a whole block on every path beneath it ([Latency](#latency)). Clean (normalized 0.0) reads 0: switching two instances to Clean took both from 3 to 0.
+- A fresh instance reports 0, so a latency figure taken at default settings shows neither case. Read `pdc` on the user's instance.
+
+FabFilter Pro-L 2 has no zero-latency setting: with True Peak Limiting on it reported 3115 samples at a lookahead of 0.18 ms and 3131 at 5 ms. Bypass or offline takes it off the path.
+
 ## FabFilter Pro-C 3
 
 Indices: `0` Style, `1` Threshold, `2` Auto Threshold, `4` Ratio, `5` Knee, `6` Range,
@@ -321,11 +330,30 @@ local _, act = reaper.TrackFX_GetNamedConfigParm(tr, 0, "chain_pdc_actual")    -
 
 - The delay REAPER applies is each chain's latency rounded up to the buffer size: sum `chain_pdc_actual` of every chain on the path the signal takes (measured: a path reporting 184 + 31 + 731 = 946 samples delayed a live input by 192 + 64 + 768 = 1024 at a 64-sample buffer). Report it in ms at the device rate (`GetAudioDeviceInfo("SRATE")`), which is the rate plugins run at when the project rate is not forced.
 - `pdc` reads correctly with the audio engine closed; `chain_pdc_actual` reads `0` until playback has run.
+- `pdc` follows the plugin's settings, not only its name: Pro-Q 4 went from 0 to 5120 with one spectral band ([FabFilter Pro-Q 4](#fabfilter-pro-q-4)), and Pro-L 2 moves with its lookahead and true peak settings. Read it on the instance in the project before calling a path zero-latency; a table measured on fresh instances is a starting point.
 - `chain_pdc_mode` (read and write, per chain): 0 classic, 1 new default, 2 ignore PDC, 3 hardware-output compensation (master). Mode 2 stops REAPER from compensating that chain; the FX still delays its own output.
 - Inside a container, read `container_count` and `container_item.N` to reach the children. A container holding UADx Pure Plate (31) and a JSFX (0) reported `pdc` 31 for itself.
 - The preference `pdcautobypassms` (Preferences, Audio: "Auto-bypass FX on record arm-affected tracks whose PDC exceeds", REAPER 7.34 and later) bypasses such FX while armed, by REAPER's own help text; not measured here. It is global: ask before changing it. With it off, a 1024-sample FX on an armed track stayed active and delayed the input.
 
 What the PDC on each part of a session adds to what a performer hears is in [Tracking latency](../../reaper-audio-engineer/references/topics/tracking-latency.md).
+
+## Mixer slots
+
+With REAPER's "allow empty FX slots" option on, the user can park an FX in a chosen slot of the mixer's FX list, with empty slots above it, such as a meter kept in slot 7. The slot is the named config parameter `slot_hint`. Measured on REAPER 7.83 in a scratch project tab (2026-11-08):
+
+```lua
+local _, hint = reaper.TrackFX_GetNamedConfigParm(tr, fx, "slot_hint")  -- "7": mixer slot 7, 0-based; "-1": no hint
+reaper.TrackFX_SetNamedConfigParm(tr, fx, "slot_hint", "7")              -- returned true, read back 7, and was saved
+```
+
+- `-1` means no hint: the FX packs into the slot after the FX before it.
+- The .rpp keeps the hint as `FX_SLOT_HINT n` inside the FX entry. A hint of 0 is not written to the file and reads -1 after a reload; for the first FX both mean slot 0.
+- Moving an FX with `TrackFX_CopyToTrack(tr, i, tr, j, true)` resets the moved FX's hint to -1; the other FX keep theirs. A user who parked a meter in slot 7 lost that position when an older `move_fx` moved it. A copy to another track (`move` false) arrives with -1, and the source keeps its hint.
+- `move_fx` reads every FX's hint by GUID before the move, writes the changed ones back in the same undo step, lists each FX's `slot_hint` in its reply, and names the restored ones in `restored_slot_hints`. Do the same for any move through the bridge.
+- REAPER accepts a hint out of chain order (an FX parked in slot 7 ahead of one in slot 2), and saves and reloads it as written. How the mixer shows such a chain was not measured; `move_fx` adds a `note` when its move leaves one.
+- A hint write from outside REAPER records no undo point of its own; wrap it in an undo block.
+- An offline FX refuses the write: `TrackFX_SetNamedConfigParm(tr, fx, "slot_hint", n)` returned false (REAPER 7.83, 2026-11-09). Set the hint while the FX is online, then set it offline; going offline keeps the hint.
+- A layout the user built by hand is a decision. Read every hint on the track before adding, moving or replacing FX, put each FX back where it was, and ask before departing from the pattern: an FX moved to satisfy a chain-order rule ("limiter last") was moved back by the user, whose meter belonged in the bottom slot.
 
 ## Sidechain routing
 

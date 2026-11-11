@@ -116,7 +116,7 @@ Put the reverb on a track of its own (a return) and send many tracks to it. A sh
 1. Create a new track (Ctrl+T) with a clear name such as "RV Plate Vox". Give every return the same colour.
 2. Click the FX button and add, in this order: ReaEQ (pre-EQ) → reverb → ReaComp (if ducking is needed, section 11).
 3. In ReaEQ: one High Pass band at 200–500 Hz, one Low Pass band at 8–10 kHz.
-4. In the reverb: Wet 100%, Dry off. With ReaVerbate, pull Dry down to -inf.
+4. In the reverb: Wet 100%, Dry off. With ReaVerbate, pull Dry down to -inf. A plugin with a single dry/wet control instead of separate Wet and Dry passes the dry signal until it is fully wet, on a delay return too. Setting it fully wet can also raise the wet level, so check the return's level afterwards: measured on Nectar 4 Delay's Wet Mix and Rev SPRING-636's Blend ([plugin-control.md](../../../reaper-mcp/references/plugin-control.md#registry-of-measured-plugins)).
 5. Create the send: drag the source track's ROUTE (I/O) button onto the reverb track. Or open the source track's Routing window → Add new send → choose the reverb track.
 6. Choose the send type in the Routing window (see the table below). Start the send level at -15 to -20 dB.
 7. Gather the returns into an "FX Returns" folder at the end of the project.

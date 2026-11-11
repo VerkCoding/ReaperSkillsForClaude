@@ -1086,6 +1086,15 @@ def _fx_names(track_index: int) -> list:
             for i in range(RPR.TrackFX_GetCount(track))]
 
 
+def _fx_hints(track_index: int) -> list:
+    """Each FX's mixer slot hint in chain order, -1 for none."""
+    from reapy import reascript_api as RPR  # noqa: PLC0415
+
+    track = _track_id(track_index)
+    return [int(RPR.TrackFX_GetNamedConfigParm(track, i, "slot_hint", "", 64)[4])
+            for i in range(RPR.TrackFX_GetCount(track))]
+
+
 def _item_rows(track_index: int) -> list:
     """(position, length, fade in, muted) for each item on a track, in REAPER's order."""
     from reapy import reascript_api as RPR  # noqa: PLC0415
@@ -1278,12 +1287,29 @@ def run_edit_plan(b: Bench) -> None:
 
     # --- FX order and undo -------------------------------------------------
     g = "undo"
-    b.call("move_fx", {"track_index": bb, "fx_index": 0, "to_index": 2}, group=g)
-    b.confirm(lambda: _fx_names(bb), ["ReaEQ", "ReaGate", "ReaComp"], "the FX chain order")
+    # ReaComp parked in mixer slot 6: REAPER's move resets the moved FX's hint, and
+    # move_fx writes it back.
+    _recorded("slot hint", lambda: RPR.TrackFX_SetNamedConfigParm(_track_id(bb), 0, "slot_hint", "6"))
+    b.call("move_fx", {"track_index": bb, "fx_index": 0, "to_index": 2}, group=g,
+           expect=lambda p: None if [e.get("slot_hint") for e in p.get("restored_slot_hints", [])] == [6]
+           and "note" not in p else f"replied {p}")
+    b.confirm(lambda: (_fx_names(bb), _fx_hints(bb)), (["ReaEQ", "ReaGate", "ReaComp"], [-1, -1, 6]),
+              "the FX chain order and slot hints")
     b.call("undo", group=g, expect=lambda p: None if p.get("undone") == ["MCP: move_fx"] else f"undid {p.get('undone')}")
-    b.confirm(lambda: _fx_names(bb), ["ReaComp", "ReaEQ", "ReaGate"], "the FX chain order after undo")
+    b.confirm(lambda: (_fx_names(bb), _fx_hints(bb)), (["ReaComp", "ReaEQ", "ReaGate"], [6, -1, -1]),
+              "the FX chain order and slot hints after undo")
     b.call("undo", {"redo": True}, group=g)
-    b.confirm(lambda: _fx_names(bb), ["ReaEQ", "ReaGate", "ReaComp"], "the FX chain order after redo")
+    b.confirm(lambda: (_fx_names(bb), _fx_hints(bb)), (["ReaEQ", "ReaGate", "ReaComp"], [-1, -1, 6]),
+              "the FX chain order and slot hints after redo")
+    # ReaGate parked in slot 2: with ReaComp (slot 6) moved ahead of it, ReaGate's slot
+    # comes before one an earlier FX takes, and the reply says so.
+    _recorded("slot hint", lambda: RPR.TrackFX_SetNamedConfigParm(_track_id(bb), 1, "slot_hint", "2"))
+    b.call("move_fx", {"track_index": bb, "fx_index": 2, "to_index": 0}, group=g,
+           expect=lambda p: None if [e.get("slot_hint") for e in p.get("fx", [])] == [6, -1, 2]
+           and "ReaGate" in p.get("note", "") else f"replied {p}")
+    b.call("undo", group=g, expect=lambda p: None if p.get("undone") == ["MCP: move_fx"] else f"undid {p.get('undone')}")
+    b.confirm(lambda: (_fx_names(bb), _fx_hints(bb)), (["ReaEQ", "ReaGate", "ReaComp"], [-1, 2, 6]),
+              "the FX chain order and slot hints after the second undo")
 
     def foreign_step():
         from reaper_mcp.connection import held  # noqa: PLC0415

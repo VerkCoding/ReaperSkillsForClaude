@@ -1,6 +1,6 @@
 # Tracking latency in REAPER
 
-Oct 25, 2026 · measured on REAPER 7.82, Windows, Focusrite USB ASIO at 48 kHz with a 64-sample buffer
+Oct 25, 2026 · measured on REAPER 7.82, Windows, Focusrite USB ASIO at 48 kHz with a 64-sample buffer. Sections 5 to 7 and the notes dated November: REAPER 7.83, same interface, Oct 26 to Nov 9, 2026
 
 > **In this plugin:** this document owns the monitoring-latency budget while recording, which FX may sit on a monitored path, and the layout of a low-latency tracking project. Levels follow [gain-staging.md](gain-staging.md), compressor settings follow [compression.md](compression.md), reverb settings follow [reverb.md](reverb.md).
 > Written for hands-on work in the REAPER interface. The last section, "Applying in this plugin", maps each step to the MCP tools and the Lua bridge.
@@ -42,6 +42,7 @@ PDC at 48 kHz as REAPER reads it (`pdc`), with the settings found in two real pr
 |---|---|---|
 | sonible smartChain (Normal latency mode) | 4032 | 5.5 |
 | oeksound soothe2 | 2048 | 5.8 |
+| Waves Clarity Vx Mono (every setting tried, Nov 2026) | 2048 | not measured |
 | Acon Digital DeNoise 2 | 1024 | 3.0 |
 | FabFilter Pro-L 2 (lookahead; two settings) | 731, 532 | 7.7 |
 | ReaLimit, default settings | 480 | below noise |
@@ -63,6 +64,14 @@ PDC at 48 kHz as REAPER reads it (`pdc`), with the settings found in two real pr
 | JS Volume/Pan Smoother v5 | 0 | 0.7 |
 | ReaEQ, ReaComp, ReaGate, ReaVerbate, ReaDelay, ReaXcomp, JS Volume Adjustment, JS Dynamic Range Meter (defaults) | 0 | below noise (0.7 at most) |
 
+PDC belongs to the settings, not to the plugin's name (Nov 2026):
+
+- **FabFilter Pro-Q 4** reports 0 at default in Zero Latency mode, 5120 or 9219 as soon as one band has Spectral on (resolution Medium or High), and 3 with Character at Subtle or Warm, which costs a whole block. Details in [Plugin Control](../../../reaper-mcp/references/plugin-control.md#fabfilter-pro-q-4).
+- **FabFilter Pro-L 2** with True Peak Limiting on reported 3115 (lookahead 0.18 ms) and 3131 (5 ms); it has no zero-latency setting.
+- A noise reducer the user adds to a vocal can be the whole problem: Clarity Vx on a lead vocal took that singer's round trip from 7.8 ms to about 50 ms. It sits in track FX, so the recorded file stays dry, and bypassing it while tracking removes the delay and keeps its settings.
+
+So read `pdc` on each instance of the project in front of you. This table, and any scan made on fresh instances, says what a plugin does at the settings named.
+
 A whole recording project of 14 armed and monitored tracks with the third-party chains above (13 Scheps Omni Channel, 3 TDR Nova, 3 DeNoise 2, 3 ToneLib-NoiseReducer, TONEX, SSLChannel, Pro-L 2, Pure Plate, Nectar 4 Delay, 13 JS volume smoothers, 19 reVUe, two loudness meters) cost 68.7 % of one core with its FX on against off (four alternating 10 s pairs, spread 9.1).
 
 ## 3. A low-latency tracking project
@@ -73,7 +82,8 @@ A whole recording project of 14 armed and monitored tracks with the third-party 
 4. **Cue mixes come from pre-fader sends** into a cue bus with its own hardware output, so the engineer's faders do not change what the singer hears. Pre-fader sends still carry the track FX, so the zero-PDC rule covers the track too.
 5. **Comfort effects on returns.** A short plate or room (ReaVerbate) and a slap or eighth-note delay (ReaDelay) on returns fed from the vocal, 100 % wet, settings from [reverb.md](reverb.md).
 6. **Mixing chains stay bypassed while tracking.** On REAPER 7.82 a bypassed or offline FX adds no latency, so a mixing chain can wait in the project, bypassed, until the session is over.
-7. **Interface latency is the floor.** Halving the buffer in the driver's control panel lowers it; whether the computer holds that at full session load is a test for the user.
+7. **Know where the monitored signal comes out before arming.** A live microphone monitored through REAPER into loudspeakers in the same room feeds back. Read which hardware outputs REAPER has enabled and ask the user what they feed; do not arm a microphone track or turn its monitoring on until the user has confirmed. For a measurement that needs armed tracks, mute the master: the FX still run and the load is the same (section 5).
+8. **Interface latency is the floor.** Halving the buffer in the driver's control panel lowers it; whether the computer holds that at full session load is a test for the user.
 
 ## 4. Settings checked on REAPER 7.82
 
@@ -84,6 +94,62 @@ A whole recording project of 14 armed and monitored tracks with the third-party 
 | PDC auto-bypass | Preferences, Audio (global, REAPER 7.34 and later), `pdcautobypassms` | Bypasses FX above a PDC threshold on record-armed tracks, by REAPER's help text. Off on the measured system; not tested here. Global: the user decides |
 | Input FX versus track FX | Track | Both add their PDC to the monitored input; only input FX end up in the file |
 | Bypass versus offline | FX | Both remove the FX's latency from the path |
+
+## 5. Realtime load: what arming costs
+
+Latency is one budget; the other is whether each block finishes in time. At 64 samples and 48 kHz a block lasts 1.33 ms. Measured on a 63-track tracking project with one base plugin per folder level, Ryzen 7 5700X3D (8 cores, 16 threads), reading "RT CPU" and "RT longest-block" from REAPER's Performance Meter (2026-11-09):
+
+| Live state | RT CPU | RT longest-block |
+|---|---|---|
+| Nothing armed | 4 % | 0.30 to 0.41 ms |
+| 3 vocals armed and monitored | 31 % | 0.85 to 0.99 ms |
+| 4 instruments armed, monitoring off | 41.5 % | 0.97 to 1.35 ms |
+| All 7 | 45 to 53 % | 1.3 to 1.9 ms, RT xruns stayed 0 |
+
+- **Arming alone moves a path to the realtime thread**: the armed track, every folder above it and every return it sends to. Monitoring off does not keep them on anticipative processing. With nothing armed the same project ran at 4 %.
+- **RT CPU is the sum of the FX on those paths.** It matched the per-instance cost of the plugins on the armed paths, measured one plugin at a time in a scratch tab with pink noise (Scheps Omni Channel 2 3 to 5.5 % at the user's settings, SSL 4K B 3.2 to 3.4, Nectar 4 Delay 8.5, Pro-C 3 3.3, Pro-Q 4 about 1.2, kHs Reverb about 2.8, each in % of one core). To lower it, count the FX on every armed path and lighten those; disarming a track, or removing the send that ties a return to it, takes a whole chain off the realtime thread.
+- **The Performance Meter's per-track "FX CPU" column does not show this.** It read about 0.2 % for chains that cost several percent of a core, because it is a share of all cores.
+- **Muting the master did not change the load**, and SoundID Reference in the monitoring FX made no measurable difference. A muted master is the safe way to test with live microphones in the room.
+
+**"Allow live FX multiprocessing"** (Preferences, Audio, Buffering; `syncsmpmax2` in reaper.ini) spreads the armed paths over several cores. REAPER's own note beside it reads "may reduce performance at low latencies", and it is off by default. Same project, all 7 tracks armed and monitored, master muted:
+
+| Live FX multiprocessing | RT CPU | RT longest-block |
+|---|---|---|
+| Off | 50 to 51 % | 1.49 to 1.62 ms, over the 1.33 ms block |
+| 4 CPUs | 34 to 35 % | 0.90 to 1.24 ms |
+| 8 CPUs | 30 to 31 % | 0.80 to 1.03 ms |
+| 16 CPUs | 29 to 30 % | 0.75 to 1.02 ms |
+| 8 CPUs, transport playing | 29 to 32 % | 0.73 to 1.25 ms, one 1.79 ms spike of unknown cause, RT xruns 0 |
+
+It paid because the session had four independent live branches (percussion, bass, guitar, vocals); a session with one live chain has nothing to spread. The number of physical cores was enough: 16 did no better than 8. It is a global preference: back up reaper.ini, change it only when the user asks, and measure before and after.
+
+"Close audio device when stopped and application is inactive" has a sub-option, "...when inactive and tracks are record armed". With the sub-option off, an armed session keeps the device open while the user works in another window; read both before advising the user to turn the first one off for a live session.
+
+## 6. Scanning a whole plugin library
+
+To offer the user only what is safe on a monitored path, 1,307 plugins were measured at their default settings (2026-10-26). Loading that many plugins is the risk, not the measuring:
+
+- **Run each scanned plugin in its own process.** REAPER's "Dedicated process" mode is a line `<file>=2 1` per plugin in `reaper-vstbridge64.ini`; REAPER applies it at once, with no restart. Back the file up, add the lines for the scan, restore it afterwards and compare the bytes. A plugin that crashes after loading then takes down its host, not REAPER, and REAPER's memory stays flat. Loaded natively, the same scan grew REAPER to 14 to 18 GB and crashed it.
+- **It does not contain a plugin that dies while loading**: REAPER then tries it natively. One metering plugin with missing files called `abort()` this way and had to be skipped by name. Keep a skip list and resume after it.
+- **Several plugins of one vendor starting in parallel processes can deadlock REAPER's main thread** (seen with Arturia and with iZotope RX). Scan in small batches, with a watchdog that ends the hosts of a batch that stops answering.
+- **Ask the user not to touch REAPER while it runs**, work in a scratch tab, and tell them first: a crash loses whatever is unsaved in their other tabs. Check `IsProjectDirty` on every tab before starting.
+- **The measurement.** Per plugin: `pdc` read three times with the audio engine running, and the delay of a 256-sample chirp sent once per 48000 samples, found by cross-correlation against an empty reference track in the same cycle, in two runs. Effective latency is the larger of the two. Cross-correlation suits clean paths; use the onset when a dry path arrives before the processed one, the impulse arrival for amplifiers and distortion, the earlier of onset and correlation for modulation effects, and the reported value for instruments and for reverbs and delays that are 100 % wet.
+- **The result describes one machine.** Keep the scan and any inventory built from it out of the repository (gitignored); only general findings belong in these documents.
+- **Folders in the FX browser** made from the result live in `reaper-fxfolders.ini`. Back it up, leave the user's own folders as they are, and say that new folders show only after REAPER restarts.
+
+## 7. What is installed
+
+Suggest and insert only plugins the user has. Before recommending one, read the library instead of assuming:
+
+| File in REAPER's resource folder | Holds | Line format |
+|---|---|---|
+| `reaper-vstplugins64.ini` | VST2 and VST3, 64-bit | `file[<shellid>]=hash,uid,Name (Vendor)`, with `!!!VSTi` after an instrument's name |
+| `reaper-vstplugins.ini` | 32-bit plugins, run through REAPER's bridge | the same |
+| `reaper-clap-win64.ini` | CLAP | `id=flags`, a vertical bar, then `Name (Vendor)` |
+| `reaper-jsfx.ini` | JSFX | `NAME path "JS: ..."` |
+| `reaper-fxtags.ini` | the `[developer]` and `[category]` tags | one plugin per line |
+
+To merge the formats into one list, match by name with the vendor prefix removed (some VST2 names carry the vendor in front, as in "FabFilter Pro-Q 3") and by vendor without "Inc." or "LLC". The vendor is the last bracket that is not a note such as "(Mono)", "(x86)" or "(10ch)". One library came to 2,073 plugins this way, 1,828 of them third-party. A plugin that exists only in the 32-bit list runs bridged; say so before suggesting it for a low-latency session. If the user keeps their own export of the list, that file is the newest truth: read it first, and change nothing in it.
 
 ## Applying in this plugin
 
@@ -100,4 +166,9 @@ Claude measures and builds; the user sets the driver buffer, the global preferen
 | Cue bus hardware output and master send off | Bridge: `CreateTrackSend(tr, nil)` and `B_MAINSEND` |
 | Stock FX and their settings | `add_fx`, then `set_fx_parameter` following the [Plugin protocol](../../../reaper-mcp/references/plugin-protocol.md) |
 | CPU of a chain | Bridge plus a process CPU sample from outside REAPER: alternate the chain on and off (`I_FXEN`) during playback and compare |
-| Driver buffer, enabled hardware outputs, anticipative FX, PDC auto-bypass | The user, in the driver's control panel and in REAPER's Preferences |
+| Realtime load (section 5) | No API reads RT CPU or RT longest-block: open View, Performance Meter and read it from a screenshot, several readings per state. Arm and monitor with the master muted (`B_MUTE` on the master), and put every arm, monitor and mute flag back afterwards |
+| Which paths are on the realtime thread | Bridge: for each track with `I_RECARM` = 1, walk `GetParentTrack` to the top and follow its sends (`GetTrackSendInfo_Value`, `P_DESTTRACK`); list the FX on all of them |
+| Live FX multiprocessing | Read `syncsmpmax2` in reaper.ini. Changing it is the user's decision: with their go-ahead, back up reaper.ini and set it in Preferences, Audio, Buffering |
+| Which hardware outputs exist and where the master goes | Bridge: `GetNumAudioOutputs`, `GetOutputChannelName`, the master's hardware sends. Where they lead in the room is the user's answer |
+| Scan the library, list what is installed (sections 6 and 7) | Bridge in a scratch tab plus the ini files; results stay gitignored |
+| Driver buffer, enabled hardware outputs, anticipative FX, PDC auto-bypass, live FX multiprocessing | The user, in the driver's control panel and in REAPER's Preferences |

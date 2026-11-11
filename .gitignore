@@ -30,3 +30,8 @@ Thumbs.db
 *.RPP-bak
 *.reapeaks
 claude_bridge/
+
+# Machine-specific plugin latency scan and inventory of the local plugin library
+skills/reaper-audio-engineer/references/plugin-latency-scan.csv
+skills/reaper-audio-engineer/references/plugin-library.csv
+skills/reaper-audio-engineer/references/plugin-library.md

@@ -69,7 +69,7 @@ A read-back is only evidence if the failure mode produces a different value. The
 | `InsertMedia` | no usable return | diff the track's item ids before and after |
 | `SplitMediaItem` | returns a null pointer outside the item or exactly at its start | `if _is_null(right): fail` |
 | `DeleteTrackMediaItem` | returns falsy | check the track's item count dropped by one |
-| `TrackFX_CopyToTrack` | no return; a destination past the end moves the FX to the end | validate the slot, then compare FX GUIDs in order |
+| `TrackFX_CopyToTrack` | no return; a destination past the end moves the FX to the end; the moved FX loses its mixer slot (`slot_hint` reads -1) | validate the slot, compare FX GUIDs in order, write each `slot_hint` back by GUID |
 | `GetRegionOrMarker(0, -1, guid)` | returns a null pointer for an unknown GUID | treat null as deleted |
 
 Reporting `-1.0` as the applied value presents a refused write as a successful one. Treat a negative read-back as failure.
@@ -317,6 +317,23 @@ else:
 ```
 
 The `noprompt:` prefix suppresses the save-changes modal, which is otherwise the deadlock in the table above. It is the only scriptable way found to discard changes or rebind without user input, and it is equally useful for restoring a known project state between tests. The cost is that reopening resets the undo history, so prefer the in-place branch when the project is already bound to the target.
+
+### A scratch tab needs a file before it closes
+
+A scratch tab opened with action 41929 (new project tab, ignoring the default template) or 40859 has no file. `Main_SaveProjectEx(P, path, 0)` writes a copy and leaves the tab dirty, so closing it with action 40860 raised "Save unsaved project before closing?" on the user's screen, and the bridge command hung until someone answered (REAPER 7.83, 2026-11-08; the window title read "[unsaved project] [proj 3/3]").
+
+Give the tab a file first, then work in it:
+
+```lua
+reaper.Main_OnCommand(41929, 0)                       -- new tab, no template
+reaper.Main_openProject("noprompt:" .. empty_rpp)     -- the tab now owns a file
+-- ... work, guarding each write with EnumProjects(-1) == the scratch tab ...
+reaper.Main_SaveProject(0, false)                     -- in place: dirty cleared
+reaper.Main_OnCommand(40860, 0)                       -- closes without a prompt
+reaper.SelectProjectInstance(user_project)            -- closing activates a neighbour, not the user's tab
+```
+
+Check `IsProjectDirty(0) == 0` before 40860. When a bridge command that closes a tab times out, look at every monitor for a dialog before sending anything else: [Modal Dialogs Freeze Everything](#modal-dialogs-freeze-everything).
 
 ### What stays the same across saves
 
@@ -580,11 +597,24 @@ Files saved by REAPER 6.33 carry no `MASTER_TRACKID`. A track name holding all t
 
 ### FX order
 
-`TrackFX_CopyToTrack(track, src, track, dest, True)` leaves the FX in slot `dest`: from EQ, Comp, Gate, Delay, moving 0 to 2 gave Comp, Gate, EQ, Delay. A destination past the end moved the FX to the end without complaint. `TrackFX_GetFXGUID` returns a `GUID*` pointer; convert it with `guidToString(pointer, "")` to compare chains.
+`TrackFX_CopyToTrack(track, src, track, dest, True)` leaves the FX in slot `dest`: from EQ, Comp, Gate, Delay, moving 0 to 2 gave Comp, Gate, EQ, Delay. A destination past the end moved the FX to the end without complaint. `TrackFX_GetFXGUID` returns a `GUID*` pointer; convert it with `guidToString(pointer, "")` to compare chains. Called from outside REAPER, the move records an undo point of its own, "Reorder FX", unless an undo block wraps it. It also resets the moved FX's mixer slot hint to -1 (REAPER 7.83); the other FX keep theirs. `move_fx` writes the hints back by GUID inside its undo step: see [Mixer slots](plugin-control.md#mixer-slots).
+
+### Adding, copying and replacing FX
+
+Measured on REAPER 7.83 while rebuilding the chains of a 53-track mix (2026-11-08):
+
+- **Names for `TrackFX_AddByName`.** The plain name (`ReaEQ`) and the full name with its format prefix as REAPER lists it (`VST3: Pro-Q 4 (FabFilter)`) both load. The name with the vendor but without the prefix (`ReaEQ (Cockos)`) returned -1. A plugin installed as both VST3 and CLAP needs the prefix to pick one.
+- **Position.** `TrackFX_AddByName(tr, name, false, -1000 - pos)` inserts at chain position `pos`; `-1` appends.
+- **A copy carries everything.** `TrackFX_CopyToTrack(src, i, dst, j, false)` copies the settings and the embedded-interface flag (`WAK 0 2` in the .rpp, the plugin's interface embedded in the mixer); only the mixer slot hint is reset. Copying one calibrated meter to 44 tracks kept its calibration and its embedding on every copy.
+- **Replace by adding first.** Add the new FX, confirm the returned index is not -1, then remove the old one. Removing first leaves the track with nothing when the add fails (a wrong name, a plugin that does not load).
+- **Compare with a fresh default before removing.** Normalized parameters of the user's instance against a new instance of the same plugin in a scratch tab show whether it carries settings. An instance that does is moved (`TrackFX_CopyToTrack(..., true)`), not deleted.
+- **Only what is installed.** Suggest and insert plugins from the user's own library: [What is installed](../../reaper-audio-engineer/references/topics/tracking-latency.md#7-what-is-installed).
 
 ### Pins
 
 `TrackFX_GetPinMappings` returns a bitmask per pin, bit n for track channel n + 1. ReaComp reports four input pins mapped 1, 2, 4, 8 (channels 1 to 4) by default, named `Main Input L/R` and `Auxiliary Input L/R` through `TrackFX_GetNamedConfigParm(track, fx, "in_pin_N")`. A pin index past the end reads 0.
+
+A meter can end up on one channel. In one project the reVUe (CLAP) instances on 17 tracks that had 4 channels showed one input pin and one output pin, both on channel 1, so they metered the left channel only; instances on 2-channel tracks had two of each. Lowering the channel count did not change an existing instance. What worked: remove the dead sidechain send that was the only user of channels 3/4 (check that no receive lands above channel 2), set `I_NCHAN` to 2, and insert the meter again. After adding a meter, read its pins with `get_fx_pins`.
 
 ### reapy refuses pointer strings in ValidatePtr2
 

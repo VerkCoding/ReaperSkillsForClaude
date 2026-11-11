@@ -156,10 +156,10 @@ Check the REAPER window. Refer to [Driving REAPER from Python](./references/pyth
 
 ## Reference materials
 
-- **[Driving REAPER from Python](./references/python-reaper-tools.md)**: reapy no-ops, modal dialogs, loop traps, latency and benchmarks; what a save keeps (GUIDs, templates, files beside a project) and what moves the state counter; envelopes and routing; ExtState and the web interface; script actions, toolbars and installing with ReaPack.
+- **[Driving REAPER from Python](./references/python-reaper-tools.md)**: reapy no-ops, modal dialogs, loop traps, latency and benchmarks; closing a scratch tab without a prompt; adding, copying and replacing FX; what a save keeps (GUIDs, templates, files beside a project) and what moves the state counter; envelopes and routing; ExtState and the web interface; script actions, toolbars and installing with ReaPack.
 - **[Rendering Secrets](./references/rendering.md)**: The silent-render state (`offlineinact`), bounds flags, and measurement.
 - **[Plugin protocol](./references/plugin-protocol.md)**: The procedure for every exchange with a plugin, its measured base, and the price of each step.
-- **[Plugin Control](./references/plugin-control.md)**: The registry of measured plugins, read-only and scratch-instance searches, list parameters, known index traps.
+- **[Plugin Control](./references/plugin-control.md)**: The registry of measured plugins, read-only and scratch-instance searches, list parameters, known index traps, latency that follows a plugin's settings, mixer slots (`slot_hint`) when the user allows empty FX slots.
 
 ## Verifying tools
 
@@ -194,5 +194,7 @@ Use reaper-core-setup for installation, health checks, and repairs.
 | `PARSE_ERROR` on byte one | Lua code contained a UTF-8 BOM. Use `--code` or `--lua-file`. |
 | Renders are silent, an `analyze_*` tool replies `silent: true`, or (1.3.0) `-Infinity` LUFS with `success: true` | Media went offline (`offlineinact`), or tracks are muted or soloed away. Bridge renders need action 40101 first: [Renders through the bridge](#renders-through-the-bridge). |
 | A plugin parameter write does not show, or shows only after the user clicks into REAPER | The plugin takes writes in its audio callback and the audio engine is closed (`audiocloseinactive`): [REAPER in the background](#reaper-in-the-background). |
+| A bridge command that closes a scratch tab times out | The tab had no file, so REAPER asked "Save unsaved project before closing?". Look at every monitor, answer No on the scratch tab, and give the next scratch tab a file first: [A scratch tab needs a file before it closes](./references/python-reaper-tools.md#a-scratch-tab-needs-a-file-before-it-closes). |
+| Licensed plugins (iLok, UADx) report "not authorised" or load in an error state in REAPER while the vendor's own tools show valid licences, or a project hangs while loading them | Compare the clock inside REAPER with the system clock before touching the licence software: `return os.date()` through the bridge. On 2026-11-09 one plugin build from an unofficial source patched the Windows time functions inside reaper.exe, and every plugin in that process read the year 2000; reinstalling the licence managers changed nothing. The fix is to take that plugin offline or uninstall it and restart REAPER. REAPER reopens the last session's tabs, so a tab that still holds it spoils the new process too; a plugin that saved its error state into the project gets its state back from a backup. |
 | Render produces 0 bytes | `RENDER_FILE` received a full path while `RENDER_PATTERN` held a filename. Check `is_file()`. |
 | `import reapy` fails | The interpreter cannot load reapy. Run the bootstrap via reaper-core-setup. |

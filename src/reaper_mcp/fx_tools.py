@@ -188,6 +188,62 @@ def _fx_guid(track_id, fx_index: int) -> str:
     return str(RPR.guidToString(RPR.TrackFX_GetFXGUID(track_id, fx_index), "")[1])
 
 
+def _slot_hint(track_id, fx_index: int):
+    """Return an FX's mixer slot (0-based, -1 = none, packed after the FX before it), or None.
+
+    With REAPER's "allow empty FX slots" on, the user can park an FX in a chosen mixer
+    slot; REAPER keeps it as FX_SLOT_HINT in the FX entry. None means REAPER did not
+    answer the key, as a version without it would not.
+    """
+    out = RPR.TrackFX_GetNamedConfigParm(track_id, fx_index, "slot_hint", "", 64)
+    if not out[0]:
+        return None
+    try:
+        return int(str(out[4]).strip())
+    except ValueError:
+        return None
+
+
+def _restore_slot_hints(track_id, wanted: dict) -> tuple:
+    """Write back the slot hints in `wanted` ({fx GUID: hint}) wherever they changed.
+
+    TrackFX_CopyToTrack resets the moved FX's hint to -1, so a meter the user parked in
+    slot 7 lost its place. Returns (restored, lost): lists of {"index", "name",
+    "slot_hint"}, with "reads" added to an entry in lost.
+    """
+    restored, lost = [], []
+    for i in range(RPR.TrackFX_GetCount(track_id)):
+        hint = wanted.get(_fx_guid(track_id, i))
+        if hint is None:
+            continue
+        now = _slot_hint(track_id, i)
+        if now == hint:
+            continue
+        RPR.TrackFX_SetNamedConfigParm(track_id, i, "slot_hint", str(hint))
+        entry = {"index": i, "name": RPR.TrackFX_GetFXName(track_id, i, "", 256)[3], "slot_hint": hint}
+        reads = _slot_hint(track_id, i)
+        if reads == hint:
+            restored.append(entry)
+        else:
+            lost.append(dict(entry, reads=reads))
+    return restored, lost
+
+
+def _hints_out_of_order(chain: list) -> list:
+    """Names of FX whose slot hint asks for a slot no later than one an earlier FX takes.
+
+    The mixer lists a chain in order, one FX per slot: an FX without a hint takes the
+    slot after the one before it, so a hint is reachable only past that slot.
+    """
+    late, taken = [], -1
+    for fx in chain:
+        hint = fx.get("slot_hint")
+        if hint is not None and 0 <= hint <= taken:
+            late.append(fx["name"])
+        taken = max(hint, taken + 1) if hint is not None and hint >= 0 else taken + 1
+    return late
+
+
 def _pin_channels(track_id, fx_index: int, is_output: int, pin: int) -> list:
     """Return the 1-based track channels wired to one pin.
 
@@ -503,7 +559,12 @@ def register_tools(mcp):
     @mcp.tool()
     @records_undo(own_step=True)
     def move_fx(track_index: int, fx_index: int, to_index: int) -> dict:
-        """Move an FX to another slot in the same track's chain; to_index is the slot it ends up in. Returns the new chain order."""
+        """Move an FX to another position in the same track's chain; to_index is the chain index it ends up at.
+
+        Every FX keeps its mixer slot (slot_hint, set with "allow empty FX slots"; -1 = none):
+        REAPER's move resets the moved FX's, so the hints are written back. Returns the new
+        chain order with each FX's slot_hint.
+        """
         try:
             invalid = _negative_index(track_index=track_index, fx_index=fx_index, to_index=to_index)
             if invalid:
@@ -519,16 +580,41 @@ def register_tools(mcp):
                 if fx_index >= n_fx or to_index >= n_fx:
                     return {"success": False, "error": f"track {track_index} has {n_fx} FX, slots 0-{n_fx - 1}"}
                 before = [_fx_guid(track, i) for i in range(n_fx)]
+                # Read by GUID: the move shifts every index between the two positions.
+                hints = {g: _slot_hint(track, i) for i, g in enumerate(before)}
                 expected = before[:fx_index] + before[fx_index + 1:]
                 expected.insert(to_index, before[fx_index])
                 RPR.TrackFX_CopyToTrack(track, fx_index, track, to_index, True)
+                restored, lost = _restore_slot_hints(track, hints)
                 after = [_fx_guid(track, i) for i in range(RPR.TrackFX_GetCount(track))]
-                chain = [
-                    {"index": i, "name": RPR.TrackFX_GetFXName(track, i, "", 256)[3]}
-                    for i in range(len(after))
-                ]
+                chain = []
+                for i in range(len(after)):
+                    entry = {"index": i, "name": RPR.TrackFX_GetFXName(track, i, "", 256)[3]}
+                    hint = _slot_hint(track, i)
+                    if hint is not None:
+                        entry["slot_hint"] = hint
+                    chain.append(entry)
             if after != expected:
                 return {"success": False, "error": "REAPER's chain order is not the one asked for", "fx": chain}
-            return {"success": True, "track_index": track_index, "moved_to": to_index, "fx": chain}
+            if lost:
+                return {
+                    "success": False,
+                    "error": "The FX moved, but REAPER did not take back the mixer slot of "
+                             + ", ".join(f"{e['name']} (slot_hint {e['slot_hint']}, reads {e['reads']})" for e in lost)
+                             + ". Undo reverts the move.",
+                    "fx": chain,
+                }
+            result = {"success": True, "track_index": track_index, "moved_to": to_index, "fx": chain}
+            if restored:
+                result["restored_slot_hints"] = restored
+            late = _hints_out_of_order(chain)
+            if late:
+                result["note"] = (
+                    "In the new order the slot_hint of " + ", ".join(late) + " is not past the mixer "
+                    "slot an earlier FX in the chain takes. REAPER keeps the hint as written; where "
+                    "the mixer then shows that FX was not measured. Check the mixer, or move the FX "
+                    "so the slots rise along the chain."
+                )
+            return result
         except Exception as e:
             return {"success": False, "error": str(e)}

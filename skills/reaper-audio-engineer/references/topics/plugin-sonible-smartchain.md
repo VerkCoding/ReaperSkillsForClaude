@@ -3,7 +3,7 @@
 Sep 20, 2026 · @Mark
 
 > **In this plugin:** this document owns the workflow for sonible smart:chain. Target levels come from [gain-staging.md](gain-staging.md) and [compression.md](compression.md); where a figure here differs from those two, they win.
-> Read it only when a track carries smart:chain. Learn, profile, Group, Layer, Auto Level and Re-Derive happen in the plugin's own interface: Claude measures and checks, the user clicks. Details in the last section, "Applying in this plugin".
+> Read it only when a track carries smart:chain. Profile, Group, Layer, Auto Level and Re-Derive happen in the plugin's own interface: Claude measures and checks, the user clicks. Learn can also be started from the host, while the transport plays through the user's speakers. Details in the last section, "Applying in this plugin".
 
 The right order is: manual gain at the input → smart:chain learn → Group and Layer → Auto Level at the output → measure again with REAPER's meters. smart:chain does not replace input gain staging; it replaces the balancing and processing on each track.
 
@@ -331,9 +331,10 @@ Claude measures, checks and adjusts the REAPER side; most smart:chain operations
 | Find the tracks carrying smart:chain | `list_track_fx` per track, or one bridge command listing every track's FX. REAPER shows the name `VST3: smartChain (sonible)` |
 | Phase A: measure the level going into smart:chain | Bypass smart:chain and every FX after it with `bypass_fx`, `render_stems`, measure each file, then turn them back on. How to measure: "Applying in this plugin" in [gain-staging.md](gain-staging.md) |
 | Phase A: adjust item volume | Lua `D_VOL`, as in [gain-staging.md](gain-staging.md) |
-| Learn, profile, Group, Layer, Auto Level, Genre, Re-Derive, latency mode | The user clicks them in the smart:chain interface |
+| Step 6: learn | Parameter `115` Learn On/Off set to 1 with `set_fx_parameter` while the transport plays a representative section, media online; it returns to 0 when the learn is done. Playback goes to the user's speakers: say so and wait for a yes first. Measured details below, "Learning from the host" |
+| Profile, Group, Layer, Auto Level, Genre, Re-Derive, latency mode | The user clicks them in the smart:chain interface |
 | Check the profile on each instance | Parameter `116` Profile. **Do not trust its label:** smart:chain truncates when it names the stored value, so 8 of 25 instances in one project were labelled with the profile below the real one ("Vocals \| High" read as "Synth \| Pad", "Drums \| Snare" as "Drums \| Kick"). Read the number: `get_fx_parameters` with `name_contains: "Profile"` reports `step_index` and, when the label is off, `step_label` (1.3.1). By hand: index = round(normalised × 47), named with `TrackFX_FormatParamValueNormalized` at (index + 0.25) / 47. Ask the user to confirm in the plugin window before suggesting a change. See "List parameters" in [plugin-control.md](../../../reaper-mcp/references/plugin-control.md#list-parameters-trust-the-number-not-the-label) |
-| Check every instance at once | One bridge command reading parameters `116` Profile, `110` Output Trim, `106` Auto Gain, `114` Bypass, `115` Learn and the compressor's `5` Threshold across all instances. Thresholds that differ per track suggest the instances have been learned, and an `Output Trim` shared within a folder suggests the groups follow the folders; neither replaces the user's look at the plugin window |
+| Check every instance at once | One bridge command reading parameters `116` Profile, `110` Output Trim, `106` Auto Gain, `114` Bypass, `115` Learn (1 while a learn runs) and the compressor's `5` Threshold across all instances. Thresholds that differ per track suggest the instances have been learned, and an `Output Trim` shared within a folder suggests the groups follow the folders; neither replaces the user's look at the plugin window |
 | Track Trim, Group Trim, Mix Trim, macro controls | Read the parameter list with `get_fx_parameters` first. If the parameter exists, set it by its displayed value ([plugin-control.md](../../../reaper-mcp/references/plugin-control.md)); if not, it is an interface action |
 | Step 8: loudness-matched A/B | `bypass_fx` on smart:chain, then compare by the level-matching rule in [audio-mixing.md](../audio-mixing.md), section 3 |
 | Phases D and E: Master peak, headroom | `analyze_loudness`, `detect_clipping` |
@@ -341,6 +342,17 @@ Claude measures, checks and adjusts the REAPER side; most smart:chain operations
 | Saving milestone versions (\_A\_input, \_B\_learned…) | `save_project` with a new path for each milestone |
 
 A learned instance keeps the analysis of its original track: never copy a learned smart:chain to another track, whether with Lua or with a tool.
+
+### Learning from the host
+
+Measured on the VST3, REAPER 7.83, 2026-11-07, on 17 instances in one project whose input gains had just changed:
+
+- **Writing Learn starts a learn.** Parameter `115` Learn On/Off set to 1, with `set_fx_parameter` or with `TrackFX_SetParamNormalized` through the bridge, started a learn on all 17 instances while the transport played, and went back to 0 by itself when the learn was done, as the button does. Bring media online first (action 40101); otherwise the plugin hears silence.
+- **It waits for signal, not for a fixed time.** From 1 back to 0 took 6.5–7.2 s on sources that play throughout (kick, guitars, piano, rooms, shaker, and backing vocals with a 3.6 s phrase looped), and 15.4 and 17.4 s on a sparsely played snare top and bottom. Poll `115` instead of waiting a set time.
+- **Among the parameters the host can see, only the compressor moved.** Threshold, Attack and Ratio changed on all 17 instances, Release on 14; the EQ bands, the gate and `110` Output Trim did not. Whether a learn also updates state the host cannot see is not known; the yellow exclamation mark in the plugin window (Step 6) is still the user's check.
+- **Each result is an undo point.** REAPER recorded each learn's result as "Edit FX parameter: Track N <name>: smartChain".
+- **Several instances in one pass.** A deferred Lua watcher learned 9 instances at once: it set each track's `115` when the play position reached that track's section, polled `115`, and stopped the transport when every instance was back at 0. For a sparse source, loop the phrase where it plays (`GetSet_LoopTimeRange2` and `GetSetRepeatEx`; by default the loop moves the time selection too), then restore the user's loop, time selection, repeat and edit cursor. Give the watcher an end it cannot miss and wrap its callbacks in `xpcall`: [python-reaper-tools.md](../../../reaper-mcp/references/python-reaper-tools.md#bridge-protocol), "Deferred code is not contained".
+- **A learn is audible.** The transport plays through the user's speakers for as long as the learn runs. Say so before starting, and wait for the user's go-ahead.
 
 ## Sources
 

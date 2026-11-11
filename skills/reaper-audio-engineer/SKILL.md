@@ -70,7 +70,7 @@ A topic document holds the target numbers and working methods for one subject. T
 | [Gain staging](./references/topics/gain-staging.md) | Levels per source and per stage, meters, headroom, loudness targets per platform | Setting input or bus levels, checking headroom, level-matched A/B, choosing a delivery loudness |
 | [Compression](./references/topics/compression.md) | Compressor types, settings per source and bus, sidechain, parallel, de-ess, multiband, genre chains | Adding or adjusting a compressor, limiter or ducking |
 | [Reverb](./references/topics/reverb.md) | Reverb parameters and types, send/return set-up, depth, settings per source, tempo-matched pre-delay and decay | Adding space, building reverb buses, fixing a muddy or distant mix |
-| [Tracking latency](./references/topics/tracking-latency.md) | What a performer hears while recording: interface latency plus the PDC on every monitored path, measured PDC and CPU of common plugins, a zero-latency tracking layout, cue mixes | Building or checking a recording project, a singer hears a delay, choosing FX for monitored tracks or cue buses |
+| [Tracking latency](./references/topics/tracking-latency.md) | What a performer hears while recording: interface latency plus the PDC on every monitored path, measured PDC and CPU of common plugins, a zero-latency tracking layout, cue mixes, the realtime CPU that arming costs and live FX multiprocessing, scanning a plugin library safely, reading what is installed | Building or checking a recording or live project, a singer hears a delay, crackles or a high RT CPU with tracks armed, choosing FX for monitored tracks or cue buses, before suggesting a plugin the user may not own |
 | [sonible smart:chain](./references/topics/plugin-sonible-smartchain.md) | Gain staging and balance with smart:chain: learn, groups and layers, Auto Level | Only when a track carries `VST3: smartChain (sonible)` |
 
 Rules for topic documents:
@@ -78,7 +78,7 @@ Rules for topic documents:
 - They are written for hands-on work in the REAPER interface. Each ends with "Applying in this plugin", which maps its steps to MCP tools and the bridge. Act through that section; take numbers and reasoning from the body.
 - Their numbers are starting points (Tier 3, as defined in [Recording and intake](./references/audio-recording.md)) unless the document cites a standard. Measure before and after, as the process documents require.
 - Each number has one owner: levels, meters and loudness belong to gain staging; compressor settings to compression; reverb and its ducking to reverb; pan positions, width, the mono low end and REAPER's pan law and pan modes to the [reaper-panning](../reaper-panning/SKILL.md) skill. A plugin document takes its targets from those. When documents disagree, the owner wins; report the disagreement.
-- Steps inside a plugin's own interface, such as smart:chain's learn button, are the user's to perform. Name the step, wait for confirmation, then measure.
+- Steps inside a plugin's own interface, such as smart:chain's groups and layers, are the user's to perform. Name the step, wait for confirmation, then measure. Where the plugin document maps a step to a parameter, as it does smart:chain's learn, follow that.
 
 ## Troubleshooting
 

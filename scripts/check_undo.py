@@ -51,6 +51,7 @@ local a, b = reaper.GetTrack(0, 0), reaper.GetTrack(0, 1)
 name(a, "A"); name(b, "B")
 reaper.TrackFX_AddByName(a, "ReaEQ", false, -1)
 reaper.TrackFX_AddByName(a, "ReaComp", false, -1)
+reaper.TrackFX_SetNamedConfigParm(a, 0, "slot_hint", "3")
 reaper.TrackFX_AddByName(reaper.GetMasterTrack(0), "ReaEQ", false, -1)
 local it = reaper.CreateNewMIDIItemInProj(a, 0, 2)
 local tk = reaper.GetActiveTake(it)
@@ -69,7 +70,8 @@ return reaper.CountTracks(0) .. " tracks, " .. reaper.CountMediaItems(0) .. " it
 
 
 def plan(wav: str) -> list:
-    """(tool, arguments) against the BASE project: tracks A and B, ReaEQ and ReaComp on A,
+    """(tool, arguments) against the BASE project: tracks A and B, ReaEQ (parked in mixer
+    slot 3, so move_fx writes a slot hint back) and ReaComp on A,
     a MIDI item on A, an audio item on B, a send A->B, volume and pan envelopes on A,
     ReaEQ on the master, a marker and a region."""
     return [
