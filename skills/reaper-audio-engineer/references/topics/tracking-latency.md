@@ -1,6 +1,6 @@
 # Tracking latency in REAPER
 
-Oct 25, 2026 · measured on REAPER 7.82, Windows, Focusrite USB ASIO at 48 kHz with a 64-sample buffer. Sections 5 to 7 and the notes dated November: REAPER 7.83, same interface, Oct 26 to Nov 9, 2026
+Oct 25, 2026 · measured on REAPER 7.82, Windows, Focusrite USB ASIO at 48 kHz with a 64-sample buffer · plugin library in section 2 added Oct 26, 2026, on REAPER 7.83. Sections 5 to 7 and the notes dated November: REAPER 7.83, same interface, Oct 26 to Nov 9, 2026
 
 > **In this plugin:** this document owns the monitoring-latency budget while recording, which FX may sit on a monitored path, and the layout of a low-latency tracking project. Levels follow [gain-staging.md](gain-staging.md), compressor settings follow [compression.md](compression.md), reverb settings follow [reverb.md](reverb.md).
 > Written for hands-on work in the REAPER interface. The last section, "Applying in this plugin", maps each step to the MCP tools and the Lua bridge.
@@ -35,6 +35,8 @@ Two consequences follow.
 ## 2. Budget and measured plugins
 
 The Tier 3 working limit is 10 ms round trip for a performer ([audio-recording.md](../audio-recording.md), section 7). With 7.8 ms of interface latency, the budget for FX on the monitored path is zero blocks.
+
+### In two real projects (REAPER 7.82, 2026-10-25)
 
 PDC at 48 kHz as REAPER reads it (`pdc`), with the settings found in two real projects; values that depend on a setting are marked. CPU per instance: 8 instances on 8 tracks playing 240 s of a sung vocal, REAPER's process CPU over 10 s, minus the mean of empty-chain runs before and after, divided by 8. The runs scatter by about 0.5 % per instance; a value under 0.5 % reads as "below noise". Not the realtime-thread load: these tracks were not armed, so anticipative FX processed them ahead of time.
 
@@ -74,10 +76,76 @@ So read `pdc` on each instance of the project in front of you. This table, and a
 
 A whole recording project of 14 armed and monitored tracks with the third-party chains above (13 Scheps Omni Channel, 3 TDR Nova, 3 DeNoise 2, 3 ToneLib-NoiseReducer, TONEX, SSLChannel, Pro-L 2, Pure Plate, Nectar 4 Delay, 13 JS volume smoothers, 19 reVUe, two loudness meters) cost 68.7 % of one core with its FX on against off (four alternating 10 s pairs, spread 9.1).
 
+### Across one plugin library (REAPER 7.83, 2026-10-26)
+
+Measured on REAPER 7.83/x64, Windows 11, the same Focusrite USB ASIO interface and a 48 kHz project rate, while choosing light replacements for the stock FX of a 64-sample tracking project. The audio device ran as the user's preferences left it.
+
+**PDC.** `TrackFX_GetNamedConfigParm(tr, fx, "pdc")`, in samples, for 71 installed plugins at their factory defaults; Pro-L 2 was read with the settings found on a master. A setting can change a plugin's PDC (lookahead, linear phase, oversampling), so read `pdc` again after changing one.
+
+Reported 0 at their defaults:
+
+| Vendor | Plugins |
+|---|---|
+| Kilohearts | kHs Filter, kHs 3-Band EQ, kHs Compressor, kHs Clipper, kHs Delay, kHs Reverb, kHs Transient Shaper, kHs Gain |
+| ZL | ZL Equalizer 2, ZL Compressor |
+| Voxengo | PrimeEQ, Marquis Compressor, Deft Compressor, Tempo Delay, OldSkoolVerb, Peakbuster, Boogex, Tube Amp |
+| Waves | CLA-76 Mono, CLA-2A Mono, CLA-3A Mono, DeEsser Mono, Sibilance-Live Mono, C1 comp Mono, C1 gate Mono, SSLComp Stereo, API-2500 Stereo, API-550A Mono, Scheps Omni Channel 2 Mono, Q10 Mono, Waves Tune Real-Time Mono, Vocal Rider Live Mono, Torque-Live Mono, H-Delay Stereo, RVerb Stereo, TrueVerb Stereo |
+| FabFilter | Pro-Q 4, Pro-C 3, Pro-G |
+| Valhalla DSP | ValhallaRoom, ValhallaVintageVerb |
+| Focusrite | Red 2 EQ, Red 3 Compressor |
+| Others | YS - Reverb-24 (Yuri Semenov), TONE3000, Torpedo Wall Of Sound (Two Notes): it output silence on this system ([Plugin Control](../../../reaper-mcp/references/plugin-control.md#registry-of-measured-plugins)) |
+
+Reported more than 0, so each costs at least one block on a monitored path (64 samples, 1.3 ms, at the 64-sample buffer; section 1):
+
+| Plugin | PDC (samples) |
+|---|---|
+| Waves SSLChannel Mono | 1 |
+| IK TONEX | 7 |
+| Relab LX480 Essentials | 13 |
+| Voxengo EBusLim | 23 |
+| Waves GTR Amp Mono | 40 |
+| Waves Magma Springs Stereo | 49 |
+| Waves SSL EV2 Channel Mono | 59 |
+| Waves RCompressor Mono, RVox Mono, RDeEsser Mono, Silk Vocal Live Mono; Soundshed Guitar; XLN Addictive Keys | 64 |
+| Waves RChannel Mono | 65 |
+| Techivation T-De-Esser 2 | 70 |
+| Kilohearts kHs Limiter | 95 |
+| Waves PRS Dallas Mono | 175 |
+| TDR VOS SlickEQ | 183 |
+| TDR Kotelnikov, TDR Nova | 184 |
+| Kilohearts kHs Gate | 240 |
+| Klevgrand Korvpressor | 480 |
+| FabFilter Pro-DS | 720 |
+| FabFilter Pro-L 2 (settings found on a master) | 731 |
+| Techivation Tilt EQ | 2118 |
+
+Where both sets hold a plugin, the readings agree: TDR Nova 184, TONEX 7, Pro-L 2 731, Scheps Omni Channel 2 Mono 0, kHs Reverb 0, and Waves SSLChannel 1 in its Mono form as in its Stereo form.
+
+**CPU per instance.** 8 instances of one plugin on 8 tracks, each track fed by a JS Pink Noise Generator, the master muted, the tracks not armed. REAPER's process CPU averaged over 8 s after a 2.5 s warm-up, minus the mean of 4 runs with the generators alone, divided by 8. Factory defaults throughout.
+
+The noise is large. The four generator-only baselines drifted from 49.0 % to 56.3 % of one core in total, 7.3 points, or 0.9 per instance once divided by 8, and three plugins came out below zero. Read every figure as ±1 % and the list as two groups, not a ranking:
+
+| Vendor | Under 2 %: not separable from one another or from the stock FX | 2 % and above: measurably heavier |
+|---|---|---|
+| Cockos (stock) | ReaComp −0.64, ReaDelay 0.85, ReaEQ −0.20, ReaGate 1.09, ReaVerbate 0.34 | |
+| FabFilter | Pro-Q 4 1.24 | Pro-C 3 3.31, Pro-G 4.44 |
+| Focusrite | Red 2 EQ 1.41, Red 3 Compressor 1.24 | |
+| Kilohearts | kHs 3-Band EQ 0.80, kHs Clipper 0.04, kHs Compressor 0.21, kHs Delay 0.95, kHs Filter 1.14 | |
+| Two Notes | Torpedo Wall Of Sound 0.51, with silent output | |
+| Valhalla DSP | ValhallaVintageVerb 0.12 | ValhallaRoom 2.80 |
+| Voxengo | Tube Amp 0.87 | Boogex 3.83, its own reverb on by default |
+| Waves | C1 comp −0.23, C1 gate 0.58, CLA-2A Mono 0.38, CLA-76 Mono 0.97, DeEsser Mono 0.99, RVerb Stereo 0.70, Sibilance-Live Mono 0.75, SSLComp Stereo 1.51 | API-2500 Stereo 3.22, CLA-3A Mono 2.00, H-Delay Stereo 2.29 |
+| Others | YS - Reverb-24 1.78, ZL Equalizer 2 0.87 | |
+
+- A negative figure is noise: the baseline drifted by more than the plugin cost. CLA-3A Mono at 2.00 sits on the line between the groups.
+- Torpedo Wall Of Sound produced no sound in this test, so its figure need not be what it costs once it does. Boogex's figure includes the reverb it switches on by default.
+- Not the realtime-thread load: the tracks were not armed, so anticipative FX processed them ahead of time.
+- The method differs from the 2026-10-25 runs (pink noise against a sung vocal, 8 s against 10 s, generator-only baselines against empty-chain runs), so compare figures within one table, not across the two.
+
 ## 3. A low-latency tracking project
 
 1. **Record the input, not the output.** Record mode "Record: input" writes the dry signal; the comfort FX live in track FX and on returns, never in input FX.
-2. **Zero PDC on every monitored path.** Track FX, every folder above the input, the master, the cue bus and anything between them. Stock ReaEQ, ReaComp, ReaGate, ReaVerbate, ReaDelay and ReaXcomp reported 0 at default settings. ReaComp's "Pre-comp" control is a lookahead; it stood at its default 0 in that measurement, so read `pdc` again after changing it.
+2. **Zero PDC on every monitored path.** Track FX, every folder above the input, the master, the cue bus and anything between them. Stock ReaEQ, ReaComp, ReaGate, ReaVerbate, ReaDelay and ReaXcomp reported 0 at default settings. ReaComp's "Pre-comp" control is a lookahead; it stood at its default 0 in that measurement, so read `pdc` again after changing it. Section 2 lists the third-party plugins that reported 0 at their defaults.
 3. **No lookahead limiter, linear-phase EQ or oversampling above the inputs.** A safety limiter on a cue bus is ReaComp at a high ratio with a fast attack, not ReaLimit (480 samples).
 4. **Cue mixes come from pre-fader sends** into a cue bus with its own hardware output, so the engineer's faders do not change what the singer hears. Pre-fader sends still carry the track FX, so the zero-PDC rule covers the track too.
 5. **Comfort effects on returns.** A short plate or room (ReaVerbate) and a slap or eighth-note delay (ReaDelay) on returns fed from the vocal, 100 % wet, settings from [reverb.md](reverb.md).
@@ -166,6 +234,7 @@ Claude measures and builds; the user sets the driver buffer, the global preferen
 | Cue bus hardware output and master send off | Bridge: `CreateTrackSend(tr, nil)` and `B_MAINSEND` |
 | Stock FX and their settings | `add_fx`, then `set_fx_parameter` following the [Plugin protocol](../../../reaper-mcp/references/plugin-protocol.md) |
 | CPU of a chain | Bridge plus a process CPU sample from outside REAPER: alternate the chain on and off (`I_FXEN`) during playback and compare |
+| CPU of one plugin | Bridge plus a process CPU sample from outside REAPER, in a scratch tab: 8 tracks, each carrying the plugin and fed by a JS Pink Noise Generator, master muted, not armed; subtract the mean of generator-only runs and divide by 8. Expect about ±1 % per instance (section 2) |
 | Realtime load (section 5) | No API reads RT CPU or RT longest-block: open View, Performance Meter and read it from a screenshot, several readings per state. Arm and monitor with the master muted (`B_MUTE` on the master), and put every arm, monitor and mute flag back afterwards |
 | Which paths are on the realtime thread | Bridge: for each track with `I_RECARM` = 1, walk `GetParentTrack` to the top and follow its sends (`GetTrackSendInfo_Value`, `P_DESTTRACK`); list the FX on all of them |
 | Live FX multiprocessing | Read `syncsmpmax2` in reaper.ini. Changing it is the user's decision: with their go-ahead, back up reaper.ini and set it in Preferences, Audio, Buffering |

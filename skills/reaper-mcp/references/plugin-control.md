@@ -41,7 +41,7 @@ Large plugins pad parameter lists with MIDI CC entries. Limit the parameter dump
 
 ## Registry of measured plugins
 
-One row per plugin, measured on REAPER 7.82, Windows, 2026-10-08. "Writes" is how a write through `TrackFX_SetParamNormalized` lands: **at once** (readable in the same Lua chunk), **callback** (only in the audio callback, so not while the audio engine is closed; `set_fx_parameter` 1.3.1 handles it), **snaps** (at once, moved to the plugin's own step), **ignored**. "Lists" is how a list parameter's normalized value becomes an entry: **round**, **floor** (truncate), **SDK** (floor(v × (steps + 1))). Parameter counts include REAPER's appended `Bypass`, `Wet`, `Delta`.
+One row per plugin, measured on REAPER 7.82, Windows, 2026-10-08, unless the row's notes give another version and date; "—" is not measured or not applicable. "Writes" is how a write through `TrackFX_SetParamNormalized` lands: **at once** (readable in the same Lua chunk), **callback** (only in the audio callback, so not while the audio engine is closed; `set_fx_parameter` 1.3.1 handles it), **snaps** (at once, moved to the plugin's own step), **ignored**. "Lists" is how a list parameter's normalized value becomes an entry: **round**, **floor** (truncate), **SDK** (floor(v × (steps + 1))). Parameter counts include REAPER's appended `Bypass`, `Wet`, `Delta`.
 
 | Plugin as REAPER names it | Params | Padding | Lists | Writes | Load | Notes |
 |---|---|---|---|---|---|---|
@@ -52,6 +52,7 @@ One row per plugin, measured on REAPER 7.82, Windows, 2026-10-08. "Writes" is ho
 | `VST3: SSLGChannel Stereo (Waves)` | 167 | 130 MIDI CC, empty display | — | at once | 0.02 s | CompThresh runs backwards; [indices](#known-index-traps) |
 | `VST3: Scheps Omni Channel 2 Stereo (Waves)` | 1950 | 130 MIDI CC, empty display | round (27) | at once | 0.28 s | 1,629 `Insert` entries that format only their current value; **L and R are separate parameters**; [indices](#known-index-traps) |
 | `VST3: GTR Amp Stereo (Waves)` | 155 | 130 MIDI CC, empty display | round (5) | at once | 0.53 s | |
+| `C1 comp Mono (Waves)` | — | — | — | — | — | 7.83, 2026-10-26; format not recorded (VST3 and VST shells both installed). **`Ratio` is not monotonic**: 0.50:1 at 0, through ∞, to −5.00:1 at 1, so a bisection over 0-1 fails; 3:1 ≈ 0.4332 |
 | `VST3: Acon Digital DeNoise 2 (Acon Digital)` | 27 | none | round (2) | at once | 0.01 s | display doubles units ("5.0 dB dB") |
 | `VST3: smartChain (sonible)` | 120 | none | **floor** (16) | at once | 0.62 s | Profile label off by one; `110` Output Trim linear ±24 dB, `norm = (dB + 24) / 48`, one per instance; `115` Learn On/Off set to 1 while the transport plays starts a learn, and it returns to 0 when done (6.5–17.4 s, REAPER 7.83, 2026-11-07); [topic](../../reaper-audio-engineer/references/topics/plugin-sonible-smartchain.md#learning-from-the-host) |
 | `VST3: Pro-L 2 (FabFilter)` | 172 | MIDI entries 36-167 | round (5) | at once | — | `0` Gain linear 0 to +30 dB, `norm = dB / 30`; `18` Output Level −30 to 0 dBTP, −1.00 = 0.966517; `10` True Peak Limiting (on by default); `9` Oversampling, 4x = 0.4; `2` Lookahead linear 0-5 ms |
@@ -59,7 +60,10 @@ One row per plugin, measured on REAPER 7.82, Windows, 2026-10-08. "Writes" is ho
 | `VST3: kHs Reverb (Kilohearts)` | 2090 | 2,080 "MIDI", empty display | — | at once | 0.01 s | 7 real controls; U+202F before units; Decay runs "500 ms" to "30.0 s" |
 | `VST3: UADx Pure Plate Reverb (Universal Audio (UADx))` | 2093 | 2,080 "MIDI CC #\|#" | round (1) | at once | 0.13 s | 10 real controls |
 | `VST3: ValhallaFutureVerb (Valhalla DSP, LLC)` | 36 | none | — | at once | 0.60 s | **formats only its current value**: search on a [scratch instance](#searching-on-a-scratch-instance); Mix 30 % = 0.2995-0.30 |
+| `VST3: ValhallaVintageVerb (Valhalla DSP, LLC)` | — | — | — | — | — | 7.83, 2026-10-26. **Formats only its current value** (f(0) = f(1)), like ValhallaFutureVerb: route 3e. `ReverbMode`: Concert Hall 0.04125, Plate 0.10375, Room 0.14500, the centres of the runs found by writing on a scratch instance |
 | `VST3: SPAN Plus (Voxengo)` | 6 | none | round (1) | at once | 0.01 s | |
+| `Boogex (Voxengo)` | — | — | — | — | — | 7.83, 2026-10-26; format not recorded (VST3 and VST both installed). **Its own reverb is on by default** (`RevEnab` On). 25 factory programs through the `Program` parameter: 0 Default … 10 Vintage Lead … 18 Smooth Crunch … 24 DynaChugga; loading one sets Drive (Vintage Lead 52.0, Smooth Crunch 32.5) |
+| `VST3: Torpedo Wall Of Sound (Two Notes Audio Engineering)` | — | — | — | — | — | 7.83, 2026-10-26. Loads, reports PDC 0 and `Miking OnOff` 0 = "On" by default, but **outputs silence**: peak hold −150 dB on pink noise, −7.9 dB with the plugin bypassed. Most likely its cab needs a Two Notes sign-in; check its output level before relying on it |
 | `VST3: Youlean Loudness Meter 2 (Youlean)` | 5 | none | — | **ignored** (Preset) | 0.11 s | switches do not format |
 | `JS: Loudness Meter Peak/RMS/LUFS (Cockos)` | 26 | none | floor, in native units (3) | snaps | 0.03 s | steps reported in native units |
 | `VST: ReaEQ (Cockos)` | 19 | none | not measured | at once | — | [stock layouts](#stock-cockos-plugins) |
@@ -114,12 +118,15 @@ Writing through the bridge, do the same by hand: read back in a **separate** com
 
 `TrackFX_FormatParamValueNormalized` asks the plugin to format a normalised value without setting it. A binary search on it finds the normalised value for a displayed target without touching the parameter, so it works on plugins that take writes in their audio callback and never sweeps a live parameter to its extremes. This is the protocol's route 3d.
 
-Measured: 13 of the 15 plugins with continuous controls format any value. ValhallaFutureVerb returns its current display whatever value is asked for, and so do Scheps Omni Channel's 1,629 `Insert` entries; the function below detects that and says so (route 3e then applies).
+Measured: 13 of the 15 plugins with continuous controls format any value. ValhallaFutureVerb returns its current display whatever value is asked for, and so do Scheps Omni Channel's 1,629 `Insert` entries; the function below detects that and says so (route 3e then applies). ValhallaVintageVerb does the same (REAPER 7.83, 2026-10-26).
+
+The search assumes the display moves one way from 0 to 1. Waves C1 comp's `Ratio` does not: it rises from 0.50:1 through ∞ and ends at −5.00:1, so `f(0)` and `f(1)` point the search the wrong way. Bisect only the part below ∞, or use the registry value (3:1 ≈ 0.4332).
 
 ```lua
 local function num(s)                    -- a display to a number in base units: Hz, ms, dB, %
   if not s or s == "" then return nil end
   s = s:gsub("\226\128\175", " "):gsub("\194\160", " ")      -- U+202F and U+00A0 to spaces
+  s = s:gsub("\226\136\146", "-")                             -- U+2212 minus sign to "-"
   local a, b = s:match("(%d+)k(%d+)")                         -- "2k5" = 2500
   if a then return (tonumber(a) + tonumber("0." .. b)) * 1000 end
   local n = tonumber(s:match("[-+]?%d*%.?%d+"))
@@ -159,7 +166,7 @@ end
 
 Give the target in the base unit the parser returns: hertz, milliseconds, decibels, percent. The result is the middle of the run of values that display the target, so a coarse display such as "30.0 %" does not leave the value at the run's edge (29.95 %).
 
-What the parser has to survive, all measured: units present on one display path and absent on the other ("450" against "450 Hz"), doubled units ("5.0 dB dB", DeNoise 2), kilo notation ("1k", "2k5", soothe2), a change of unit inside the range ("500 ms" to "30.0 s", kHs Reverb; ms to s on Pro-C 3's Release), and a narrow no-break space U+202F between number and unit (kHs Reverb), which Lua's `%s` does not match.
+What the parser has to survive, all measured: units present on one display path and absent on the other ("450" against "450 Hz"), doubled units ("5.0 dB dB", DeNoise 2), kilo notation ("1k", "2k5", soothe2), a change of unit inside the range ("500 ms" to "30.0 s", kHs Reverb; ms to s on Pro-C 3's Release), a narrow no-break space U+202F between number and unit (kHs Reverb), which Lua's `%s` does not match, and a minus sign U+2212 in place of the hyphen (Kilohearts, "−15.00 dB"), which without the conversion reads as +15.
 
 Verified on Ozone 12 (12.40 dB = 0.620000), soothe2 (450 Hz, 2k5), kHs Reverb (2.20 s), Nectar 4 (250 ms) and DeNoise 2 (5.0 dB = 0.666667). Then write the value once with `set_fx_parameter`, which confirms it.
 
@@ -168,6 +175,12 @@ Verified on Ozone 12 (12.40 dB = 0.620000), soothe2 (450 Hz, 2k5), kHs Reverb (2
 For a plugin that formats only its current value (route 3e), run the same search by writing, on a fresh instance of the same plugin in a scratch tab, never on the user's instance: open a tab with action 40859, add the plugin with `TrackFX_AddByName`, find the parameter by name, bisect by writing it and reading `TrackFX_GetFormattedParamValue` with the parser above, then empty the tab, make it clean (save a copy, reopen it with `Main_openProject("noprompt:" .. path)`) and close it with action 40860, and select the user's tab again. The same plugin version maps values the same way, so the result carries over; write it once to the user's instance with `set_fx_parameter`.
 
 Measured on ValhallaFutureVerb, Mix = 30 %: 33 writes on the scratch instance, 1.3 s for the whole round including loading the plugin, and the user's project untouched (same dirty flag, same undo history). It needs a plugin that takes writes at once; a plugin that takes them in its audio callback needs the audio engine running for the duration.
+
+Measured on REAPER 7.83, 2026-10-26, while loading about 80 plugins into a scratch tab:
+
+- **Check the index `TrackFX_AddByName` returns**: −1 means nothing was added. "ReaComp" loaded; "ReaComp (Cockos)" did not.
+- **A plugin listed in `reaper-vstplugins64.ini` is not necessarily installed.** Klanghelm DC1A3 and TBProAudio mvMeter2 have entries in the older form, without the `{…}` class ID that current VST3 entries carry, and `TrackFX_AddByName` loaded neither; their files were in none of the VST paths. A stale cache entry is the likely cause.
+- **Make the tab clean by reopening the copy.** `Main_SaveProjectEx` writes the file but leaves the tab bound to its old name, or to none ([Saving and Opening Projects](./python-reaper-tools.md#saving-and-opening-projects)); `Main_openProject("noprompt:" .. path)` is what binds it. The user's project is saved with the `save_project` tool, which does both; bridge code does not save it with `Main_SaveProjectEx`.
 
 ## Binary search by formatted value
 
